@@ -16,11 +16,12 @@ The script authenticates using an XBL3.0 token. There are two ways to get one:
 
 1. Go to [microsoft.com/store](https://www.microsoft.com/store) in Chrome or Edge and sign in with your Xbox account.
 2. Open DevTools (F12) > **Console** tab.
-3. Paste this and press Enter:
+3. If the console shows a warning about pasting, type `allow pasting` and press Enter first.
+4. Paste this and press Enter:
    ```js
    copy(JSON.parse(unescape(document.cookie.split('; ').find(c => c.startsWith('XBXXtkhttp://xboxlive.com=')).split('=').slice(1).join('='))).Token)
    ```
-4. The token is now on your clipboard.
+5. The token is now on your clipboard.
 
 > If you get an error, make sure you're signed in and on a `microsoft.com` page.
 
