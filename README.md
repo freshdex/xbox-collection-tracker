@@ -12,16 +12,19 @@ Fetches your Xbox/Microsoft Store entitlements and Game Pass catalog, then gener
 
 The script authenticates using an XBL3.0 token. There are two ways to get one:
 
-#### Option A: StoreToken browser extension (easiest)
+#### Option A: Extract from browser cookie (easiest)
 
-1. Download [StoreToken](https://github.com/StoreDev/StoreToken) — click **Code > Download ZIP** and extract it.
-2. Go to `chrome://extensions` (Chrome) or `edge://extensions` (Edge).
-3. Enable **Developer mode** (toggle in the top-right).
-4. Click **Load unpacked** and select the extracted folder.
-5. Visit [microsoft.com/store](https://www.microsoft.com/store) and sign in with your Xbox account.
-6. Click the StoreToken extension icon — the token is copied to your clipboard.
+1. Go to [microsoft.com/store](https://www.microsoft.com/store) in Chrome or Edge and sign in with your Xbox account.
+2. Open DevTools (F12) > **Console** tab.
+3. Paste this and press Enter:
+   ```js
+   copy(JSON.parse(unescape(document.cookie.split('; ').find(c => c.startsWith('XBXXtkhttp://xboxlive.com=')).split('=').slice(1).join('='))).Token)
+   ```
+4. The token is now on your clipboard.
 
-#### Option B: Browser DevTools
+> If you get an error, make sure you're signed in and on a `microsoft.com` page.
+
+#### Option B: Browser DevTools Network tab
 
 1. Open [xbox.com/en-GB/games/all-games](https://www.xbox.com/en-GB/games/all-games) and sign in.
 2. Open DevTools (F12) > **Network** tab.
