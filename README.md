@@ -10,23 +10,35 @@ Fetches your Xbox/Microsoft Store entitlements and Game Pass catalog, then gener
 
 ### Getting your XBL3.0 Auth Token
 
-The script authenticates using an XBL3.0 token from the Microsoft Collections API. To obtain one:
+The script authenticates using an XBL3.0 token. There are two ways to get one:
 
-1. Open your browser and go to [xbox.com](https://www.xbox.com) — make sure you're signed in to your Microsoft account.
-2. Open Developer Tools (F12) and go to the **Network** tab.
-3. Visit [your Microsoft order history](https://account.microsoft.com/billing/orders) or browse the Xbox store, and look for requests to `collections.mp.microsoft.com`.
-4. Find a request with an `Authorization` header — the value will start with `XBL3.0 x=`.
-5. Copy the **entire** `Authorization` header value (including the `XBL3.0 x=` prefix).
+#### Option A: StoreToken browser extension (easiest)
+
+1. Download [StoreToken](https://github.com/StoreDev/StoreToken) — click **Code > Download ZIP** and extract it.
+2. Go to `chrome://extensions` (Chrome) or `edge://extensions` (Edge).
+3. Enable **Developer mode** (toggle in the top-right).
+4. Click **Load unpacked** and select the extracted folder.
+5. Visit [microsoft.com/store](https://www.microsoft.com/store) and sign in with your Xbox account.
+6. Click the StoreToken extension icon — the token is copied to your clipboard.
+
+#### Option B: Browser DevTools
+
+1. Open [xbox.com/en-GB/games/all-games](https://www.xbox.com/en-GB/games/all-games) and sign in.
+2. Open DevTools (F12) > **Network** tab.
+3. In the filter bar, type `xbl` or `authorization` to narrow results.
+4. Browse around or click on games — look for requests to any `*.xboxlive.com` or `*.mp.microsoft.com` domain.
+5. Click a request, go to **Headers**, and find the `Authorization` header starting with `XBL3.0 x=`.
+6. Copy the **entire** value.
 
 ### Saving the token
 
-Create a file called `auth_token.txt` in the project root and paste the full token as a single line:
+Paste the full token into `auth_token.txt` (already included in the repo) as a single line:
 
 ```
 XBL3.0 x=1234567890;eyJlbmMiOi...rest_of_token
 ```
 
-> **Note:** Tokens expire after a few hours. If you get authentication errors, repeat the steps above to get a fresh token.
+> **Note:** Tokens expire after a few hours. If you get authentication errors, grab a fresh one.
 
 ## Usage
 
