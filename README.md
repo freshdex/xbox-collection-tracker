@@ -18,8 +18,8 @@ python xbox_auth.py
 
 This will:
 1. Open your browser to the Microsoft login page
-2. After signing in, you'll be redirected to a blank page — copy the URL from the address bar
-3. Paste the URL back into the terminal
+2. Sign in with your Microsoft/Xbox account
+3. The browser redirects to a local server that captures the auth code automatically
 4. The script exchanges it for an XBL3.0 token and saves it to `auth_token.txt`
 
 No Azure app registration or extra dependencies needed — it uses the same public Xbox Live client ID as the official Xbox app.

@@ -28,7 +28,8 @@ AUTH_TOKEN_FILE = os.path.join(SCRIPT_DIR, "auth_token.txt")
 
 # Public Xbox Live client ID (used by the Xbox app / community tools)
 CLIENT_ID = "000000004C12AE6F"
-REDIRECT_URI = "https://login.live.com/oauth20_desktop.srf"
+REDIRECT_PORT = 8921
+REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}/auth/callback"
 SCOPES = "Xboxlive.signin Xboxlive.offline_access"
 
 # Relying party for collections.mp.microsoft.com
@@ -49,7 +50,7 @@ def api_post(url, body, headers=None):
 
 
 def get_oauth_token_via_browser():
-    """Open browser for Microsoft login, capture the auth code via redirect."""
+    """Open browser for Microsoft login, capture the auth code via local server."""
     auth_url = (
         "https://login.live.com/oauth20_authorize.srf"
         f"?client_id={CLIENT_ID}"
@@ -59,31 +60,56 @@ def get_oauth_token_via_browser():
         f"&redirect_uri={urllib.parse.quote(REDIRECT_URI)}"
     )
 
+    result = {"code": None, "error": None}
+
+    class CallbackHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+            if "code" in params:
+                result["code"] = params["code"][0]
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(
+                    b"<html><body><h2>Success!</h2>"
+                    b"<p>Got authorization code. You can close this tab.</p>"
+                    b"</body></html>"
+                )
+            else:
+                result["error"] = params.get("error_description",
+                    params.get("error", ["Unknown error"]))[0]
+                self.send_response(400)
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(
+                    f"<html><body><h2>Error</h2><p>{result['error']}</p>"
+                    f"</body></html>".encode()
+                )
+
+        def log_message(self, format, *args):
+            pass  # suppress request logs
+
+    server = http.server.HTTPServer(("127.0.0.1", REDIRECT_PORT), CallbackHandler)
+
     print("[*] Opening browser for Microsoft login...")
     print(f"    If the browser doesn't open, visit this URL:\n")
     print(f"    {auth_url}\n")
     webbrowser.open(auth_url)
+    print("[*] Waiting for login callback...")
 
-    print("[*] After signing in, you'll be redirected to a blank page.")
-    print("    Copy the ENTIRE URL from your browser's address bar and paste it here.\n")
-    redirect_url = input("Paste redirect URL: ").strip()
+    server.handle_request()
+    server.server_close()
 
-    parsed = urllib.parse.urlparse(redirect_url)
-    params = urllib.parse.parse_qs(parsed.query)
-
-    if "code" not in params:
-        # Try parsing as fragment
-        params = urllib.parse.parse_qs(parsed.fragment)
-
-    if "code" not in params:
-        print("ERROR: No authorization code found in the URL.")
-        print(f"  URL: {redirect_url}")
-        if "error" in params:
-            print(f"  Error: {params.get('error', ['?'])[0]}")
-            print(f"  Description: {params.get('error_description', ['?'])[0]}")
+    if result["error"]:
+        print(f"ERROR: {result['error']}")
         sys.exit(1)
 
-    code = params["code"][0]
+    if not result["code"]:
+        print("ERROR: No authorization code received.")
+        sys.exit(1)
+
+    code = result["code"]
     print(f"[+] Got authorization code ({len(code)} chars)")
 
     # Exchange code for access token
