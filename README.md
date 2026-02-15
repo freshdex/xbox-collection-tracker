@@ -10,22 +10,20 @@ Fetches your Xbox/Microsoft Store entitlements and Game Pass catalog, then gener
 
 ### Getting your XBL3.0 Auth Token
 
-Run the included auth helper:
+The Collections API requires a token with device authentication claims, which can only be captured from the Xbox app via MITM proxy (e.g. [mitmproxy](https://mitmproxy.org/)).
+
+1. Set up mitmproxy on your PC and route your Android/iOS device through it
+2. Open the Xbox app on your device — it will make authenticated API calls
+3. Export the capture as a HAR file and place it in this directory
+4. Run the auth helper:
 
 ```bash
 python xbox_auth.py
 ```
 
-This will walk you through extracting your auth token from xbox.com:
+It auto-detects `.har` files, extracts all XBL3.0 tokens, and picks the one used for `collections.mp.microsoft.com`. You can also specify a file: `python xbox_auth.py mycapture.har`
 
-1. Opens xbox.com in your browser — sign in if needed
-2. You paste a small JavaScript snippet into the browser console (DevTools F12 > Console)
-3. Click on any game tile — the snippet intercepts the authenticated request and copies the token to your clipboard
-4. Paste the token back into the terminal — it's saved to `auth_token.txt`
-
-The snippet hooks into `XMLHttpRequest` and `fetch` to capture the `Authorization: XBL3.0` header from the next authenticated request the page makes.
-
-> **Note:** Tokens expire after a few hours. Re-run `python xbox_auth.py` to get a fresh one.
+> **Note:** Tokens expire after a few hours. Recapture and re-run when needed.
 
 ## Usage
 
