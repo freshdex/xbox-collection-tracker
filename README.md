@@ -16,13 +16,14 @@ Run the included auth helper:
 python xbox_auth.py
 ```
 
-This will:
-1. Open your browser to the Microsoft login page
-2. Sign in with your Microsoft/Xbox account
-3. The browser redirects to a local server that captures the auth code automatically
-4. The script exchanges it for an XBL3.0 token and saves it to `auth_token.txt`
+This will walk you through extracting your auth token from xbox.com:
 
-No Azure app registration or extra dependencies needed — it uses the same public Xbox Live client ID as the official Xbox app.
+1. Opens xbox.com in your browser — sign in if needed
+2. You paste a small JavaScript snippet into the browser console (DevTools F12 > Console)
+3. Click on any game tile — the snippet intercepts the authenticated request and copies the token to your clipboard
+4. Paste the token back into the terminal — it's saved to `auth_token.txt`
+
+The snippet hooks into `XMLHttpRequest` and `fetch` to capture the `Authorization: XBL3.0` header from the next authenticated request the page makes.
 
 > **Note:** Tokens expire after a few hours. Re-run `python xbox_auth.py` to get a fresh one.
 
