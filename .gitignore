@@ -1,4 +1,3 @@
-auth_token.txt
 *.json
 *.html
 __pycache__/
