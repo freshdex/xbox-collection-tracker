@@ -10,39 +10,21 @@ Fetches your Xbox/Microsoft Store entitlements and Game Pass catalog, then gener
 
 ### Getting your XBL3.0 Auth Token
 
-The script authenticates using an XBL3.0 token. There are two ways to get one:
+Run the included auth helper:
 
-#### Option A: Extract from browser cookie (easiest)
-
-1. Go to [microsoft.com/store](https://www.microsoft.com/store) in Chrome or Edge and sign in with your Xbox account.
-2. Open DevTools (F12) > **Console** tab.
-3. If the console shows a warning about pasting, type `allow pasting` and press Enter first.
-4. Paste this and press Enter:
-   ```js
-   copy(JSON.parse(unescape(document.cookie.split('; ').find(c => c.startsWith('XBXXtkhttp://xboxlive.com=')).split('=').slice(1).join('='))).Token)
-   ```
-5. The token is now on your clipboard.
-
-> If you get an error, make sure you're signed in and on a `microsoft.com` page.
-
-#### Option B: Browser DevTools Network tab
-
-1. Open [xbox.com/en-GB/games/all-games](https://www.xbox.com/en-GB/games/all-games) and sign in.
-2. Open DevTools (F12) > **Network** tab.
-3. In the filter bar, type `xbl` or `authorization` to narrow results.
-4. Browse around or click on games — look for requests to any `*.xboxlive.com` or `*.mp.microsoft.com` domain.
-5. Click a request, go to **Headers**, and find the `Authorization` header starting with `XBL3.0 x=`.
-6. Copy the **entire** value.
-
-### Saving the token
-
-Paste the full token into `auth_token.txt` (already included in the repo) as a single line:
-
-```
-XBL3.0 x=1234567890;eyJlbmMiOi...rest_of_token
+```bash
+python xbox_auth.py
 ```
 
-> **Note:** Tokens expire after a few hours. If you get authentication errors, grab a fresh one.
+This will:
+1. Open your browser to the Microsoft login page
+2. After signing in, you'll be redirected to a blank page — copy the URL from the address bar
+3. Paste the URL back into the terminal
+4. The script exchanges it for an XBL3.0 token and saves it to `auth_token.txt`
+
+No Azure app registration or extra dependencies needed — it uses the same public Xbox Live client ID as the official Xbox app.
+
+> **Note:** Tokens expire after a few hours. Re-run `python xbox_auth.py` to get a fresh one.
 
 ## Usage
 
