@@ -26,8 +26,8 @@ import threading
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 AUTH_TOKEN_FILE = os.path.join(SCRIPT_DIR, "auth_token.txt")
 
-# Public Xbox Live client ID (used by the Xbox app / community tools)
-CLIENT_ID = "000000004C12AE6F"
+# Public Azure AD app from OpenXbox project (registered as Desktop App, no secret needed)
+CLIENT_ID = "388ea51c-0b25-4029-aae2-17df49d23905"
 REDIRECT_PORT = 8921
 REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}/auth/callback"
 SCOPES = "Xboxlive.signin Xboxlive.offline_access"
@@ -52,10 +52,10 @@ def api_post(url, body, headers=None):
 def get_oauth_token_via_browser():
     """Open browser for Microsoft login, capture the auth code via local server."""
     auth_url = (
-        "https://login.live.com/oauth20_authorize.srf"
+        "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize"
         f"?client_id={CLIENT_ID}"
         f"&response_type=code"
-        f"&approval_prompt=auto"
+        f"&prompt=select_account"
         f"&scope={urllib.parse.quote(SCOPES)}"
         f"&redirect_uri={urllib.parse.quote(REDIRECT_URI)}"
     )
@@ -123,7 +123,7 @@ def get_oauth_token_via_browser():
     }).encode("utf-8")
 
     req = urllib.request.Request(
-        "https://login.live.com/oauth20_token.srf",
+        "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
         data=token_data,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
