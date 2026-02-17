@@ -1,0 +1,2 @@
+ecdsa
+pip_system_certs; sys_platform == "win32"

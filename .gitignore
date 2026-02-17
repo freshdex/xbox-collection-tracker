@@ -1,3 +1,27 @@
+# Auth & account data
+accounts/
+accounts.json
+auth_token.txt
+auth_token_xl.txt
+xuid.txt
+xbox_auth_state.json
+exchange_rates.json
+
+# Cached API responses & generated files
 *.json
+!tags.json
+!requirements.txt
 *.html
+*.js
+*.har
+
+# Distribution archives
+*.zip
+
+# Logs
+*.log
+debug.log
+
+# Python
 __pycache__/
+*.pyc
