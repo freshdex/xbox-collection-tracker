@@ -1,6 +1,16 @@
 # Xbox Collection Tracker (XCT)
 
+**v1.2**
+
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
+
+## What's New in v1.2
+
+- **DLC nesting under parent games** — Games with DLC now show a green "+" button on their thumbnail in list view. Click to expand and see all DLC nested underneath the parent game. A badge shows the DLC count next to the title. Grid view stays flat.
+- **DLC filter dropdown** — New "DLC: All / Has DLC / No DLC" filter in the library toolbar to show only games with DLC or only standalone items.
+- **DLC shown by default** — The Type filter now includes DLC (Durable) checked by default so DLC items are visible on load.
+- **Wider title column** — The title column in list view now flexes to fill available space, making full titles and badges (DLC, GP, etc.) visible.
+- **Tab bar cleanup** — "Game Pass Catalog" tab shortened to "Game Pass". Currency dropdown and version label moved closer to the tabs.
 
 ## Setup (first time)
 

@@ -19,6 +19,7 @@ Usage:
   python XCT.py --all              # Refresh all + process all
   python XCT.py add               # Add new account (device code flow)
   python XCT.py extract [file]    # Extract token from HAR file
+  python XCT.py preview            # Rebuild HTML only (no data, fast)
 """
 
 import base64
@@ -56,7 +57,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "1.1"
+VERSION = "1.2"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -3038,7 +3039,7 @@ def build_html_template(gamertag=""):
         '*{margin:0;padding:0;box-sizing:border-box}\n'
         "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0a0a0a;color:#e0e0e0}\n"
         '.tabs{display:flex;align-items:center;background:#111;border-bottom:2px solid #107c10;position:sticky;top:0;z-index:100}\n'
-        '.tab-cur{margin-left:auto;padding:4px 6px;background:#1a1a1a;color:#e0e0e0;border:1px solid #333;border-radius:4px;font-size:12px;cursor:pointer}\n'
+        '.tab-cur{margin-left:12px;padding:4px 6px;background:#1a1a1a;color:#e0e0e0;border:1px solid #333;border-radius:4px;font-size:12px;cursor:pointer}\n'
         '.tab{padding:12px 20px;cursor:pointer;color:#888;font-size:14px;font-weight:500;border-bottom:3px solid transparent;transition:all .2s;white-space:nowrap}\n'
         '.tab:hover{color:#ccc;background:#1a1a1a}\n'
         '.tab.active{color:#107c10;border-bottom-color:#107c10;background:#0a0a0a}\n'
@@ -3157,10 +3158,10 @@ def build_html_template(gamertag=""):
         '.view-btn.active{background:#107c10;border-color:#107c10;color:#fff}\n'
         '.view-btn:hover:not(.active){background:#222}\n'
         '.list-view{display:flex;flex-direction:column;gap:1px}\n'
-        '.list-view .lv-head{display:grid;grid-template-columns:40px 200px 110px 130px 130px 110px 90px 80px 80px 80px 80px 36px 42px 70px;gap:6px;padding:6px 10px;background:#161616;border-bottom:1px solid #333;font-size:11px;font-weight:600;color:#888;min-width:max-content;position:sticky;top:47px;z-index:20}\n'
+        '.list-view .lv-head{display:grid;grid-template-columns:40px minmax(200px,1fr) 110px 130px 130px 110px 90px 80px 80px 80px 80px 36px 42px 70px;gap:6px;padding:6px 10px;background:#161616;border-bottom:1px solid #333;font-size:11px;font-weight:600;color:#888;min-width:max-content;position:sticky;top:47px;z-index:20}\n'
         '.list-view .lv-head div[data-sort]{cursor:pointer;user-select:none}\n'
         '.list-view .lv-head div[data-sort]:hover{color:#107c10}\n'
-        '.list-view .lv-row{display:grid;grid-template-columns:40px 200px 110px 130px 130px 110px 90px 80px 80px 80px 80px 36px 42px 70px;gap:6px;padding:5px 10px;background:#1a1a1a;border-bottom:1px solid #1e1e1e;align-items:center;cursor:pointer;font-size:12px;transition:background .15s;min-width:max-content}\n'
+        '.list-view .lv-row{display:grid;grid-template-columns:40px minmax(200px,1fr) 110px 130px 130px 110px 90px 80px 80px 80px 80px 36px 42px 70px;gap:6px;padding:5px 10px;background:#1a1a1a;border-bottom:1px solid #1e1e1e;align-items:center;cursor:pointer;font-size:12px;transition:background .15s;min-width:max-content}\n'
         '.list-view .lv-row:hover{background:#222}\n'
         '.list-view .lv-row img{width:36px;height:36px;object-fit:cover;border-radius:3px;background:#222}\n'
         '.list-view .lv-title{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n'
@@ -3168,6 +3169,12 @@ def build_html_template(gamertag=""):
         '.list-view .lv-type{color:#888}\n'
         '.list-view .lv-usd{color:#42a5f5;font-weight:600;text-align:right}\n'
         '.list-view .lv-status{text-align:center}\n'
+        '.dlc-img-wrap{position:relative;display:inline-block}\n'
+        '.dlc-toggle{position:absolute;bottom:1px;right:1px;width:16px;height:16px;border-radius:50%;background:#107c10;color:#fff;border:none;cursor:pointer;font-size:12px;line-height:16px;text-align:center;padding:0;z-index:5;opacity:.9}\n'
+        '.dlc-toggle:hover{opacity:1;transform:scale(1.15)}\n'
+        '.dlc-child{background:#141414 !important;border-left:3px solid #107c10}\n'
+        '.dlc-child:hover{background:#1c1c1c !important}\n'
+        '.dlc-count{font-size:9px;margin-left:4px;background:#1a2e1a;color:#4caf50;padding:1px 5px;border-radius:8px;vertical-align:middle}\n'
         '.gp-list .lv-head{grid-template-columns:50px 1fr 160px 120px 90px 80px}\n'
         '.gp-list .lv-row{grid-template-columns:50px 1fr 160px 120px 90px 80px}\n'
         '#mkt-list .lv-head{grid-template-columns:50px 1fr 140px 90px 90px repeat(10,80px) 80px}\n'
@@ -3227,7 +3234,7 @@ def build_html_template(gamertag=""):
         '<div class="tabs">\n'
         '<div class="tab active" onclick="switchTab(\'library\',this)">My Library <span class="cnt" id="tab-lib-cnt"></span></div>\n'
         '<div class="tab" id="tab-mkt" onclick="switchTab(\'marketplace\',this)" style="display:none">Marketplace <span class="cnt" id="tab-mkt-cnt"></span></div>\n'
-        '<div class="tab" id="tab-gp" onclick="switchTab(\'gamepass\',this)" style="display:none">Game Pass Catalog <span class="cnt" id="tab-gp-cnt"></span></div>\n'
+        '<div class="tab" id="tab-gp" onclick="switchTab(\'gamepass\',this)" style="display:none">Game Pass <span class="cnt" id="tab-gp-cnt"></span></div>\n'
         '<div class="tab" id="tab-ph" onclick="switchTab(\'playhistory\',this)" style="display:none">Play History <span class="cnt" id="tab-ph-cnt"></span></div>\n'
         '<div class="tab" id="tab-hist" onclick="switchTab(\'history\',this)" style="display:none">Scan Log <span class="cnt" id="tab-hist-cnt"></span></div>\n'
         '<div class="tab" id="tab-acct" onclick="switchTab(\'gamertags\',this)" style="display:none">Gamertags <span class="cnt" id="tab-acct-cnt"></span></div>\n'
@@ -3263,7 +3270,7 @@ def build_html_template(gamertag=""):
         '<option value="ARS">ARS AR$</option>'
         '<option value="PHP">PHP ₱</option>'
         '</select>\n'
-        f'<div style="margin-left:auto;padding:0 14px;color:#555;font-size:11px;white-space:nowrap">XCT v{VERSION}</div>\n'
+        f'<div style="margin-left:6px;padding:0 8px;color:#555;font-size:11px;white-space:nowrap">XCT v{VERSION}</div>\n'
         '</div>\n'
 
         # -- Game Pass section --
@@ -3301,7 +3308,7 @@ def build_html_template(gamertag=""):
         '</div></div>\n'
         '<div class="cb-drop" id="lib-type"><div class="cb-btn" onclick="toggleCB(this)">Type &#9662;</div><div class="cb-panel">'
         '<label><input type="checkbox" value="Game" checked onchange="filterLib()"> Game</label>'
-        '<label><input type="checkbox" value="Durable" onchange="filterLib()"> DLC</label>'
+        '<label><input type="checkbox" value="Durable" checked onchange="filterLib()"> DLC</label>'
         '<label><input type="checkbox" value="Application" onchange="filterLib()"> App</label>'
         '<label><input type="checkbox" value="Consumable" onchange="filterLib()"> Consumable</label>'
         '<label><input type="checkbox" value="Pass" onchange="filterLib()"> Pass</label>'
@@ -3329,6 +3336,11 @@ def build_html_template(gamertag=""):
         '<label><input type="checkbox" value="Delisted" checked onchange="filterLib()"> Delisted</label>'
         '<label><input type="checkbox" value="Hard Delisted" checked onchange="filterLib()"> Hard Delisted</label>'
         '</div></div>\n'
+        '<select id="lib-dlc" onchange="filterLib()">'
+        '<option value="all">DLC: All</option>'
+        '<option value="has">Has DLC</option>'
+        '<option value="no">No DLC</option>'
+        '</select>\n'
         '<select id="lib-sort" onchange="libSortCol=null;filterLib()"><option value="name">Sort: Name</option>'
         '<option value="priceDesc">Sort: Price (High-Low)</option>'
         '<option value="priceAsc">Sort: Price (Low-High)</option>'
@@ -3423,6 +3435,10 @@ def build_html_template(gamertag=""):
         "let views={gp:'list',lib:'list',ph:'list',mkt:'list'};\n"
         "const LS_KEY='" + ls_key + "';\n"
         "let libSortCol=null,libSortDir='asc';\n"
+        "const _expandedTids=new Set();\n"
+        "function toggleDlcGroup(tid,event){event.stopPropagation();"
+        "if(_expandedTids.has(tid))_expandedTids.delete(tid);else _expandedTids.add(tid);"
+        "filterLib()}\n"
         "const _CUR={USD:[1,'$'],EUR:[0.92,'€'],GBP:[0.79,'£'],CAD:[1.36,'CA$'],AUD:[1.55,'A$'],"
         "NZD:[1.68,'NZ$'],JPY:[150,'¥'],BRL:[5.0,'R$'],MXN:[17.2,'MX$'],INR:[83.5,'₹'],"
         "KRW:[1320,'₩'],TRY:[32,'₺'],PLN:[4.0,'zł'],CHF:[0.88,'CHF '],SEK:[10.5,'kr '],"
@@ -3487,6 +3503,7 @@ def build_html_template(gamertag=""):
         "document.querySelectorAll('#library .cb-panel input[type=checkbox]').forEach(c=>c.checked=true);"
         "document.querySelectorAll('#library .cb-clear').forEach(c=>c.textContent='Clear All');"
         "document.getElementById('lib-gp').value='owned';"
+        "document.getElementById('lib-dlc').value='all';"
         "filterLib()}\n"
         "document.addEventListener('click',function(e){"
         "if(!e.target.closest('.cb-drop'))document.querySelectorAll('.cb-panel.open').forEach(p=>p.classList.remove('open'))});\n"
@@ -3827,6 +3844,7 @@ def build_html_template(gamertag=""):
         "const ayVals=getCBVals('lib-ayear');\n"
         "const skuVals=getCBVals('lib-sku');\n"
         "const dlVals=getCBVals('lib-delist');\n"
+        "const dlcF=document.getElementById('lib-dlc').value;\n"
         "const gpF=document.getElementById('lib-gp').value;\n"
         "const g=document.getElementById('lib-grid');const l=document.getElementById('lib-list');\n"
         # Step 1: apply primary filters (gamertag/status/type)
@@ -3908,6 +3926,21 @@ def build_html_template(gamertag=""):
         "filtered.forEach(item=>{const e=_pidMap[item.productId];"
         "if(e.item===item){item._allGTs=e.gts;deduped.push(item)}});"
         "filtered=deduped;\n"
+
+        # DLC grouping: build tid→{games,dlc} map, identify parents/children
+        "const _tidMap={};"
+        "filtered.forEach(item=>{const tid=item.xboxTitleId;"
+        "if(!tid)return;"
+        "if(!_tidMap[tid])_tidMap[tid]={games:[],dlc:[]};"
+        "if(item.productKind==='Game')_tidMap[tid].games.push(item);"
+        "else if(item.productKind==='Durable')_tidMap[tid].dlc.push(item)});\n"
+        "const _dlcParents=new Set(),_dlcChildren=new Set();"
+        "Object.values(_tidMap).forEach(g=>{if(g.games.length>0&&g.dlc.length>0){"
+        "g.games.forEach(p=>_dlcParents.add(p.productId));"
+        "g.dlc.forEach(c=>_dlcChildren.add(c.productId))}});\n"
+        "if(dlcF==='has')filtered=filtered.filter(item=>_dlcParents.has(item.productId)||_dlcChildren.has(item.productId));"
+        "else if(dlcF==='no')filtered=filtered.filter(item=>!_dlcParents.has(item.productId)&&!_dlcChildren.has(item.productId));\n"
+
         "const shown=filtered.length;\n"
         "function colArrow(c){return libSortCol===c?(libSortDir==='asc'?' \\u25B2':' \\u25BC'):''}\n"
         "let gh='',lh='<div class=\"lv-head\"><div></div>"
@@ -3925,6 +3958,53 @@ def build_html_template(gamertag=""):
         "<div>SKU</div>"
         "<div style=\"text-align:center\">Status</div>"
         "</div>';\n"
+        # _renderRow helper for list view rows
+        "function _renderRow(item,extraCls,dlcCount){"
+        "const fl=manualFlags[item.productId];"
+        "const sc2=item.status==='Active'?'s-active':item.status==='Expired'?'s-expired':'s-revoked';"
+        "const imgTag=item.image?`<img src=\"${item.image}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'<div></div>';"
+        "let imgHtml=imgTag;"
+        "if(dlcCount>0){const tid=item.xboxTitleId;const exp=_expandedTids.has(tid);imgHtml=`<div class=\"dlc-img-wrap\">${imgTag}<button class=\"dlc-toggle\" onclick=\"toggleDlcGroup('${tid}',event)\">${exp?'\\u2212':'+'}</button></div>`}"
+        "const usdR=_p(item.priceUSD);"
+        "const sb=`<span class=\"${sc2}\">${item.status||''}</span>`;"
+        "const po2=item.isPreOrder?'<span class=\"badge\" style=\"font-size:9px;margin-left:3px;background:#2a2a1a;color:#ffd54f\">PRE-ORDER</span>':'';"
+        "const gp2=item.onGamePass?'<span class=\"badge gp\" style=\"font-size:9px;margin-left:4px\">GP</span>':'';"
+        "const tr2=item.isTrial?'<span class=\"badge trial\" style=\"font-size:9px;margin-left:3px\">TRIAL</span>'"
+        ":item.isDemo?'<span class=\"badge demo\" style=\"font-size:9px;margin-left:3px\">DEMO</span>':'';"
+        "const fl2=fl==='beta'?'<span class=\"badge flagged\" style=\"font-size:9px;margin-left:3px\">FLAGGED</span>'"
+        ":fl==='delisted'?'<span class=\"badge\" style=\"font-size:9px;margin-left:3px;background:#3a2a1a;color:#ff9800\">DELISTED</span>'"
+        ":fl==='hardDelisted'?'<span class=\"badge\" style=\"font-size:9px;margin-left:3px;background:#3a1a1a;color:#f44336\">HARD DELISTED</span>'"
+        ":fl==='indie'?'<span class=\"badge\" style=\"font-size:9px;margin-left:3px;background:#1a2a3a;color:#64b5f6\">INDIE</span>':'';"
+        "const iv2=item.catalogInvalid?'<span class=\"badge\" style=\"font-size:9px;margin-left:3px;background:#3a1a1a;color:#f44336\">INVALID</span>':'';"
+        "const dlcBadge=dlcCount>0?`<span class=\"dlc-count\">${dlcCount} DLC</span>`:'';"
+        "const st=(item.title||'').replace(/'/g,\"\\\\\\'\" ).replace(/\"/g,'&quot;');"
+        "const aGTs=item._allGTs||[item.gamertag||''];"
+        "const gtE=aGTs.length>1?`<span class=\"gt-plus\" onclick=\"event.stopPropagation();showGTList(this,['`+aGTs.map(g=>g.replace(/'/g,\"\\\\'\")).join(`','`)+`'])\" title=\"${aGTs.length} gamertags\">+${aGTs.length-1}</span>`:'';"
+        "const relD2=(item.releaseDate||'').substring(0,10);"
+        "const acqD2=(item.acquiredDate||'').substring(0,10);"
+        "const lpD2=(item.lastTimePlayed||'').substring(0,10);"
+        "const plS=(item.platforms||[]).join(', ')||'';"
+        "return `<div class=\"lv-row ${extraCls}\" onclick=\"showLibDetail('${item.productId}')\" oncontextmenu=\"showFlagMenu(event,'${item.productId}','${st}')\">"
+        "${imgHtml}<div class=\"lv-title\" title=\"${(item.title||'').replace(/\"/g,'&quot;')}\">"
+        "${item.title||item.productId}${po2}${gp2}${tr2}${fl2}${iv2}${dlcBadge}</div>"
+        "<div class=\"lv-type\" style=\"color:#aaa\">${item.gamertag||''}${gtE}</div>"
+        "<div class=\"lv-pub\">${item.publisher||''}</div>"
+        "<div class=\"lv-pub\">${item.developer||''}</div>"
+        "<div class=\"lv-type\">${item.category||''}</div>"
+        "<div class=\"lv-type\">${plS}</div>"
+        "<div class=\"lv-type\">${relD2}</div>"
+        "<div class=\"lv-type\">${acqD2}</div>"
+        "<div class=\"lv-type\">${lpD2}</div>"
+        "<div class=\"lv-usd\">${usdR}</div>"
+        "<div class=\"lv-type\" title=\"${item.purchasedCountry||''}\">${item.purchasedCountry||''}</div>"
+        "<div class=\"lv-type\">${item.skuId||''}</div>"
+        "<div class=\"lv-status\">${sb}</div></div>`}\n"
+
+        # Build _filteredPids for fast lookup of which items are in filtered list
+        "const _filteredPids=new Set(filtered.map(x=>x.productId));\n"
+
+        # Rendering loop with DLC nesting (list) and flat (grid)
+        "const _renderedDlc=new Set();\n"
         'for(let i=0;i<shown;i++){const item=filtered[i];\n'
         'const flagged=manualFlags[item.productId];\n'
         "const sc=item.status==='Active'?'s-active':item.status==='Expired'?'s-expired':'s-revoked';\n"
@@ -3943,44 +4023,29 @@ def build_html_template(gamertag=""):
         "const safeTitle=(item.title||'').replace(/'/g,\"\\\\\\'\" ).replace(/\"/g,'&quot;');\n"
         "const allGTs=item._allGTs||[item.gamertag||''];\n"
         "const gtExtra=allGTs.length>1?`<span class=\"gt-plus\" onclick=\"event.stopPropagation();showGTList(this,['`+allGTs.map(g=>g.replace(/'/g,\"\\\\'\")).join(`','`)+`'])\" title=\"${allGTs.length} gamertags\">+${allGTs.length-1}</span>`:'';\n"
+
+        # Grid view: always flat, render every item
         'gh+=`<div class="lib-card" onclick="showLibDetail(\'${item.productId}\')" oncontextmenu="showFlagMenu(event,\'${item.productId}\',\'${safeTitle}\')">'
         '${img}<div class="info"><div class="ln" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">'
         '${item.title||item.productId}${poBadge}${gpBadge}${trBadge}${flBadge}${invBadge}</div>'
         '<div class="lm">${item.publisher||\'\'} | ${item.productKind||\'\'} | ${item.category||\'\'} | '
         '<span class="${sc}">${item.status||\'\'}</span>${gtExtra}</div>${pr}</div></div>`;\n'
-        ""
-        "const usdL=_p(item.priceUSD);\n"
-        "const statusBadge=`<span class=\"${sc}\">${item.status||''}</span>`;\n"
-        "const poTag=item.isPreOrder?'<span class=\"badge\" style=\"font-size:9px;margin-left:3px;background:#2a2a1a;color:#ffd54f\">PRE-ORDER</span>':'';\n"
-        "const gpTag=item.onGamePass?'<span class=\"badge gp\" style=\"font-size:9px;margin-left:4px\">GP</span>':'';\n"
-        "const trTag=item.isTrial?'<span class=\"badge trial\" style=\"font-size:9px;margin-left:3px\">TRIAL</span>'"
-        ":item.isDemo?'<span class=\"badge demo\" style=\"font-size:9px;margin-left:3px\">DEMO</span>':'';\n"
-        "const flTag=flagged==='beta'?'<span class=\"badge flagged\" style=\"font-size:9px;margin-left:3px\">FLAGGED</span>'"
-        ":flagged==='delisted'?'<span class=\"badge\" style=\"font-size:9px;margin-left:3px;background:#3a2a1a;color:#ff9800\">DELISTED</span>'"
-        ":flagged==='hardDelisted'?'<span class=\"badge\" style=\"font-size:9px;margin-left:3px;background:#3a1a1a;color:#f44336\">HARD DELISTED</span>'"
-        ":flagged==='indie'?'<span class=\"badge\" style=\"font-size:9px;margin-left:3px;background:#1a2a3a;color:#64b5f6\">INDIE</span>':'';\n"
-        "const invTag=item.catalogInvalid?'<span class=\"badge\" style=\"font-size:9px;margin-left:3px;background:#3a1a1a;color:#f44336\">INVALID</span>':'';\n"
-        "const safeTitle2=(item.title||'').replace(/'/g,\"\\\\\\'\" ).replace(/\"/g,'&quot;');\n"
-        "const relD=(item.releaseDate||'').substring(0,10);\n"
-        "const acqD=(item.acquiredDate||'').substring(0,10);\n"
-        "const lpD=(item.lastTimePlayed||'').substring(0,10);\n"
-        "const platStr=(item.platforms||[]).join(', ')||'';\n"
-        'lh+=`<div class="lv-row" onclick="showLibDetail(\'${item.productId}\')" oncontextmenu="showFlagMenu(event,\'${item.productId}\',\'${safeTitle2}\')">'
-        '${img}<div class="lv-title" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">'
-        '${item.title||item.productId}${poTag}${gpTag}${trTag}${flTag}${invTag}</div>'
-        '<div class="lv-type" style="color:#aaa">${item.gamertag||\'\'}${gtExtra}</div>'
-        '<div class="lv-pub">${item.publisher||\'\'}</div>'
-        '<div class="lv-pub">${item.developer||\'\'}</div>'
-        '<div class="lv-type">${item.category||\'\'}</div>'
-        '<div class="lv-type">${platStr}</div>'
-        '<div class="lv-type">${relD}</div>'
-        '<div class="lv-type">${acqD}</div>'
-        '<div class="lv-type">${lpD}</div>'
-        ''
-        '<div class="lv-usd">${usdL}</div>'
-        '<div class="lv-type" title="${item.purchasedCountry||\'\'}">${item.purchasedCountry||\'\'}</div>'
-        '<div class="lv-type">${item.skuId||\'\'}</div>'
-        '<div class="lv-status">${statusBadge}</div></div>`}\n'
+
+        # List view: DLC nesting
+        "if(_renderedDlc.has(item.productId)){continue}\n"
+        "const _isParent=_dlcParents.has(item.productId);\n"
+        "const _tid=item.xboxTitleId;\n"
+        "const _dlcGroup=(_isParent&&_tid&&_tidMap[_tid])?_tidMap[_tid].dlc.filter(d=>_filteredPids.has(d.productId)):[];\n"
+        "if(_isParent&&_dlcGroup.length>0){\n"
+        "lh+=_renderRow(item,'',_dlcGroup.length);\n"
+        "if(_expandedTids.has(_tid)){\n"
+        "_dlcGroup.forEach(d=>{lh+=_renderRow(d,'dlc-child',0);_renderedDlc.add(d.productId)})\n"
+        "}else{\n"
+        "_dlcGroup.forEach(d=>_renderedDlc.add(d.productId))\n"
+        "}\n"
+        "}else{\n"
+        "lh+=_renderRow(item,'',0)\n"
+        "}}\n"
         "g.innerHTML=gh;l.innerHTML=lh;\n"
         "document.getElementById('lib-cbar').innerHTML=_buildSummaryTable(_pf,filtered)}\n"
         '\n'
@@ -7134,6 +7199,18 @@ def main():
             har_extract(arg)
         elif args[0] == "--all":
             process_all_accounts()
+        elif args[0] == "preview":
+            os.makedirs(ACCOUNTS_DIR, exist_ok=True)
+            html_file = os.path.join(ACCOUNTS_DIR, "XCT.html")
+            html = build_html_template()
+            with open(html_file, "w", encoding="utf-8") as f:
+                f.write(html)
+            write_data_js([], [], [], os.path.join(ACCOUNTS_DIR, "data.js"))
+            print(f"[+] Preview HTML written (no account data)")
+            if html_file:
+                file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                print(f"[*] Opening in browser: {file_url}")
+                webbrowser.open(file_url)
         elif args[0] == "build":
             html_file = build_index()
             if html_file:
