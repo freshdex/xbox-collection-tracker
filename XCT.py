@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-XCT — Xbox Collection Tracker by Freshdex v1.1
-================================================
+XCT — Xbox Collection Tracker by Freshdex
+==========================================
 Authenticates with Xbox Live, fetches your Xbox/Microsoft Store entitlements,
 resolves catalog details (titles, prices, images, platforms) for both GBP and
 USD markets, pulls the Game Pass catalog, and builds a self-contained HTML
@@ -1618,7 +1618,7 @@ def print_header():
     print("  ██╔╝ ██╗╚██████╗   ██║")
     print("  ╚═╝  ╚═╝ ╚═════╝   ╚═╝")
     print()
-    print("  Xbox Collection Tracker by Freshdex v1.0")
+    print(f"  Xbox Collection Tracker by Freshdex v{VERSION}")
     print()
 
 
@@ -2557,7 +2557,7 @@ def fetch_exchange_rates():
     print("[*] Fetching exchange rates...")
     url = "https://open.er-api.com/v6/latest/USD"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "XCT/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": f"XCT/{VERSION}"})
         with urllib.request.urlopen(req, context=SSL_CTX, timeout=15) as resp:
             data = json.loads(resp.read())
         rates = data.get("rates", {})
@@ -3283,7 +3283,7 @@ def build_html_template(gamertag=""):
         ' ██╔██╗ ██║        ██║\n'
         '██╔╝ ██╗╚██████╗   ██║\n'
         '╚═╝  ╚═╝ ╚═════╝   ╚═╝</pre>\n'
-        '<div style="color:#888;font-size:12px;margin-bottom:12px">Xbox Collection Tracker by Freshdex v1.0</div>\n'
+        f'<div style="color:#888;font-size:12px;margin-bottom:12px">Xbox Collection Tracker by Freshdex v{VERSION}</div>\n'
         '<p class="sub" id="lib-sub"></p>\n'
         '<div class="cbar" id="lib-cbar"></div>\n'
         '<div class="search-row"><input type="text" id="lib-search" placeholder="Search library..." oninput="filterLib()"></div>\n'
