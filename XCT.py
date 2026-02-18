@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-XCT — Xbox Collection Tracker by Freshdex v1.0
+XCT — Xbox Collection Tracker by Freshdex v1.1
 ================================================
 Authenticates with Xbox Live, fetches your Xbox/Microsoft Store entitlements,
 resolves catalog details (titles, prices, images, platforms) for both GBP and
@@ -56,6 +56,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+VERSION = "1.1"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -2356,7 +2357,7 @@ def merge_library(entitlements, catalog, gamertag=""):
             # Ownership classification
             # _contentaccess_only items come from ContentAccess API (Game Pass/subscription)
             # not from Collections API — they are NOT purchased
-            "onGamePass":      ent.get("_contentaccess_only", False) or th.get("gamePass", {}).get("isGamePass", False),
+            "onGamePass":      False,  # set by JS cross-ref with fresh GP data
             "owned":           not ent.get("_contentaccess_only", False),
             # Last played (from TitleHub TitleHistory decoration)
             "lastTimePlayed":  th.get("lastTimePlayed", ""),
@@ -3307,6 +3308,11 @@ def build_html_template(gamertag=""):
         '<label><input type="checkbox" value="_invalid" onchange="filterLib()"> Invalid</label>'
         '<div class="cb-clear" onclick="cbToggleAll(this)">Clear All</div>'
         '</div></div>\n'
+        '<select id="lib-gp" onchange="filterLib()">'
+        '<option value="owned">Owned</option>'
+        '<option value="gamepass">Game Pass</option>'
+        '<option value="all">All</option>'
+        '</select>\n'
         '<div class="cb-drop" id="lib-cat"><div class="cb-btn" onclick="toggleCB(this)">Category &#9662;</div><div class="cb-panel"></div></div>\n'
         '<div class="cb-drop" id="lib-plat"><div class="cb-btn" onclick="toggleCB(this)">Platform &#9662;</div><div class="cb-panel"></div></div>\n'
         '<div class="cb-drop" id="lib-pub"><div class="cb-btn" onclick="toggleCB(this)">Publisher &#9662;</div><div class="cb-panel"></div></div>\n'
@@ -3332,13 +3338,6 @@ def build_html_template(gamertag=""):
         '<option value="playDesc">Sort: Last Played (Recent)</option>'
         '<option value="playAsc">Sort: Last Played (Oldest)</option>'
         '<option value="platAsc">Sort: Platform A-Z</option></select>\n'
-        '<select id="lib-gp" onchange="filterLib()">'
-        '<option value="all">Game Pass: All</option>'
-        '<option value="owned">Owned</option>'
-        '<option value="ownedGP">Owned + on Game Pass</option>'
-        '<option value="gpNotOwned">Game Pass Not Owned</option>'
-        '<option value="gpOrOwned">Game Pass + Owned</option>'
-        '</select>\n'
         '<div class="view-toggle"><button class="view-btn" onclick="setView(\'lib\',\'grid\',this)" title="Grid">&#9638;</button>'
         '<button class="view-btn active" onclick="setView(\'lib\',\'list\',this)" title="List">&#9776;</button></div>\n'
         '</div>\n'
@@ -3440,11 +3439,11 @@ def build_html_template(gamertag=""):
         "return _kinds.map(k=>{const a=items.filter(x=>x.productKind===k);"
         "let v=0;a.forEach(x=>{v+=(x.priceUSD||0)});return{cnt:a.length,val:v}})}\n"
         "function _buildSummaryTable(base,filtered){"
-        "const _bSeen={};const baseDD=base.filter(x=>{if(_bSeen[x.productId])return false;_bSeen[x.productId]=1;return true});"
-        "const baseGTs=new Set(base.map(x=>x.gamertag||'')).size||(base.length?1:0);"
+        "const _ownedRaw=base.filter(x=>x.owned);const _oSeen={};const ownedDD=_ownedRaw.filter(x=>{if(_oSeen[x.productId])return false;_oSeen[x.productId]=1;return true});"
+        "const ownedGTs=new Set(_ownedRaw.map(x=>x.gamertag||'')).size||(_ownedRaw.length?1:0);"
         "const fGTs=new Set(filtered.map(x=>x.gamertag||'')).size||(filtered.length?1:0);"
-        "const _gpRaw=LIB.filter(x=>x.onGamePass&&!x.owned);const _gpSeen={};const gpAll=_gpRaw.filter(x=>{if(_gpSeen[x.productId])return false;_gpSeen[x.productId]=1;return true});"
-        "const libD=_rowData(baseDD),filD=_rowData(filtered),gpD=_rowData(gpAll);"
+        "const _gpRaw=base.filter(x=>x.onGamePass&&!x.owned);const _gpSeen={};const gpDD=_gpRaw.filter(x=>{if(_gpSeen[x.productId])return false;_gpSeen[x.productId]=1;return true});"
+        "const libD=_rowData(ownedDD),filD=_rowData(filtered),gpD=_rowData(gpDD);"
         "let h='<table class=\"stbl\"><thead><tr><th></th>"
         "<th class=\"stbl-div\">#</th>"
         "<th class=\"stbl-div\">Games #</th><th>Games Value</th>"
@@ -3461,9 +3460,9 @@ def build_html_template(gamertag=""):
         "h+=`<td><span class=\"usd\">${_p(x.val)||'-'}</span></td>`});"
         "h+=`<td class=\"stbl-div\"><span class=\"usd\">${_p(tv)||'-'}</span></td>`;"
         "h+=`<td class=\"stbl-div\">${gts||''}</td></tr>`}\n"
-        "row('','Library',libD,baseGTs>1?baseGTs:'');"
+        "row('','Library',libD,ownedGTs>1?ownedGTs:'');"
+        "if(gpDD.length){row('stbl-gp','Game Pass',gpD,'')}"
         "row('','Current Filter',filD,fGTs);"
-        "if(gpAll.length){row('stbl-gp','Game Pass',gpD,'')}"
         "h+='</tbody></table>';return h}\n"
         '\n'
 
@@ -3484,7 +3483,7 @@ def build_html_template(gamertag=""):
         "function clearAllFilters(){"
         "document.querySelectorAll('#library .cb-panel input[type=checkbox]').forEach(c=>c.checked=true);"
         "document.querySelectorAll('#library .cb-clear').forEach(c=>c.textContent='Clear All');"
-        "document.getElementById('lib-gp').value='all';"
+        "document.getElementById('lib-gp').value='owned';"
         "filterLib()}\n"
         "document.addEventListener('click',function(e){"
         "if(!e.target.closest('.cb-drop'))document.querySelectorAll('.cb-panel.open').forEach(p=>p.classList.remove('open'))});\n"
@@ -3851,9 +3850,8 @@ def build_html_template(gamertag=""):
         "if(dlVals){const ls=flagged==='hardDelisted'?'Hard Delisted':flagged==='delisted'?'Delisted':'Listed';"
         "if(!dlVals.includes(ls))return false;}\n"
         "if(gpF==='owned'&&!item.owned)return false;\n"
-        "if(gpF==='ownedGP'&&!(item.owned&&item.onGamePass))return false;\n"
-        "if(gpF==='gpNotOwned'&&!(item.onGamePass&&!item.owned))return false;\n"
-        "if(gpF==='gpOrOwned'&&!(item.onGamePass||item.owned))return false;\n"
+        "if(gpF==='gamepass'&&!(item.onGamePass&&!item.owned))return false;\n"
+        "if(gpF==='all'&&!(item.owned||item.onGamePass))return false;\n"
         'return true});\n'
         "let filtered=q?_libBase.filter(item=>"
         "(item.title||'').toLowerCase().includes(q)||(item.publisher||'').toLowerCase().includes(q)"
@@ -3981,7 +3979,7 @@ def build_html_template(gamertag=""):
         '<div class="lv-type">${item.skuId||\'\'}</div>'
         '<div class="lv-status">${statusBadge}</div></div>`}\n'
         "g.innerHTML=gh;l.innerHTML=lh;\n"
-        "document.getElementById('lib-cbar').innerHTML=_buildSummaryTable(_libBase,filtered)}\n"
+        "document.getElementById('lib-cbar').innerHTML=_buildSummaryTable(_pf,filtered)}\n"
         '\n'
 
         "function closeModal(){document.getElementById('modal').classList.remove('active')}\n"
@@ -4343,6 +4341,8 @@ def build_html_template(gamertag=""):
         "el.innerHTML=h;\n"
         "}\n\n"
 
+        "if(GP.length){const _gpPids=new Set(GP.map(g=>g.productId));"
+        "LIB.forEach(x=>{x.onGamePass=_gpPids.has(x.productId)})}\n"
         'initDropdowns();filterLib();filterPH();filterGP();filterMKT();renderHistory();\n'
         '</script></body></html>'
     )
@@ -4958,6 +4958,18 @@ def process_account(gamertag, method=None):
 # Build Index (rebuild HTML + data.js from cached data, no API calls)
 # ===========================================================================
 
+def _load_gp_details():
+    """Load Game Pass details from any account that has them cached."""
+    accounts = load_accounts()
+    for gt in accounts:
+        gp_file = account_path(gt, "gamepass_details.json")
+        if os.path.isfile(gp_file):
+            details = load_json(gp_file)
+            if details:
+                return list(details.values())
+    return []
+
+
 def build_index():
     """Re-merge cached data and regenerate data.js + HTML for all accounts.
 
@@ -4971,6 +4983,9 @@ def build_index():
 
     gamertags = list(accounts.keys())
     acct_meta = collect_account_metadata()
+    gp_items = _load_gp_details()
+    if gp_items:
+        print(f"  Game Pass: {len(gp_items)} items loaded from cache")
     combined_library = []
     combined_ph = []
     combined_history = []
@@ -5013,7 +5028,7 @@ def build_index():
         # Write per-account data.js
         mkt_file = os.path.join(acct, "marketplace.json")
         acct_mkt = load_json(mkt_file) if os.path.isfile(mkt_file) else []
-        write_data_js(library, [], scan_history, os.path.join(acct, "data.js"), play_hist,
+        write_data_js(library, gp_items, scan_history, os.path.join(acct, "data.js"), play_hist,
                       marketplace=acct_mkt, accounts_meta=acct_meta)
 
         # Force-rebuild per-account HTML
@@ -5051,7 +5066,7 @@ def build_index():
     acct_meta = collect_account_metadata()
     combined_history.sort(key=lambda s: s.get("timestamp", ""), reverse=True)
     combined_data_js = os.path.join(ACCOUNTS_DIR, "data.js")
-    write_data_js(combined_library, [], combined_history[:100], combined_data_js, combined_ph,
+    write_data_js(combined_library, gp_items, combined_history[:100], combined_data_js, combined_ph,
                   marketplace=combined_mkt, accounts_meta=acct_meta)
 
     combined_html = os.path.join(ACCOUNTS_DIR, "XCT.html")
@@ -5068,9 +5083,108 @@ def build_index():
 # ===========================================================================
 
 def process_gamepass_library():
-    """Process Game Pass library. (Endpoint TBD)"""
-    print("[*] Game Pass Library")
-    print("    Not yet implemented. Capture a HAR to grab the endpoint.")
+    """Fetch Game Pass catalog, enrich with catalog details, and rebuild HTML."""
+    accounts = load_accounts()
+    gamertags = list(accounts.keys())
+    if not gamertags:
+        print("[!] No accounts configured.")
+        return
+
+    # Pick an account for auth token (needed for catalog enrichment)
+    gt = _pick_account(gamertags, "Game Pass catalog using which account?", allow_all=False)
+    if not gt:
+        return
+    set_account_paths(gt)
+
+    if _is_token_expired(gt):
+        print(f"[*] Token is >12h old, refreshing...")
+        _auto_refresh_token(gt)
+
+    auth_token_xl = _read_xl_token()
+
+    # Step 1: Fetch Game Pass catalog (public, no auth needed)
+    print("[*] Fetching Game Pass catalog...")
+    gp_data = fetch_gamepass_catalog()
+    if not gp_data or not gp_data.get("items"):
+        print("[!] Failed to fetch Game Pass catalog")
+        return
+
+    gp_pids = list(gp_data["items"].keys())
+    print(f"  Game Pass catalog: {len(gp_pids)} products")
+
+    # Step 2: Enrich with catalog details
+    existing_catalog = {}
+    if os.path.isfile(CATALOG_V3_US_FILE):
+        existing_catalog = load_json(CATALOG_V3_US_FILE)
+    gp_details = fetch_gamepass_details(gp_data, existing_catalog_us=existing_catalog,
+                                        auth_token_xl=auth_token_xl)
+
+    # Step 3: Mark owned items (check all accounts' entitlements)
+    owned_pids = set()
+    for g in gamertags:
+        ent_file = account_path(g, "entitlements.json")
+        if os.path.isfile(ent_file):
+            ents = load_json(ent_file)
+            if ents:
+                owned_pids.update(e["productId"] for e in ents
+                                  if e.get("productId") and not e.get("_contentaccess_only")
+                                  and not e.get("_titlehub_only"))
+
+    gp_items = list(gp_details.values())
+    for item in gp_items:
+        item["owned"] = item["productId"] in owned_pids
+    owned_count = sum(1 for x in gp_items if x["owned"])
+    print(f"  Owned: {owned_count}/{len(gp_items)}")
+
+    # Step 4: Rebuild data.js + HTML for all accounts with GP data
+    acct_meta = collect_account_metadata()
+
+    # Per-account rebuild
+    for g in gamertags:
+        set_account_paths(g)
+        acct = account_dir(g)
+        lib_file = os.path.join(acct, "library.json")
+        if not os.path.isfile(lib_file):
+            continue
+        library = load_json(lib_file)
+        ph_file = os.path.join(acct, "play_history.json")
+        play_hist = load_json(ph_file) if os.path.isfile(ph_file) else []
+        scan_history = load_all_scans(g)
+        mkt_file = os.path.join(acct, "marketplace.json")
+        acct_mkt = load_json(mkt_file) if os.path.isfile(mkt_file) else []
+        write_data_js(library, gp_items, scan_history, os.path.join(acct, "data.js"),
+                      play_hist, marketplace=acct_mkt, accounts_meta=acct_meta)
+
+    # Combined rebuild
+    combined_library = []
+    combined_ph = []
+    combined_history = []
+    combined_mkt = []
+    for g in gamertags:
+        set_account_paths(g)
+        acct = account_dir(g)
+        lib_file = os.path.join(acct, "library.json")
+        if os.path.isfile(lib_file):
+            lib = load_json(lib_file)
+            if lib:
+                combined_library.extend(lib)
+        ph_file = os.path.join(acct, "play_history.json")
+        if os.path.isfile(ph_file):
+            ph = load_json(ph_file)
+            if ph:
+                combined_ph.extend(ph)
+        combined_history.extend(load_all_scans(g, max_scans=50))
+        if not combined_mkt:
+            mkt_file = os.path.join(acct, "marketplace.json")
+            if os.path.isfile(mkt_file):
+                combined_mkt = load_json(mkt_file) or []
+
+    combined_history.sort(key=lambda s: s.get("timestamp", ""), reverse=True)
+    combined_data_js = os.path.join(ACCOUNTS_DIR, "data.js")
+    write_data_js(combined_library, gp_items, combined_history[:100], combined_data_js,
+                  combined_ph, marketplace=combined_mkt, accounts_meta=acct_meta)
+
+    print(f"\n[+] Game Pass catalog written to data.js ({len(gp_items)} items)")
     print()
 
 
@@ -5225,7 +5339,7 @@ def process_marketplace(gamertag, channels=None):
     # Write data.js with marketplace data
     acct_meta = collect_account_metadata()
     data_js_path = os.path.join(acct, "data.js")
-    write_data_js(library, [], scan_history, data_js_path, play_history,
+    write_data_js(library, _load_gp_details(), scan_history, data_js_path, play_history,
                   marketplace=mkt_items, accounts_meta=acct_meta)
 
     # Rebuild HTML template (to include marketplace tab)
@@ -5255,7 +5369,7 @@ def process_marketplace(gamertag, channels=None):
                             combined_ph.extend(other_ph)
         combined_history.sort(key=lambda s: s.get("timestamp", ""), reverse=True)
         combined_data_js = os.path.join(ACCOUNTS_DIR, "data.js")
-        write_data_js(combined_library, [], combined_history[:100], combined_data_js,
+        write_data_js(combined_library, _load_gp_details(), combined_history[:100], combined_data_js,
                       combined_ph, marketplace=mkt_items, accounts_meta=acct_meta)
         combined_html = os.path.join(ACCOUNTS_DIR, "XCT.html")
         html = build_html_template(gamertag="All Accounts")
@@ -5409,7 +5523,7 @@ def process_marketplace_all_regions(gamertag):
     # Write data.js with marketplace data
     acct_meta = collect_account_metadata()
     data_js_path = os.path.join(acct, "data.js")
-    write_data_js(library, [], scan_history, data_js_path, play_history,
+    write_data_js(library, _load_gp_details(), scan_history, data_js_path, play_history,
                   marketplace=mkt_items, accounts_meta=acct_meta)
 
     # Rebuild HTML template
@@ -5439,7 +5553,7 @@ def process_marketplace_all_regions(gamertag):
                             combined_ph.extend(other_ph)
         combined_history.sort(key=lambda s: s.get("timestamp", ""), reverse=True)
         combined_data_js = os.path.join(ACCOUNTS_DIR, "data.js")
-        write_data_js(combined_library, [], combined_history[:100], combined_data_js,
+        write_data_js(combined_library, _load_gp_details(), combined_history[:100], combined_data_js,
                       combined_ph, marketplace=mkt_items, accounts_meta=acct_meta)
         combined_html = os.path.join(ACCOUNTS_DIR, "XCT.html")
         html = build_html_template(gamertag="All Accounts")
@@ -6346,7 +6460,7 @@ def process_all_accounts():
         os.makedirs(ACCOUNTS_DIR, exist_ok=True)
 
         acct_meta = collect_account_metadata()
-        write_data_js(all_libraries, [], all_scan_history[:100], combined_data_js,
+        write_data_js(all_libraries, _load_gp_details(), all_scan_history[:100], combined_data_js,
                       marketplace=all_mkt, accounts_meta=acct_meta)
 
         if not os.path.isfile(combined_path):
@@ -6492,7 +6606,7 @@ def process_contentaccess_only(gamertag):
     data_js_path = os.path.join(acct, "data.js")
     ca_mkt = load_json(MARKETPLACE_FILE) if os.path.isfile(MARKETPLACE_FILE) else []
     acct_meta = collect_account_metadata()
-    write_data_js(library, [], scan_history, data_js_path, play_history,
+    write_data_js(library, _load_gp_details(), scan_history, data_js_path, play_history,
                   marketplace=ca_mkt, accounts_meta=acct_meta)
 
     if not os.path.isfile(OUTPUT_HTML_FILE):
@@ -6763,7 +6877,7 @@ def interactive_menu():
                 scan_history = load_all_scans(gt)
                 acct_meta = collect_account_metadata()
                 data_js_path = os.path.join(acct, "data.js")
-                write_data_js(library, [], scan_history, data_js_path, play_history,
+                write_data_js(library, _load_gp_details(), scan_history, data_js_path, play_history,
                               marketplace=mkt_items, accounts_meta=acct_meta)
                 html = build_html_template(gamertag=gt)
                 with open(OUTPUT_HTML_FILE, "w", encoding="utf-8") as f:
@@ -6927,11 +7041,62 @@ def interactive_menu():
 
 
 # ===========================================================================
+# Auto-Update
+# ===========================================================================
+
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/freshdex/xbox-collection-tracker/main"
+UPDATE_FILES = ["XCT.py", "xbox_auth.py", "requirements.txt", "tags.json"]
+
+def _parse_version(v):
+    """Parse version string like '1.2' into comparable tuple (1, 2)."""
+    return tuple(int(x) for x in v.strip().split("."))
+
+def check_for_updates():
+    """Check GitHub for a newer version and offer to auto-update."""
+    try:
+        req = urllib.request.Request(f"{GITHUB_RAW_BASE}/version.txt")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            remote_version_str = resp.read().decode("utf-8").strip()
+        remote_version = _parse_version(remote_version_str)
+        local_version = _parse_version(VERSION)
+        if remote_version <= local_version:
+            return
+        print(f"[*] New version available: v{remote_version_str} (current: v{VERSION})")
+        answer = input("    Update now? [y/N]: ").strip().lower()
+        if answer != "y":
+            print("    Skipping update.")
+            return
+        print(f"    Downloading v{remote_version_str}...")
+        for filename in UPDATE_FILES:
+            url = f"{GITHUB_RAW_BASE}/{filename}"
+            try:
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = resp.read()
+                target = os.path.join(SCRIPT_DIR, filename)
+                tmp = target + ".tmp"
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                os.replace(tmp, target)
+                print(f"      Updated {filename}")
+            except Exception as e:
+                print(f"      SKIP {filename}: {e}")
+        print(f"[*] Updated to v{remote_version_str} — please restart.")
+        sys.exit(0)
+    except Exception:
+        pass  # No internet / GitHub down — silently continue
+
+
+# ===========================================================================
 # CLI Entry Point
 # ===========================================================================
 
 def main():
     args = sys.argv[1:]
+    if "--no-update" in args:
+        args.remove("--no-update")
+    else:
+        check_for_updates()
     debug(f"main: args={args}")
 
     # Log account state at startup
