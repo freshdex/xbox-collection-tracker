@@ -3215,6 +3215,14 @@ def build_html_template(gamertag=""):
         '</head>\n'
         '<body>\n'
 
+        # -- Loading spinner overlay --
+        '<div id="loading-overlay" style="position:fixed;inset:0;background:#111;display:flex;'
+        'flex-direction:column;align-items:center;justify-content:center;z-index:9999">'
+        '<div style="width:48px;height:48px;border:4px solid #333;border-top-color:#107c10;'
+        'border-radius:50%;animation:spin 0.8s linear infinite"></div>'
+        '<div style="color:#888;margin-top:16px;font-size:14px">Loading...</div></div>\n'
+        '<style>@keyframes spin{to{transform:rotate(360deg)}}</style>\n'
+
         # -- Tabs (counts populated by JS) --
         '<div class="tabs">\n'
         '<div class="tab active" onclick="switchTab(\'library\',this)">My Library <span class="cnt" id="tab-lib-cnt"></span></div>\n'
@@ -4358,6 +4366,7 @@ def build_html_template(gamertag=""):
         "if(GP.length){const _gpPids=new Set(GP.map(g=>g.productId));"
         "LIB.forEach(x=>{x.onGamePass=_gpPids.has(x.productId)})}\n"
         'initDropdowns();filterLib();filterPH();filterGP();filterMKT();renderHistory();\n'
+        "document.getElementById('loading-overlay').style.display='none';\n"
         '</script></body></html>'
     )
 
