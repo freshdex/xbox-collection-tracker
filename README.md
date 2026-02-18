@@ -11,6 +11,7 @@ Track your Xbox game library across multiple accounts. See every game you own, w
 - **DLC shown by default** — The Type filter now includes DLC (Durable) checked by default so DLC items are visible on load.
 - **Wider title column** — The title column in list view now flexes to fill available space, making full titles and badges (DLC, GP, etc.) visible.
 - **Tab bar cleanup** — "Game Pass Catalog" tab shortened to "Game Pass". Currency dropdown and version label moved closer to the tabs.
+- **Auto-update** — XCT checks GitHub for newer versions on startup and prompts you to update if one is available.
 
 ## Setup (first time)
 
