@@ -3170,9 +3170,11 @@ def build_html_template(gamertag=""):
         '.list-view .lv-status{text-align:center}\n'
         '.gp-list .lv-head{grid-template-columns:50px 1fr 160px 120px 90px 80px}\n'
         '.gp-list .lv-row{grid-template-columns:50px 1fr 160px 120px 90px 80px}\n'
-        '#mkt-list .lv-head{grid-template-columns:50px 1fr 160px 120px 90px 100px 140px}\n'
-        '#mkt-list .lv-row{grid-template-columns:50px 1fr 160px 120px 90px 100px 140px}\n'
+        '#mkt-list .lv-head{grid-template-columns:50px 1fr 140px 90px 90px repeat(10,80px) 80px}\n'
+        '#mkt-list .lv-row{grid-template-columns:50px 1fr 140px 90px 90px repeat(10,80px) 80px}\n'
+        '#mkt-list{overflow-x:auto}\n'
         '.lv-best{text-align:right;line-height:1.2}\n'
+        '.lv-reg{text-align:right;font-size:11px;line-height:1.2}\n'
         '.rp-tbl{width:100%;border-collapse:collapse;font-size:12px;margin-top:10px}\n'
         '.rp-tbl th{text-align:right;padding:4px 6px;color:#888;border-bottom:1px solid #333;font-weight:600}\n'
         '.rp-tbl th:first-child{text-align:left}\n'
@@ -4050,6 +4052,19 @@ def build_html_template(gamertag=""):
         "const usd=(p/rate)*GC_FACTOR;"
         "if(usd>0&&(!best||usd<best.usd)){best={mkt,usd,local:p,cc:rp.currency}}}"
         "return best}\n"
+        "function _regCell(item,mkt){"
+        "if(!item.regionalPrices||typeof RATES==='undefined')return '<div class=\"lv-reg\" style=\"color:#333\">-</div>';"
+        "const rp=item.regionalPrices[mkt];"
+        "if(!rp)return '<div class=\"lv-reg\" style=\"color:#333\">-</div>';"
+        "const p=rp.salePrice>0?rp.salePrice:rp.price;"
+        "const rate=RATES[rp.currency]||1;"
+        "const usd=(p/rate)*GC_FACTOR;"
+        "if(usd<=0)return '<div class=\"lv-reg\" style=\"color:#333\">-</div>';"
+        "const br=_bestReg(item);"
+        "const isBest=br&&br.mkt===mkt;"
+        "const col=isBest?'#4caf50':'#e91e63';"
+        "const w=isBest?'font-weight:700':'';"
+        "return `<div class=\"lv-reg\" style=\"color:${col};${w}\">$${usd.toFixed(2)}</div>`}\n"
         "function _regionTbl(item){"
         "if(!item.regionalPrices||typeof RATES==='undefined'||!Object.keys(RATES).length)return '';"
         "let bestUsd=Infinity;"
@@ -4130,7 +4145,7 @@ def build_html_template(gamertag=""):
         "const pageItems=filtered.slice(pgStart,pgEnd);\n"
         "let gh='',lh='<div class=\"lv-head\"><div></div><div>Title</div><div>Publisher</div>"
         "<div>Release</div><div style=\"text-align:right\">USD</div>"
-        "<div style=\"text-align:right\">Best Region</div>"
+        "'+_RORD.map(m=>'<div style=\"text-align:right;font-size:10px\">'+m+'</div>').join('')+'"
         "<div style=\"text-align:center\">Status</div></div>';\n"
         'for(let i=0;i<pageItems.length;i++){const item=pageItems[i];\n'
         "const owned=item.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>'"
@@ -4148,7 +4163,6 @@ def build_html_template(gamertag=""):
         "'<span style=\"color:#555;font-size:11px\">Free</span>';\n"
         "const br=_bestReg(item);\n"
         "const bestCard=br?`<div style=\"margin:2px 0;color:#e91e63;font-weight:600;font-size:11px\">Best: $${br.usd.toFixed(2)} (${br.mkt})</div>`:'';\n"
-        "const bestCell=br?`<span style=\"color:#e91e63;font-weight:600\">$${br.usd.toFixed(2)}</span><br><span style=\"font-size:9px;color:#888\">${_RNAME[br.mkt]||br.mkt}</span>`:'';\n"
         'gh+=`<div class="card" onclick="showMKTDetail(${MKT.indexOf(item)})">${imgTag}<div class="card-body">'
         '<div class="card-name" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}</div>'
         '<div class="card-meta">${item.publisher||\'\'} | ${(item.releaseDate||\'\').substring(0,10)}</div>'
@@ -4161,7 +4175,7 @@ def build_html_template(gamertag=""):
         '<div class="lv-pub">${item.publisher||\'\'}</div>'
         '<div class="lv-type">${(item.releaseDate||\'\').substring(0,10)}</div>'
         '<div class="lv-usd">${usd}${saleTag}</div>'
-        '<div class="lv-best">${bestCell}</div>'
+        "${_RORD.map(m=>_regCell(item,m)).join('')}"
         '<div class="lv-status">${owned}${gpBadge}</div></div>`}\n'
         "g.innerHTML=gh;l.innerHTML=lh;\n"
         "const ownedCnt=filtered.filter(x=>x.owned).length;\n"
