@@ -3263,6 +3263,7 @@ def build_html_template(gamertag=""):
         '<option value="ARS">ARS AR$</option>'
         '<option value="PHP">PHP ₱</option>'
         '</select>\n'
+        f'<div style="margin-left:auto;padding:0 14px;color:#555;font-size:11px;white-space:nowrap">XCT v{VERSION}</div>\n'
         '</div>\n'
 
         # -- Game Pass section --
@@ -3286,14 +3287,6 @@ def build_html_template(gamertag=""):
 
         # -- Library section (active by default) --
         '<div class="section active" id="library">\n'
-        '<pre style="color:#107c10;font-family:monospace;font-size:14px;line-height:1.15;margin:0 0 4px">'
-        '██╗  ██╗ ██████╗████████╗\n'
-        '╚██╗██╔╝██╔════╝╚══██╔══╝\n'
-        ' ╚███╔╝ ██║        ██║\n'
-        ' ██╔██╗ ██║        ██║\n'
-        '██╔╝ ██╗╚██████╗   ██║\n'
-        '╚═╝  ╚═╝ ╚═════╝   ╚═╝</pre>\n'
-        f'<div style="color:#888;font-size:12px;margin-bottom:12px">Xbox Collection Tracker by Freshdex v{VERSION}</div>\n'
         '<p class="sub" id="lib-sub"></p>\n'
         '<div class="cbar" id="lib-cbar"></div>\n'
         '<div class="search-row"><input type="text" id="lib-search" placeholder="Search library..." oninput="filterLib()"></div>\n'
