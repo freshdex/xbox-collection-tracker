@@ -58,7 +58,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -101,6 +101,52 @@ def _init_debug_log():
     sys.stdout = _TeeWriter(sys.stdout)
 
 _init_debug_log()
+
+# ---------------------------------------------------------------------------
+# Auto-update — runs first so bugs in the rest of the script don't block it
+# ---------------------------------------------------------------------------
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/freshdex/xbox-collection-tracker/main"
+UPDATE_FILES = ["XCT.py", "xbox_auth.py", "requirements.txt", "tags.json", "gfwl_links.json"]
+
+def _parse_version(v):
+    """Parse version string like '1.2' or '1.4.1' into comparable tuple."""
+    return tuple(int(x) for x in v.strip().split("."))
+
+def check_for_updates():
+    """Check GitHub for a newer version and offer to auto-update."""
+    try:
+        req = urllib.request.Request(f"{GITHUB_RAW_BASE}/version.txt")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            remote_version_str = resp.read().decode("utf-8").strip()
+        remote_version = _parse_version(remote_version_str)
+        local_version = _parse_version(VERSION)
+        if remote_version <= local_version:
+            return
+        print(f"[*] New version available: v{remote_version_str} (current: v{VERSION})")
+        answer = input("    Update now? [y/N]: ").strip().lower()
+        if answer != "y":
+            print("    Skipping update.")
+            return
+        print(f"    Downloading v{remote_version_str}...")
+        for filename in UPDATE_FILES:
+            url = f"{GITHUB_RAW_BASE}/{filename}"
+            try:
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = resp.read()
+                target = os.path.join(SCRIPT_DIR, filename)
+                tmp = target + ".tmp"
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                os.replace(tmp, target)
+                print(f"      Updated {filename}")
+            except Exception as e:
+                print(f"      SKIP {filename}: {e}")
+        print(f"[*] Updated to v{remote_version_str} — please restart.")
+        sys.exit(0)
+    except Exception:
+        pass  # No internet / GitHub down — silently continue
+
 
 def debug(msg):
     """Write a debug-only message to the log file (not printed to console)."""
@@ -9179,62 +9225,11 @@ def interactive_menu():
 
 
 # ===========================================================================
-# Auto-Update
-# ===========================================================================
-
-GITHUB_RAW_BASE = "https://raw.githubusercontent.com/freshdex/xbox-collection-tracker/main"
-UPDATE_FILES = ["XCT.py", "xbox_auth.py", "requirements.txt", "tags.json"]
-
-def _parse_version(v):
-    """Parse version string like '1.2' into comparable tuple (1, 2)."""
-    return tuple(int(x) for x in v.strip().split("."))
-
-def check_for_updates():
-    """Check GitHub for a newer version and offer to auto-update."""
-    try:
-        req = urllib.request.Request(f"{GITHUB_RAW_BASE}/version.txt")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            remote_version_str = resp.read().decode("utf-8").strip()
-        remote_version = _parse_version(remote_version_str)
-        local_version = _parse_version(VERSION)
-        if remote_version <= local_version:
-            return
-        print(f"[*] New version available: v{remote_version_str} (current: v{VERSION})")
-        answer = input("    Update now? [y/N]: ").strip().lower()
-        if answer != "y":
-            print("    Skipping update.")
-            return
-        print(f"    Downloading v{remote_version_str}...")
-        for filename in UPDATE_FILES:
-            url = f"{GITHUB_RAW_BASE}/{filename}"
-            try:
-                req = urllib.request.Request(url)
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    data = resp.read()
-                target = os.path.join(SCRIPT_DIR, filename)
-                tmp = target + ".tmp"
-                with open(tmp, "wb") as f:
-                    f.write(data)
-                os.replace(tmp, target)
-                print(f"      Updated {filename}")
-            except Exception as e:
-                print(f"      SKIP {filename}: {e}")
-        print(f"[*] Updated to v{remote_version_str} — please restart.")
-        sys.exit(0)
-    except Exception:
-        pass  # No internet / GitHub down — silently continue
-
-
-# ===========================================================================
 # CLI Entry Point
 # ===========================================================================
 
 def main():
     args = sys.argv[1:]
-    if "--no-update" in args:
-        args.remove("--no-update")
-    else:
-        check_for_updates()
     debug(f"main: args={args}")
 
     # Log account state at startup
@@ -9297,4 +9292,8 @@ def main():
 
 
 if __name__ == "__main__":
+    if "--no-update" not in sys.argv:
+        check_for_updates()
+    else:
+        sys.argv.remove("--no-update")
     main()

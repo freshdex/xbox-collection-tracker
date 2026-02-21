@@ -1,8 +1,13 @@
 # Xbox Collection Tracker (XCT)
 
-**v1.4.1**
+**v1.4.2**
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
+
+## What's New in v1.4.2
+
+- **Update check runs first** — The GitHub version check now runs before any other script code, so bugs in the main script (like the v1.4.1 `.json` issue) can no longer prevent users from auto-updating.
+- **`gfwl_links.json` included in updates** — The auto-updater now also downloads `gfwl_links.json` when updating, keeping the GFWL package database in sync.
 
 ## What's New in v1.4.1
 
