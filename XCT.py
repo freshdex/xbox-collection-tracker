@@ -58,7 +58,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "1.4.2"
+VERSION = "1.5"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -8570,6 +8570,172 @@ def process_gfwl_download():
         subprocess.Popen([installer])
 
 
+def _rg_adguard_get_links(value, input_type="ProductId", ring="RP", lang="en-US"):
+    """
+    POST to store.rg-adguard.net/api/GetFiles and return parsed package list.
+    input_type: ProductId | CategoryId | PackageFamilyName | url
+    ring:       RP | Retail | Fast | Slow
+    Returns list of {filename, url, expiry, sha1, size}, empty list if nothing found,
+    or raises RuntimeError on Cloudflare block / network error.
+    """
+    endpoint = "https://store.rg-adguard.net/api/GetFiles"
+    body = urllib.parse.urlencode({
+        "type": input_type,
+        "url":  value,
+        "ring": ring,
+        "lang": lang,
+    }).encode()
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent":   ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/122.0.0.0 Safari/537.36"),
+        "Referer":      "https://store.rg-adguard.net/",
+        "Origin":       "https://store.rg-adguard.net",
+        "Accept":       "text/html,application/xhtml+xml,*/*;q=0.8",
+    }
+    req = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code} from rg-adguard")
+    except Exception as e:
+        raise RuntimeError(str(e))
+
+    if "Just a moment" in html or "cf-browser-verification" in html or "Attention Required" in html:
+        raise RuntimeError(
+            "Blocked by Cloudflare.\n"
+            "  Try opening https://store.rg-adguard.net/ in your browser first,\n"
+            "  completing the challenge, then retry here."
+        )
+
+    # Parse HTML table rows: <a href="URL">FILENAME</a> | expiry | sha1 | size
+    results = []
+    row_re = re.compile(
+        r'<tr[^>]*>\s*<td[^>]*>\s*<a\s+href="([^"]+)"[^>]*>([^<]+)</a>\s*</td>'
+        r'\s*<td[^>]*>([^<]*)</td>'
+        r'\s*<td[^>]*>([^<]*)</td>'
+        r'\s*<td[^>]*>([^<]*)</td>',
+        re.DOTALL | re.IGNORECASE,
+    )
+    for m in row_re.finditer(html):
+        link_url, fname, expiry, sha1, size = [x.strip() for x in m.groups()]
+        if link_url.startswith("http"):
+            results.append({
+                "filename": fname,
+                "url":      link_url,
+                "expiry":   expiry,
+                "sha1":     sha1,
+                "size":     size,
+            })
+    return results
+
+
+def process_rg_adguard():
+    """Interactive MS Store package fetcher via store.rg-adguard.net."""
+    print("\n[MS Store Package Fetcher — store.rg-adguard.net]")
+    print()
+    print("  Input type:")
+    print("    [1] ProductId         e.g. 9NBLGGH5R558")
+    print("    [2] CategoryId        e.g. e89c9ccf-de94-45ed-9cd4-7e11d05c3da4 (WuCategoryId)")
+    print("    [3] PackageFamilyName e.g. Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe")
+    print("    [4] URL               e.g. https://www.microsoft.com/store/productId/9NBLGGH5R558")
+    print("    [L] Pick from USB drive library (storeId lookup)")
+    print()
+    choice = input("  Choice [1]: ").strip().upper() or "1"
+    print()
+
+    type_map = {"1": "ProductId", "2": "CategoryId", "3": "PackageFamilyName", "4": "url"}
+
+    if choice == "L":
+        items = _cdn_load_items()
+        if not items:
+            return
+        # Filter to items that have a storeId (needed for ProductId lookup)
+        searchable = [x for x in items if x.get("storeId")]
+        if not searchable:
+            print("[!] No items with storeId in USB DB.")
+            return
+        q = input("  Search (title/storeId, Enter for all): ").strip().lower()
+        filtered = [x for x in searchable
+                    if not q or q in x.get("_title", "").lower() or q in x.get("storeId", "").lower()]
+        if not filtered:
+            print("[!] No matches.")
+            return
+        print()
+        print(f"  {'#':>3}  {'ProductId':>12}  Title")
+        print("  " + "─" * 60)
+        for i, item in enumerate(filtered, 1):
+            print(f"  {i:>3}  {item.get('storeId',''):>12}  {item.get('_title','')[:45]}")
+        print()
+        sel = input("  Pick game number: ").strip()
+        try:
+            idx = int(sel) - 1
+            chosen = filtered[idx]
+        except (ValueError, IndexError):
+            print("[!] Invalid selection.")
+            return
+        value = chosen["storeId"]
+        input_type = "ProductId"
+        print(f"  → ProductId: {value}")
+    elif choice in type_map:
+        input_type = type_map[choice]
+        value = input(f"  Enter {input_type}: ").strip()
+        if not value:
+            return
+    else:
+        return
+
+    print()
+    ring_in = input("  Ring [RP/Retail/Fast/Slow, Enter=RP]: ").strip() or "RP"
+    ring = ring_in if ring_in in ("RP", "Retail", "Fast", "Slow") else "RP"
+    print()
+    print(f"[*] Querying rg-adguard ({input_type}={value}, ring={ring}) ...")
+
+    try:
+        links = _rg_adguard_get_links(value, input_type=input_type, ring=ring)
+    except RuntimeError as e:
+        print(f"[!] {e}")
+        return
+
+    if not links:
+        print("[!] No packages found. Try a different ring or input type.")
+        return
+
+    print(f"\n  {len(links)} package(s) found:\n")
+    print(f"  {'#':>3}  {'Size':>10}  {'Expires':>12}  Filename")
+    print("  " + "─" * 100)
+    for i, lnk in enumerate(links, 1):
+        exp = lnk["expiry"][:10] if lnk["expiry"] else "—"
+        expired = lnk["expiry"].startswith("1970") if lnk["expiry"] else False
+        exp_str = f"{exp} (expired)" if expired else exp
+        print(f"  {i:>3}  {lnk['size']:>10}  {exp_str:>20}  {lnk['filename']}")
+    print()
+
+    sel = input("  Which file(s) to download? [numbers / Enter=all / Q=skip]: ").strip()
+    if sel.upper() == "Q" or sel.upper() == "":
+        if sel.upper() == "Q":
+            return
+        targets = links
+    else:
+        targets = [links[i] for i in _parse_selection(sel, len(links))]
+    if not targets:
+        print("[!] Nothing selected.")
+        return
+
+    default_dest = os.path.join(SCRIPT_DIR, "store_downloads")
+    dest = input(f"  Destination folder [{default_dest}]: ").strip().strip('"').strip("'") or default_dest
+    os.makedirs(dest, exist_ok=True)
+    print()
+    for lnk in targets:
+        fname = lnk["filename"]
+        out_path = os.path.join(dest, fname)
+        print(f"  ▸ {fname}")
+        _download_with_progress(lnk["url"], out_path, 0)
+    print(f"\n[+] Done. Files in: {dest}")
+
+
 def process_cdn_version_discovery():
     """
     Discover older Xbox game package versions.
@@ -8580,6 +8746,21 @@ def process_cdn_version_discovery():
       [R] Refresh WU links — re-fetch download links for a previously-found WuCategoryId
     """
     print("\n[CDN / Version Discovery]")
+    print()
+    print("    [O] MS Store packages  — fetch download links via store.rg-adguard.net")
+    print("    [D] Download current packages — direct CDN download of installed game packages")
+    print("    [C] Compare snapshots  — diff two usb_db scans to find updated games + probe old URLs")
+    print("    [A] Xbox CDN sweep     — probe prior-version URLs from XVS data (fast, silent 404s)")
+    print("    [W] Windows Update Catalog — query update history via WuCategoryId (experimental)")
+    print("    [S] Select game        — verbose CDN probe for specific game(s)")
+    print("    [R] Refresh WU links   — re-fetch fresh download links by WuCategoryId")
+    print("    [Enter] Back")
+    print()
+    mode = input("  Choice: ").strip().upper()
+
+    if mode == "O":
+        process_rg_adguard()
+        return
 
     items = _cdn_load_items()
     if not items:
@@ -8590,15 +8771,6 @@ def process_cdn_version_discovery():
     has_pri = sum(1 for x in items if x.get("priorBuildVersion") and x.get("priorBuildId"))
     print(f"[*] {total} entries  |  {has_cdn} with CDN URL  |  {has_pri} with prior version data")
     print()
-    print("    [D] Download current packages — direct CDN download of installed game packages")
-    print("    [C] Compare snapshots  — diff two usb_db scans to find updated games + probe old URLs")
-    print("    [A] Xbox CDN sweep     — probe prior-version URLs from XVS data (fast, silent 404s)")
-    print("    [W] Windows Update Catalog — query update history via WuCategoryId (experimental)")
-    print("    [S] Select game        — verbose CDN probe for specific game(s)")
-    print("    [R] Refresh WU links   — re-fetch fresh download links by WuCategoryId")
-    print("    [Enter] Back")
-    print()
-    mode = input("  Choice: ").strip().upper()
 
     if mode == "C":
         process_cdn_snapshot_compare()
@@ -8845,12 +9017,13 @@ def interactive_menu():
         print("    [U] Scan USB drive (index Xbox external drive)")
         print("    [I] Save USB drive metadata to database (usb_db.json)")
         print("    [K] Discover older CDN versions (probe prior versions from USB DB)")
+        print("    [O] MS Store Package Fetcher (store.rg-adguard.net)")
         print("    [J] Games for Windows Live (GFWL) Game and DLC Installer")
         print("    [V] Xbox Drive Converter (PC ↔ Xbox MBR mode)")
         print("    [Q] Quit")
         print()
 
-        pick = input(f"  Pick [0, E, T, S, G, M, L, P, N, C, F, W, Z, H, Y, A, R, D, *, X, B, U, I, K, J, V, Q]: ").strip()
+        pick = input(f"  Pick [0, E, T, S, M, L, P, N, C, F, W, Z, H, Y, A, R, D, *, X, B, U, I, K, O, G, J, V, Q]: ").strip()
         pu = pick.upper()
 
         if pu == "Q":
@@ -9198,6 +9371,9 @@ def interactive_menu():
             continue
         elif pu == "K":
             process_cdn_version_discovery()
+            continue
+        elif pu == "O":
+            process_rg_adguard()
             continue
         elif pu == "J":
             process_gfwl_download()

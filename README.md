@@ -1,8 +1,12 @@
 # Xbox Collection Tracker (XCT)
 
-**v1.4.2**
+**v1.5**
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
+
+## What's New in v1.5
+
+- **MS Store Package Fetcher `[O]`** — Fetches direct CDN download links for any Microsoft Store app or game (including delisted titles) via `store.rg-adguard.net`. Accepts ProductId, CategoryId (WuCategoryId), PackageFamilyName, or a store URL. Can also pick games from your USB drive library. Supports all rings (RP, Retail, Fast, Slow). Downloads `.appx`, `.appxbundle`, `.msix`, `.msixbundle` and `.BlockMap` files directly. Also accessible via `[O]` inside the `[K]` CDN discovery submenu.
 
 ## What's New in v1.4.2
 
