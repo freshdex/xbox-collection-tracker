@@ -25,9 +25,13 @@ python XCT.py --all              # Refresh all tokens + process all accounts
 python XCT.py add               # Add new account (device code flow)
 python XCT.py extract [file]    # Extract token from HAR file
 python XCT.py build             # Rebuild HTML from cached data (no network)
+python XCT.py preview           # Generate blank HTML only (UI testing, no account data)
+python XCT.py --no-update ...   # Skip GitHub update check (combine with any other arg)
 ```
 
 There are no tests or linting configured in this project.
+
+`debug.log` is written automatically on every run — it mirrors all stdout plus Python version, CWD, and args. First place to look for tracebacks.
 
 ## Architecture
 
@@ -84,6 +88,9 @@ tags.json               # Community game tags (delisted, indie, demo flags)
 requirements.txt        # Python deps (ecdsa, pip_system_certs)
 accounts.json           # Account registry: gamertag → {uhs} (auto-generated)
 exchange_rates.json     # Cached exchange rates (auto-generated)
+version.txt             # Current version string; checked against GitHub on startup
+endpoints.json          # API reference doc (not loaded by XCT.py, documentation only)
+debug.log               # Auto-written each run: stdout tee + Python/platform info
 accounts/
   XCT.html              # Combined HTML page (all accounts)
   data.js               # Combined library data (JS constants)
@@ -103,7 +110,7 @@ accounts/
 - **Global path state**: `set_account_paths(gamertag)` sets module-level path globals (`AUTH_TOKEN_FILE`, `ENTITLEMENTS_FILE`, etc.) to the current account's directory. Must be called before any per-account operations.
 - **HTTP helpers**: `api_request()` handles retries with exponential backoff on 429/5xx. `msa_request()` handles MSA auth calls. `_signed_request()` adds EC P-256 ProofOfPossession signatures.
 - **Caching**: All API responses cached as JSON with 1-hour TTL (`CACHE_MAX_AGE = 3600`). `is_cache_fresh()` checks file age.
-- **HTML output**: `build_html_template()` returns a large HTML string (~1300 lines of embedded HTML/CSS/JS). Data is loaded from a separate `data.js` file via `<script src>`.
+- **HTML output**: `build_html_template()` (line ~3022) returns a ~1300-line Python string containing all HTML, CSS, and JS — there are no separate template files. Data is loaded from a separate `data.js` file via `<script src>`. Edit the frontend entirely within this function.
 - **Community tags**: `tags.json` maps product IDs to flags (delisted/indie/demo). Loaded at startup into `DEFAULT_FLAGS` dict, embedded in `data.js` output.
 - **Interactive menu**: `interactive_menu()` is the main loop. Always entered after CLI arg processing (if any).
 
@@ -114,3 +121,4 @@ accounts/
 - `GP_COLLECTIONS` — Game Pass collection UUIDs → display names
 - `MARKETPLACE_CHANNELS` — DynamicChannel names → display labels
 - `PRICE_REGIONS` — Market codes → locale/currency/symbol info
+- `GITHUB_RAW_BASE` / `UPDATE_FILES` — Auto-update: checks `version.txt`, downloads `[XCT.py, xbox_auth.py, requirements.txt, tags.json]`

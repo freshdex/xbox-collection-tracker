@@ -57,7 +57,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "1.2"
+VERSION = "1.3"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -3194,6 +3194,7 @@ def build_html_template(gamertag=""):
         '.badge.trial{background:#3a2a1a;color:#ff9800}\n'
         '.badge.demo{background:#3a1a2a;color:#e91e63}\n'
         '.badge.flagged{background:#3a3a1a;color:#ffd54f}\n'
+        '.badge.usb{background:#1a1a3a;color:#90caf9}\n'
         '.hist-card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:14px;margin-bottom:8px;cursor:pointer;transition:border-color .2s}\n'
         '.hist-card:hover{border-color:#107c10}\n'
         '.hist-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}\n'
@@ -3389,6 +3390,11 @@ def build_html_template(gamertag=""):
         '<div class="cb-drop" id="mkt-type"><div class="cb-btn" onclick="toggleCB(this)">Type &#9662;</div><div class="cb-panel"></div></div>\n'
         '<div class="cb-drop" id="mkt-plat"><div class="cb-btn" onclick="toggleCB(this)">Platform &#9662;</div><div class="cb-panel"></div></div>\n'
         '<div class="cb-drop" id="mkt-pub"><div class="cb-btn" onclick="toggleCB(this)">Publisher &#9662;</div><div class="cb-panel"></div></div>\n'
+        '<select id="mkt-owned" onchange="mktPage=0;filterMKT()">'
+        '<option value="all">All</option>'
+        '<option value="owned">Owned</option>'
+        '<option value="notowned">Not Owned</option>'
+        '</select>\n'
         '<select id="mkt-sort" onchange="mktPage=0;filterMKT()"><option value="name">Sort: Name</option>'
         '<option value="priceDesc">Sort: Price (High-Low)</option>'
         '<option value="priceAsc">Sort: Price (Low-High)</option>'
@@ -3798,6 +3804,21 @@ def build_html_template(gamertag=""):
         '<div><span class="lbl">Game Pass:</span></div><div class="val">${item.onGamePass?\'Yes\':\'No\'}</div>\n'
         '<div><span class="lbl">Store:</span></div><div class="val"><a href="https://www.xbox.com/en-GB/games/store/p/${item.productId}" target="_blank">${item.productId}</a></div>\n'
         "</div>`;\n"
+        "const _usbR=typeof USB_DB!=='undefined'&&USB_DB?USB_DB[pid]:null;\n"
+        "if(_usbR){\n"
+        "let uh='<div class=\"modal-info\" style=\"margin-top:12px\"><div style=\"color:#90caf9;font-weight:600;margin-bottom:6px;border-bottom:1px solid #222;padding-bottom:4px\">&#9654; On USB Drive</div>';\n"
+        "if(_usbR.contentId)uh+=`<div><span class=\"lbl\">Content ID:</span></div><div class=\"val\" style=\"font-family:monospace;font-size:11px\">${_usbR.contentId}</div>`;\n"
+        "if(_usbR.buildVersion)uh+=`<div><span class=\"lbl\">Build Version:</span></div><div class=\"val\">${_usbR.buildVersion}</div>`;\n"
+        "if(_usbR.buildId)uh+=`<div><span class=\"lbl\">Build ID:</span></div><div class=\"val\" style=\"font-family:monospace;font-size:11px\">${_usbR.buildId}</div>`;\n"
+        "if(_usbR.platform)uh+=`<div><span class=\"lbl\">Platform:</span></div><div class=\"val\">${_usbR.platform}</div>`;\n"
+        "if(_usbR.sizeBytes)uh+=`<div><span class=\"lbl\">Size:</span></div><div class=\"val\">${(_usbR.sizeBytes/1e9).toFixed(2)} GB</div>`;\n"
+        "if(_usbR.contentTypes)uh+=`<div><span class=\"lbl\">Content Types:</span></div><div class=\"val\">${_usbR.contentTypes}</div>`;\n"
+        "if(_usbR.devices)uh+=`<div><span class=\"lbl\">Devices:</span></div><div class=\"val\">${_usbR.devices}</div>`;\n"
+        "if(_usbR.language)uh+=`<div><span class=\"lbl\">Language:</span></div><div class=\"val\">${_usbR.language}</div>`;\n"
+        "if(_usbR.planId)uh+=`<div><span class=\"lbl\">Plan ID:</span></div><div class=\"val\" style=\"font-family:monospace;font-size:11px\">${_usbR.planId}</div>`;\n"
+        "if(_usbR.cdnUrls&&_usbR.cdnUrls.length){_usbR.cdnUrls.forEach((u,i)=>{uh+=`<div><span class=\"lbl\">CDN ${i+1}:</span></div><div class=\"val\" style=\"word-break:break-all;font-size:10px\"><a href=\"${u}\" target=\"_blank\" style=\"color:#90caf9\">${u}</a></div>`})}\n"
+        "uh+='</div>';\n"
+        "document.getElementById('modal-body').innerHTML+=uh}\n"
         "document.getElementById('modal').classList.add('active')}\n"
         '\n'
 
@@ -3816,7 +3837,8 @@ def build_html_template(gamertag=""):
         "return LIB.filter(item=>{"
         "if(gtVals&&!gtVals.includes(item.gamertag||''))return false;"
         "if(sVals&&!sVals.includes(item.status))return false;"
-        "if(tVals){const realTypes=tVals.filter(v=>v[0]!=='_');"
+        "if(tVals){if(!tVals.length)return false;"
+        "const realTypes=tVals.filter(v=>v[0]!=='_');"
         "const showPO=tVals.includes('_preorder'),showTD=tVals.includes('_trials'),showInv=tVals.includes('_invalid'),showInd=tVals.includes('_indie');"
         "const flagged0=manualFlags[item.productId];"
         "const isTD0=item.isTrial||item.isDemo||flagged0==='beta';"
@@ -3827,7 +3849,7 @@ def build_html_template(gamertag=""):
         "if(isTD0&&!showTD)return false;"
         "if(isInv0&&!showInv)return false;"
         "if(isInd0&&!showInd)return false;"
-        "if(!isPO0&&!isTD0&&!isInv0&&!isInd0&&realTypes.length&&!realTypes.includes(item.productKind))return false;}"
+        "if(!isPO0&&!isTD0&&!isInv0&&!isInd0&&(!realTypes.length||!realTypes.includes(item.productKind)))return false;}"
         "return true})}\n"
         # -- filterLib --
         'function filterLib(){\n'
@@ -3977,6 +3999,7 @@ def build_html_template(gamertag=""):
         ":fl==='indie'?'<span class=\"badge\" style=\"font-size:9px;margin-left:3px;background:#1a2a3a;color:#64b5f6\">INDIE</span>':'';"
         "const iv2=item.catalogInvalid?'<span class=\"badge\" style=\"font-size:9px;margin-left:3px;background:#3a1a1a;color:#f44336\">INVALID</span>':'';"
         "const dlcBadge=dlcCount>0?`<span class=\"dlc-count\">${dlcCount} DLC</span>`:'';"
+        "const usbBadge2=(typeof USB_DB!=='undefined'&&USB_DB&&USB_DB[item.productId])?'<span class=\"badge usb\" style=\"font-size:9px;margin-left:4px\">USB</span>':'';"
         "const st=(item.title||'').replace(/'/g,\"\\\\\\'\" ).replace(/\"/g,'&quot;');"
         "const aGTs=item._allGTs||[item.gamertag||''];"
         "const gtE=aGTs.length>1?`<span class=\"gt-plus\" onclick=\"event.stopPropagation();showGTList(this,['`+aGTs.map(g=>g.replace(/'/g,\"\\\\'\")).join(`','`)+`'])\" title=\"${aGTs.length} gamertags\">+${aGTs.length-1}</span>`:'';"
@@ -3986,7 +4009,7 @@ def build_html_template(gamertag=""):
         "const plS=(item.platforms||[]).join(', ')||'';"
         "return `<div class=\"lv-row ${extraCls}\" onclick=\"showLibDetail('${item.productId}')\" oncontextmenu=\"showFlagMenu(event,'${item.productId}','${st}')\">"
         "${imgHtml}<div class=\"lv-title\" title=\"${(item.title||'').replace(/\"/g,'&quot;')}\">"
-        "${item.title||item.productId}${po2}${gp2}${tr2}${fl2}${iv2}${dlcBadge}</div>"
+        "${item.title||item.productId}${po2}${gp2}${tr2}${fl2}${iv2}${dlcBadge}${usbBadge2}</div>"
         "<div class=\"lv-type\" style=\"color:#aaa\">${item.gamertag||''}${gtE}</div>"
         "<div class=\"lv-pub\">${item.publisher||''}</div>"
         "<div class=\"lv-pub\">${item.developer||''}</div>"
@@ -4020,6 +4043,7 @@ def build_html_template(gamertag=""):
         ":flagged==='hardDelisted'?'<span class=\"badge\" style=\"font-size:9px;margin-left:4px;background:#3a1a1a;color:#f44336\">HARD DELISTED</span>'"
         ":flagged==='indie'?'<span class=\"badge\" style=\"font-size:9px;margin-left:4px;background:#1a2a3a;color:#64b5f6\">INDIE</span>':'';\n"
         "const invBadge=item.catalogInvalid?'<span class=\"badge\" style=\"font-size:9px;margin-left:4px;background:#3a1a1a;color:#f44336\">INVALID</span>':'';\n"
+        "const usbBadge=(typeof USB_DB!=='undefined'&&USB_DB&&USB_DB[item.productId])?'<span class=\"badge usb\" style=\"font-size:9px;margin-left:4px\">USB</span>':'';\n"
         "const safeTitle=(item.title||'').replace(/'/g,\"\\\\\\'\" ).replace(/\"/g,'&quot;');\n"
         "const allGTs=item._allGTs||[item.gamertag||''];\n"
         "const gtExtra=allGTs.length>1?`<span class=\"gt-plus\" onclick=\"event.stopPropagation();showGTList(this,['`+allGTs.map(g=>g.replace(/'/g,\"\\\\'\")).join(`','`)+`'])\" title=\"${allGTs.length} gamertags\">+${allGTs.length-1}</span>`:'';\n"
@@ -4027,7 +4051,7 @@ def build_html_template(gamertag=""):
         # Grid view: always flat, render every item
         'gh+=`<div class="lib-card" onclick="showLibDetail(\'${item.productId}\')" oncontextmenu="showFlagMenu(event,\'${item.productId}\',\'${safeTitle}\')">'
         '${img}<div class="info"><div class="ln" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">'
-        '${item.title||item.productId}${poBadge}${gpBadge}${trBadge}${flBadge}${invBadge}</div>'
+        '${item.title||item.productId}${poBadge}${gpBadge}${trBadge}${flBadge}${invBadge}${usbBadge}</div>'
         '<div class="lm">${item.publisher||\'\'} | ${item.productKind||\'\'} | ${item.category||\'\'} | '
         '<span class="${sc}">${item.status||\'\'}</span>${gtExtra}</div>${pr}</div></div>`;\n'
 
@@ -4168,6 +4192,7 @@ def build_html_template(gamertag=""):
         "const tVals=getCBVals('mkt-type');\n"
         "const platVals=getCBVals('mkt-plat');\n"
         "const pubVals=getCBVals('mkt-pub');\n"
+        "const ownF=document.getElementById('mkt-owned').value;\n"
         "const so=document.getElementById('mkt-sort').value;\n"
 
 
@@ -4179,6 +4204,8 @@ def build_html_template(gamertag=""):
         "if(tVals){const tk=item.productKind==='Durable'?'DLC':item.productKind;if(!tVals.includes(tk))return false}\n"
         "if(platVals&&!(item.platforms||[]).some(p=>platVals.includes(p)))return false;\n"
         "if(pubVals&&!pubVals.includes(item.publisher||''))return false;\n"
+        "if(ownF==='owned'&&!item.owned)return false;\n"
+        "if(ownF==='notowned'&&item.owned)return false;\n"
 
 
         'return true});\n'
@@ -4457,6 +4484,15 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
         except Exception:
             pass
 
+    # Load USB drive database if available
+    usb_db = {}
+    usb_db_file = os.path.join(SCRIPT_DIR, "usb_db.json")
+    if os.path.isfile(usb_db_file):
+        try:
+            usb_db = load_json(usb_db_file) or {}
+        except Exception:
+            pass
+
     content = (
         "const LIB=" + json.dumps(library, ensure_ascii=False) + ";\n"
         "const GP=" + json.dumps(gp_items, ensure_ascii=False) + ";\n"
@@ -4467,6 +4503,7 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
         "const ACCOUNTS=" + json.dumps(accounts_meta, ensure_ascii=False) + ";\n"
         "const RATES=" + json.dumps(rates, ensure_ascii=False) + ";\n"
         "const GC_FACTOR=" + str(GC_FACTOR) + ";\n"
+        "const USB_DB=" + json.dumps(usb_db, ensure_ascii=False) + ";\n"
     )
     with open(data_js_path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -6700,6 +6737,1645 @@ def process_contentaccess_only(gamertag):
 
 
 # ===========================================================================
+# Xbox Drive Converter
+# Ports the logic from XboxOneStorageConverter (C#) to Python.
+# Xbox external drives use a custom MBR signature at offset 0x1FE:
+#   Xbox mode: 0x99 0xCC  — unreadable by Windows, usable by Xbox
+#   PC mode:   0x55 0xAA  — with first 0x1B8 bytes zeroed (no partition table)
+# Changing mode requires writing those two bytes; needs Administrator on Windows.
+# Refresh Disks = diskpart rescan (same as Disk Management > Action > Rescan Disks).
+# ===========================================================================
+
+_XDC_MBR_SIZE       = 512
+_XDC_SIG_OFFSET     = 0x1FE
+_XDC_XBOX_SIG       = bytes([0x99, 0xCC])
+_XDC_PC_SIG         = bytes([0x55, 0xAA])
+
+
+def _xdc_list_physical_drives():
+    """List physical drives via PowerShell WMI. Returns list of (deviceId, caption)."""
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-WmiObject Win32_DiskDrive | ForEach-Object { $_.DeviceID + '|' + $_.Caption }"],
+            capture_output=True, text=True, timeout=15)
+        drives = []
+        for line in r.stdout.strip().splitlines():
+            line = line.strip()
+            if '|' in line:
+                dev, _, cap = line.partition('|')
+                drives.append((dev.strip(), cap.strip()))
+        return drives
+    except Exception as e:
+        print(f"[!] Drive enumeration failed: {e}")
+        return []
+
+
+def _xdc_read_mbr(device_id):
+    """Open a physical drive and read its 512-byte MBR. Returns bytes or None."""
+    import ctypes
+    handle = ctypes.windll.kernel32.CreateFileW(
+        device_id,
+        0x80000000,        # GENERIC_READ
+        0x00000001,        # FILE_SHARE_READ
+        None, 3, 0, None)  # OPEN_EXISTING
+    if handle in (-1, 0):
+        return None
+    try:
+        buf = ctypes.create_string_buffer(_XDC_MBR_SIZE)
+        n   = ctypes.c_ulong(0)
+        ctypes.windll.kernel32.ReadFile(handle, buf, _XDC_MBR_SIZE, ctypes.byref(n), None)
+        return bytes(buf.raw)
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)
+
+
+def _xdc_write_mbr(device_id, mbr_data):
+    """Open a physical drive exclusively and write 512-byte MBR. Returns (ok, errmsg)."""
+    import ctypes
+    handle = ctypes.windll.kernel32.CreateFileW(
+        device_id,
+        0x80000000 | 0x40000000,  # GENERIC_READ | GENERIC_WRITE
+        0,                         # exclusive (no sharing)
+        None, 3, 0, None)
+    if handle in (-1, 0):
+        err = ctypes.windll.kernel32.GetLastError()
+        if err == 5:
+            return False, "Access denied — run XCT as Administrator."
+        return False, f"Could not open drive (Windows error {err})."
+    try:
+        ctypes.windll.kernel32.SetFilePointer(handle, 0, None, 0)
+        n = ctypes.c_ulong(0)
+        ok = ctypes.windll.kernel32.WriteFile(handle, bytes(mbr_data), _XDC_MBR_SIZE, ctypes.byref(n), None)
+        if not ok:
+            err = ctypes.windll.kernel32.GetLastError()
+            return False, f"Write failed (Windows error {err})."
+        return True, "OK"
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)
+
+
+def _xdc_scan_xbox_drives():
+    """
+    Enumerate all physical drives and identify Xbox external storage by MBR signature.
+    Returns list of dicts: {deviceId, caption, mode}  (mode: 'Xbox Mode' | 'PC Mode').
+    """
+    found = []
+    for device_id, caption in _xdc_list_physical_drives():
+        mbr = _xdc_read_mbr(device_id)
+        if mbr is None:
+            continue
+        sig = mbr[_XDC_SIG_OFFSET:_XDC_SIG_OFFSET + 2]
+        if sig == _XDC_XBOX_SIG:
+            found.append({"deviceId": device_id, "caption": caption, "mode": "Xbox Mode"})
+        elif sig == _XDC_PC_SIG and all(b == 0 for b in mbr[:0x1B8]):
+            # PC signature but zeroed partition table = Xbox drive switched to PC mode
+            found.append({"deviceId": device_id, "caption": caption, "mode": "PC Mode"})
+    return found
+
+
+def _xdc_change_mode(device_id, to_xbox):
+    """
+    Rewrite the MBR signature to Xbox (0x99,0xCC) or PC (0x55,0xAA).
+    Returns (success, message).  Requires Administrator.
+    """
+    mbr = _xdc_read_mbr(device_id)
+    if mbr is None:
+        return False, "Could not read MBR — check permissions."
+    mbr = bytearray(mbr)
+    target_sig = _XDC_XBOX_SIG if to_xbox else _XDC_PC_SIG
+    current_sig = bytes(mbr[_XDC_SIG_OFFSET:_XDC_SIG_OFFSET + 2])
+    if current_sig == target_sig:
+        return True, f"Drive is already in {'Xbox' if to_xbox else 'PC'} mode."
+    mbr[_XDC_SIG_OFFSET]     = target_sig[0]
+    mbr[_XDC_SIG_OFFSET + 1] = target_sig[1]
+    return _xdc_write_mbr(device_id, mbr)
+
+
+def _xdc_rescan():
+    """
+    Run 'diskpart rescan' — equivalent of Disk Management > Action > Rescan Disks.
+    Forces Windows to re-detect all storage devices. Returns (ok, output).
+    """
+    import tempfile
+    try:
+        tf = tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False)
+        tf.write("rescan\nexit\n")
+        tf_name = tf.name
+        tf.close()
+        r = subprocess.run(["diskpart", "/s", tf_name],
+                           capture_output=True, text=True, timeout=30)
+        os.unlink(tf_name)
+        return r.returncode == 0, r.stdout.strip()
+    except Exception as e:
+        return False, str(e)
+
+
+def _xdc_pick_drive(drives, prompt):
+    """Show drive list and return chosen drive dict, or None on cancel."""
+    print()
+    print(f"  {'#':>2}  {'Caption':<38}  {'Mode':<12}  Device")
+    print("  " + "─" * 75)
+    for i, d in enumerate(drives, 1):
+        print(f"  {i:>2}  {d['caption']:<38}  {d['mode']:<12}  {d['deviceId']}")
+    print()
+    if len(drives) == 1:
+        return drives[0]
+    sel = input(f"  {prompt} [1-{len(drives)}]: ").strip()
+    try:
+        idx = int(sel) - 1
+        if 0 <= idx < len(drives):
+            return drives[idx]
+    except ValueError:
+        pass
+    print("  Invalid selection.")
+    return None
+
+
+def process_drive_converter():
+    """Interactive Xbox drive mode converter (PC ↔ Xbox MBR signature)."""
+    import ctypes as _ct
+    try:
+        is_admin = bool(_ct.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        is_admin = False
+
+    print("\n[Xbox Drive Converter]")
+    if not is_admin:
+        print("  [!] Not running as Administrator — convert operations will fail.")
+        print("      Right-click Command Prompt > Run as Administrator, then relaunch XCT.")
+    print()
+    print("    [1] Convert to PC mode   (makes drive visible to Windows/Explorer)")
+    print("    [2] Refresh Disks        (rescan hardware — like Disk Management > Rescan Disks)")
+    print("    [3] Convert to Xbox mode (makes drive usable by Xbox)")
+    print("    [Enter] Back")
+    print()
+    choice = input("  Choice: ").strip()
+
+    if choice == "2":
+        print("[*] Rescanning disks...")
+        ok, out = _xdc_rescan()
+        if ok:
+            print("[+] Rescan complete. Windows has re-detected all storage devices.")
+        else:
+            print(f"[!] Rescan failed: {out}")
+        return
+
+    if choice not in ("1", "3"):
+        return
+
+    to_xbox      = (choice == "3")
+    action_label = "Xbox mode" if to_xbox else "PC mode"
+
+    print(f"[*] Scanning for Xbox external storage devices...")
+    drives = _xdc_scan_xbox_drives()
+    if not drives:
+        print("[!] No Xbox external storage devices detected.")
+        print("    Plug in the drive, then use [2] Refresh Disks and try again.")
+        return
+
+    drv = _xdc_pick_drive(drives, "Which drive?")
+    if drv is None:
+        return
+
+    if (to_xbox and drv["mode"] == "Xbox Mode") or (not to_xbox and drv["mode"] == "PC Mode"):
+        print(f"  Drive is already in {action_label}.")
+        return
+
+    print(f"\n  {drv['caption']}  ({drv['deviceId']})  →  {action_label}")
+    if to_xbox:
+        print("  WARNING: Drive will be inaccessible to Windows until converted back to PC mode.")
+    else:
+        print("  WARNING: You may need to assign a drive letter in Disk Management afterwards.")
+    print()
+    confirm = input("  Confirm? [y/N]: ").strip().lower()
+    if confirm != "y":
+        print("  Cancelled.")
+        return
+
+    ok, msg = _xdc_change_mode(drv["deviceId"], to_xbox)
+    if ok:
+        print(f"[+] Conversion successful — drive is now in {action_label}.")
+        if not to_xbox:
+            print("[*] Use Disk Management (diskmgmt.msc) to assign a drive letter if needed.")
+    else:
+        print(f"[!] Failed: {msg}")
+
+
+# ===========================================================================
+# USB Drive Scanner
+# ===========================================================================
+
+def scan_usb_drive(drive_letter="E"):
+    """
+    Scan an Xbox USB drive for installed game packages.
+    Reads .xvs (Xbox Virtual Signature) files which are UTF-16LE JSON containing
+    StoreId (Microsoft Store product ID) and package metadata.
+    Returns list of dicts: {contentId, storeId, packageName, buildVersion, platform, sizeBytes}.
+    """
+    drive_path = drive_letter.rstrip(":/\\") + ":/"
+    if not os.path.isdir(drive_path):
+        print(f"[!] Drive {drive_path!r} not found or not accessible.")
+        return []
+    try:
+        all_files = os.listdir(drive_path)
+    except Exception as e:
+        print(f"[!] Cannot list {drive_path}: {e}")
+        return []
+
+    xvs_files = [f for f in all_files if f.endswith('.xvs')]
+    if not xvs_files:
+        print(f"[!] No .xvs files found on {drive_path}. Is this an Xbox external drive?")
+        return []
+
+    print(f"[*] Scanning {drive_path}: {len(xvs_files)} package(s) found")
+    results = []
+    _XBL_PREFIX = "[XBL:]" + chr(92)  # "[XBL:]\"
+
+    def _clean_cdn_url(u):
+        """Strip [XBL:]\\ or [XBL:]/ prefix and strip ,sid=... session params."""
+        if u.startswith(_XBL_PREFIX):
+            u = u[len(_XBL_PREFIX):]
+        elif u.startswith("[XBL:]/"):
+            u = u[7:]
+        return u.split(",")[0]
+
+    for xvs_file in sorted(xvs_files):
+        content_id = xvs_file[:-4]
+        try:
+            raw = open(drive_path + xvs_file, 'rb').read()
+            obj = json.loads(raw.decode('utf-16-le'))
+            req = obj.get("Request", {})
+            store_id = req.get("StoreId", "")
+            sources = req.get("Sources", {})
+            pkg_name = ""
+            # Extract primary CDN URLs (main .xvc package, deduplicated by removing mirror dupes)
+            cdn_urls = []
+            fg_paths = sources.get("ForegroundCrdPaths", [])
+            for u in fg_paths:
+                clean = _clean_cdn_url(u)
+                if clean.startswith("http") and clean not in cdn_urls:
+                    cdn_urls.append(clean)
+                if not pkg_name:
+                    import re as _re
+                    m = _re.search(r'/([A-Za-z][^/]+?_[\d.]+_[^/]+\.xvc)', clean)
+                    if m:
+                        pkg_name = m.group(1).split('_')[0]
+            status = obj.get("Status", {})
+            source = status.get("Source", {})
+            current = source.get("Current", {})
+            prior = source.get("Prior", {})
+            build_version = current.get("BuildVersion", "")
+            build_id = current.get("BuildId", "")
+            platform = current.get("Platform", "")
+            total_bytes = status.get("Progress", {}).get("Package", {}).get("TotalBytes", 0)
+            fast_start = status.get("FastStartState", "")
+            specifiers = sources.get("Specifiers", {})
+            content_types = specifiers.get("ContentTypes", "")
+            devices = specifiers.get("Devices", "")
+            language = specifiers.get("Languages", "")
+            plan_id = specifiers.get("PlanId", "")
+            operation = specifiers.get("Operation", "")
+            results.append({
+                "contentId": content_id,
+                "storeId": store_id,
+                "packageName": pkg_name,
+                "buildVersion": build_version,
+                "buildId": build_id,
+                "platform": platform,
+                "sizeBytes": total_bytes,
+                "cdnUrls": cdn_urls,
+                "contentTypes": content_types,
+                "devices": devices,
+                "language": language,
+                "planId": plan_id,
+                "operation": operation,
+                "fastStartState": fast_start,
+                "priorBuildVersion": prior.get("BuildVersion", ""),
+                "priorBuildId": prior.get("BuildId", ""),
+            })
+        except Exception as e:
+            results.append({"contentId": content_id, "storeId": "", "packageName": "",
+                            "buildVersion": "", "platform": "", "sizeBytes": 0,
+                            "cdnUrls": [], "error": str(e)})
+    return results
+
+
+def build_usb_db(drive_letter="E"):
+    """
+    Scan all .xvs files on the drive and save full metadata to usb_db.json.
+    Keyed by storeId (Microsoft Store product ID = productId in the library).
+    Merges with any existing usb_db.json to accumulate data across scans.
+    Before overwriting, saves a timestamped snapshot so version diffs are possible.
+    """
+    items = scan_usb_drive(drive_letter)
+    if not items:
+        return
+    output_path = os.path.join(SCRIPT_DIR, "usb_db.json")
+    existing = {}
+    if os.path.isfile(output_path):
+        try:
+            existing = load_json(output_path) or {}
+        except Exception:
+            pass
+        # Auto-snapshot the previous state before overwriting
+        _usb_db_snapshot(existing)
+
+    updated = 0
+    for item in items:
+        sid = item.get("storeId")
+        if sid:
+            existing[sid] = item
+            updated += 1
+        elif item.get("contentId"):
+            existing["_content_" + item["contentId"]] = item
+            updated += 1
+    save_json(output_path, existing)
+    print(f"[+] USB database saved: {output_path} ({updated} entries)")
+    print(f"    Total entries in DB: {len(existing)}")
+    print(f"    Rebuild HTML (option B from main menu) to apply to XCT.html")
+
+
+def _usb_db_snapshot(db_dict):
+    """
+    Save a timestamped snapshot of usb_db to usb_db_snapshots/ directory.
+    Called automatically before each [I] rescan so we can diff before/after.
+    """
+    snap_dir = os.path.join(SCRIPT_DIR, "usb_db_snapshots")
+    os.makedirs(snap_dir, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    snap_path = os.path.join(snap_dir, f"usb_db_{ts}.json")
+    try:
+        save_json(snap_path, db_dict)
+        # Keep only the 10 most recent snapshots to avoid disk clutter
+        snaps = sorted(
+            [f for f in os.listdir(snap_dir) if f.startswith("usb_db_") and f.endswith(".json")],
+            reverse=True)
+        for old in snaps[10:]:
+            try:
+                os.remove(os.path.join(snap_dir, old))
+            except OSError:
+                pass
+        print(f"    [snapshot] {snap_path}")
+    except Exception as e:
+        pass  # Snapshot failure is non-fatal
+
+
+def _extract_plan_uuid(cdn_url, content_id):
+    """Extract the planUUID segment from a CDN URL using contentId as anchor."""
+    parsed = _cdn_parse(cdn_url, content_id)
+    if not parsed:
+        return None
+    # planUUID is one segment before contentId in the URL path
+    # URL: assets1.xboxlive.com/{shard}/{planUUID}/{contentId}/...
+    parts = parsed["parts"]
+    cid_lo = content_id.lower()
+    cid_idx = next((i for i, s in enumerate(parts) if s.lower() == cid_lo), None)
+    if cid_idx and cid_idx >= 2:
+        return parts[cid_idx - 1]   # planUUID
+    return None
+
+
+def _cdn_diff_snapshots(snap_old, snap_new):
+    """
+    Compare two usb_db dicts.  For each game where the CDN planUUID changed
+    (i.e. the game was updated), construct the prior-version URL using:
+      - OLD planUUID   (from snap_old cdnUrls)
+      - priorBuildId   (from snap_new — the new XVS knows its immediate predecessor)
+      - priorBuildVersion (from snap_new)
+      - contentId      (stable)
+    Returns list of dicts with probe results.
+    """
+    found = []
+    for sid, new_item in snap_new.items():
+        if sid.startswith("_content_"):
+            continue
+        old_item = snap_old.get(sid)
+        if not old_item:
+            continue
+
+        old_urls = old_item.get("cdnUrls", [])
+        new_urls = new_item.get("cdnUrls", [])
+        if not old_urls or not new_urls:
+            continue
+
+        content_id = new_item.get("contentId") or old_item.get("contentId")
+        if not content_id:
+            continue
+
+        old_plan = _extract_plan_uuid(old_urls[0], content_id)
+        new_plan = _extract_plan_uuid(new_urls[0], content_id)
+
+        if not old_plan or not new_plan or old_plan == new_plan:
+            continue  # planUUID unchanged — no update detected
+
+        # Game was updated — planUUID changed!
+        prior_ver_hex = new_item.get("priorBuildVersion", "")
+        prior_bid     = new_item.get("priorBuildId", "")
+        old_build_ver = old_item.get("buildVersion", "")
+        old_build_id  = old_item.get("buildId", "")
+
+        if not prior_bid:
+            continue
+
+        # Verify: prior build in new XVS should match what was current before
+        # (priorBuildId == old buildId confirms we're looking at the right transition)
+        version_match = (prior_bid.lower() == old_build_id.lower()) if old_build_id else "unknown"
+
+        # Construct the prior URL: old planUUID + contentId + prior version segment + old filename
+        old_parsed = _cdn_parse(old_urls[0], content_id)
+        if not old_parsed:
+            continue
+
+        prior_human = _xbox_ver_decode(prior_ver_hex) if prior_ver_hex else ""
+        if not prior_human:
+            continue
+
+        prior_seg = f"{prior_human}.{prior_bid}"
+
+        # Build the URL using the OLD planUUID (from old_parsed["content_root"])
+        # but with the prior version segment replacing the current version
+        # old_parsed["content_root"] = scheme://host/shard/planUUID/contentId
+        # We need: scheme://host/shard/OLD_planUUID/contentId/PRIOR_seg/PRIOR_pkg
+        old_pkg  = old_parsed["pkg_name"]
+        new_ver  = _xbox_ver_decode(new_item.get("buildVersion", ""))
+        prior_pkg = old_pkg.replace(new_ver, prior_human, 1) if new_ver and new_ver in old_pkg else old_pkg
+
+        # Rebuild with new planUUID path replaced by old planUUID path
+        parts = list(old_parsed["parts"])
+        parts[old_parsed["ver_idx"]] = prior_seg
+        parts[old_parsed["pkg_idx"]] = prior_pkg
+        candidate_url = old_parsed["scheme_host"] + "/" + "/".join(parts)
+
+        found.append({
+            "storeId":      sid,
+            "contentId":    content_id,
+            "old_plan":     old_plan,
+            "new_plan":     new_plan,
+            "prior_human":  prior_human,
+            "prior_bid":    prior_bid,
+            "version_match": version_match,
+            "url":          candidate_url,
+        })
+    return found
+
+
+def process_cdn_snapshot_compare():
+    """
+    Compare two usb_db snapshots to find games that updated (planUUID changed),
+    then probe the old-planUUID URL for the prior version.
+    """
+    snap_dir = os.path.join(SCRIPT_DIR, "usb_db_snapshots")
+    current_path = os.path.join(SCRIPT_DIR, "usb_db.json")
+
+    print("\n[USB DB Snapshot Compare — find updated games]")
+
+    # List available snapshots
+    snaps = []
+    if os.path.isdir(snap_dir):
+        snaps = sorted(
+            [f for f in os.listdir(snap_dir) if f.startswith("usb_db_") and f.endswith(".json")],
+            reverse=True)
+
+    if not snaps:
+        print("[!] No snapshots found. Snapshots are auto-saved by [I] before each rescan.")
+        print(f"    Expected location: {snap_dir}")
+        return
+
+    print(f"\n  Available snapshots ({len(snaps)}):")
+    for i, s in enumerate(snaps, 1):
+        ts = s.replace("usb_db_", "").replace(".json", "")
+        ts_fmt = f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]} {ts[9:11]}:{ts[11:13]}:{ts[13:15]}" if len(ts) >= 15 else ts
+        print(f"    [{i}] {ts_fmt}  ({s})")
+    print(f"    [C] Use current usb_db.json as 'new'")
+    print()
+    old_pick = input("  Use which snapshot as BEFORE (old)? [number]: ").strip()
+    try:
+        old_idx = int(old_pick) - 1
+        if not (0 <= old_idx < len(snaps)):
+            raise ValueError
+        old_path = os.path.join(snap_dir, snaps[old_idx])
+    except (ValueError, IndexError):
+        print("[!] Invalid selection.")
+        return
+
+    new_pick = input("  Use which as AFTER (new)? [number or C for current]: ").strip().upper()
+    if new_pick == "C":
+        new_path = current_path
+    else:
+        try:
+            new_idx = int(new_pick) - 1
+            new_path = os.path.join(snap_dir, snaps[new_idx])
+        except (ValueError, IndexError):
+            print("[!] Invalid selection.")
+            return
+
+    print(f"\n  OLD: {os.path.basename(old_path)}")
+    print(f"  NEW: {os.path.basename(new_path)}")
+    print()
+
+    snap_old = load_json(old_path) or {}
+    snap_new = load_json(new_path) or {}
+
+    print(f"[*] Comparing {len(snap_old)} old vs {len(snap_new)} new entries ...")
+    candidates = _cdn_diff_snapshots(snap_old, snap_new)
+
+    if not candidates:
+        print("  No planUUID changes detected — no game updates found between these snapshots.")
+        print("  (If a game updated but planUUID stayed the same, prior URL probing won't help.)")
+        return
+
+    catalog_map = _build_catalog_map()
+    print(f"\n  {len(candidates)} updated game(s) found (planUUID changed):\n")
+    print(f"  {'#':>3}  {'Match':^5}  Title")
+    print("  " + "─" * 60)
+    for i, c in enumerate(candidates, 1):
+        sid   = c["storeId"]
+        title = catalog_map.get(sid, {}).get("title", sid)
+        match = "✓" if c["version_match"] is True else ("?" if c["version_match"] == "unknown" else "✗")
+        print(f"  {i:>3}  {match:^5}  {title[:50]}")
+        print(f"          old plan: {c['old_plan']}")
+        print(f"          new plan: {c['new_plan']}")
+        print(f"          prior v:  {c['prior_human']}.{c['prior_bid']}")
+
+    print()
+    ans = input("  Probe CDN for all prior-version URLs? [Y/n]: ").strip().lower()
+    if ans == "n":
+        return
+
+    all_found = []
+    for i, c in enumerate(candidates, 1):
+        sid   = c["storeId"]
+        title = catalog_map.get(sid, {}).get("title", sid)
+        url   = c["url"]
+        print(f"\r  [{i:>2}/{len(candidates)}] {title[:50]:<50}  ", end="", flush=True)
+        result = _cdn_head(url)
+        if result is True:
+            print(f"✓ FOUND!")
+            print(f"    {url}")
+            all_found.append({"title": title, "storeId": sid, "url": url,
+                              "prior_human": c["prior_human"], "exists": True, "body": None})
+        elif result is False:
+            print("404")
+        else:
+            print("ERR")
+
+    print()
+    if all_found:
+        out = os.path.join(SCRIPT_DIR, "cdn_older_versions.json")
+        save_json(out, all_found)
+        print(f"[+] Saved: {out}")
+        ans2 = input(f"  Download {len(all_found)} prior-version package(s)? [y/N]: ").strip().lower()
+        if ans2 == "y":
+            dest = input("  Destination folder: ").strip().strip('"').strip("'")
+            if dest:
+                os.makedirs(dest, exist_ok=True)
+                for f in all_found:
+                    fname = f["url"].rsplit("/", 1)[-1]
+                    _download_with_progress(f["url"], os.path.join(dest, fname), 0)
+    else:
+        print("  All prior-version URLs returned 404.")
+        print("  → If planUUID also stays constant, the packages may be at the same path.")
+        print("    Check the [A] CDN sweep option — it may now find them.")
+
+
+def _build_catalog_map():
+    """Build a productId → metadata dict from all cached library and marketplace data."""
+    catalog_map = {}
+    accounts = load_accounts()
+    for gamertag in accounts:
+        for fname in ("library.json", "marketplace.json"):
+            fpath = account_path(gamertag, fname)
+            if not os.path.isfile(fpath):
+                continue
+            items = load_json(fpath) or []
+            for item in items:
+                pid = item.get("productId", "")
+                if pid and pid not in catalog_map:
+                    catalog_map[pid] = {
+                        "title": item.get("title", ""),
+                        "publisher": item.get("publisher", ""),
+                        "platforms": item.get("platforms", []),
+                        "image": item.get("boxArt") or item.get("heroImage") or item.get("image") or "",
+                        "productKind": item.get("productKind", ""),
+                    }
+    return catalog_map
+
+
+def process_usb_drive():
+    """Scan an Xbox USB drive and print/save an indexed game list."""
+    print("\n[USB Drive Scanner]")
+    drive_letter = input("  Drive letter (default: E): ").strip() or "E"
+    drive_letter = drive_letter.rstrip(":/\\").upper()
+
+    usb_items = scan_usb_drive(drive_letter)
+    if not usb_items:
+        return
+
+    print("[*] Matching against local catalog data...")
+    catalog_map = _build_catalog_map()
+
+    enriched = []
+    for item in usb_items:
+        store_id = item.get("storeId", "")
+        meta = catalog_map.get(store_id, {})
+        title = meta.get("title", "")
+        if not title:
+            # Fall back to package name: strip publisher prefix (e.g. "JustForGamesSAS.How2Escape")
+            pkg = item.get("packageName", "")
+            parts = pkg.split(".", 1)
+            title = parts[1] if len(parts) > 1 else (pkg or store_id or item["contentId"])
+        enriched.append({
+            **item,
+            "title": title,
+            "publisher": meta.get("publisher", ""),
+            "platforms": meta.get("platforms", []),
+            "image": meta.get("image", ""),
+            "productKind": meta.get("productKind", ""),
+            "inLibrary": bool(meta),
+        })
+
+    enriched.sort(key=lambda x: x.get("title", "").lower())
+
+    matched = sum(1 for x in enriched if x.get("inLibrary"))
+    total_gb = sum(x.get("sizeBytes", 0) for x in enriched) / 1e9
+
+    print()
+    w = 44
+    print(f"{'#':>4}  {'Title':<{w}} {'StoreId':<14} {'Size':>7}  {'Status'}")
+    print("─" * (4 + 2 + w + 1 + 14 + 1 + 7 + 2 + 10))
+    for i, item in enumerate(enriched, 1):
+        title = item.get("title", "")[:w]
+        sid = item.get("storeId", "") or "?"
+        gb = f"{item.get('sizeBytes', 0) / 1e9:.2f} GB" if item.get("sizeBytes") else "    ?"
+        status = "in library" if item.get("inLibrary") else ("no match" if item.get("storeId") else "no xvs data")
+        print(f"{i:>4}  {title:<{w}} {sid:<14} {gb:>7}  {status}")
+    print("─" * (4 + 2 + w + 1 + 14 + 1 + 7 + 2 + 10))
+    print(f"  {len(enriched)} packages | {matched} matched to library | {total_gb:.1f} GB total")
+
+    index_file = os.path.join(SCRIPT_DIR, "usb_index.json")
+    save_json(index_file, enriched)
+    print(f"[+] Index saved: {index_file}")
+
+    # Action menu
+    print()
+    print("  What next?")
+    print("    [B] Backup files from drive to folder")
+    print("    [D] Download from Xbox CDN")
+    print("    [Enter] Nothing")
+    print()
+    action = input("  Choice: ").strip().upper()
+
+    if action in ("B", "D"):
+        dest = input("  Destination folder path: ").strip().strip('"').strip("'")
+        if not dest:
+            print("  No destination specified.")
+            return
+        sel = input("  Which games? [all / numbers e.g. 1 3 5-8]: ").strip().lower()
+        if not sel or sel == "all":
+            indices = None
+        else:
+            indices = []
+            for tok in sel.split():
+                if "-" in tok:
+                    try:
+                        a, b = tok.split("-", 1)
+                        indices.extend(range(int(a) - 1, int(b)))
+                    except ValueError:
+                        pass
+                else:
+                    try:
+                        indices.append(int(tok) - 1)
+                    except ValueError:
+                        pass
+        if action == "B":
+            backup_usb_games(enriched, drive_letter + ":/", dest, indices)
+        else:
+            download_from_cdn(enriched, dest, indices)
+
+
+def _copy_with_progress(src, dst, label=""):
+    """Copy src to dst in chunks, printing a progress bar. Returns bytes copied."""
+    CHUNK = 8 * 1024 * 1024  # 8 MB
+    size = os.path.getsize(src)
+    copied = 0
+    with open(src, "rb") as fsrc, open(dst, "wb") as fdst:
+        while True:
+            buf = fsrc.read(CHUNK)
+            if not buf:
+                break
+            fdst.write(buf)
+            copied += len(buf)
+            pct = copied * 100 // size if size else 100
+            filled = 30 * copied // size if size else 30
+            bar = "#" * filled + "-" * (30 - filled)
+            lbl = label[:38] if len(label) <= 38 else label[:36] + ".."
+            print(f"\r    [{bar}] {pct:3d}%  {copied/1073741824:.2f}/{size/1073741824:.2f} GB  {lbl:<38}",
+                  end="", flush=True)
+    print()
+    try:
+        import shutil as _sh
+        _sh.copystat(src, dst)
+    except Exception:
+        pass
+    return copied
+
+
+def backup_usb_games(enriched, drive_path, dest_path, indices=None):
+    """
+    Copy Xbox game packages from drive_path to dest_path.
+    Each game consists of a main XVD file (no extension) plus .xct/.xvi/.xvs companions.
+    Skips files that already exist at the destination with the same size.
+    """
+    import shutil
+
+    to_copy = [enriched[i] for i in indices if 0 <= i < len(enriched)] if indices is not None else enriched
+    if not to_copy:
+        print("[!] Nothing selected to backup.")
+        return
+
+    total_bytes = sum(item.get("sizeBytes", 0) for item in to_copy)
+    print(f"\n[*] Backing up {len(to_copy)} package(s) — approx {total_bytes / 1e9:.1f} GB")
+
+    # Check destination free space
+    try:
+        os.makedirs(dest_path, exist_ok=True)
+        free = shutil.disk_usage(dest_path).free
+        if total_bytes > 0 and free < total_bytes:
+            print(f"[!] Warning: destination has {free/1e9:.1f} GB free but ~{total_bytes/1e9:.1f} GB needed")
+            ans = input("    Continue anyway? [y/N]: ").strip().lower()
+            if ans != "y":
+                print("    Cancelled.")
+                return
+    except Exception as e:
+        print(f"[!] Could not check destination: {e}")
+        return
+
+    COMPANIONS = ["", ".xct", ".xvi", ".xvs"]
+    total_copied = 0
+    total_skipped = 0
+    errors = 0
+
+    for n, item in enumerate(to_copy, 1):
+        cid = item["contentId"]
+        title = item.get("title", cid)
+        sid = item.get("storeId", "")
+        print(f"\n  [{n}/{len(to_copy)}] {title[:60]}")
+        if sid:
+            print(f"    StoreId: {sid}   ContentId: {cid}")
+
+        for ext in COMPANIONS:
+            src = os.path.join(drive_path, cid + ext)
+            dst = os.path.join(dest_path, cid + ext)
+
+            if not os.path.exists(src):
+                continue
+
+            src_size = os.path.getsize(src)
+
+            if os.path.exists(dst) and os.path.getsize(dst) == src_size:
+                print(f"    {cid + ext:<55}  already exists, skipping")
+                total_skipped += 1
+                continue
+
+            try:
+                if not ext:
+                    # Large main XVD — copy with progress bar
+                    total_copied += _copy_with_progress(src, dst, cid + ext)
+                else:
+                    # Small companion file — quick copy
+                    shutil.copy2(src, dst)
+                    print(f"    {cid + ext:<55}  {src_size / 1024:.0f} KB")
+            except Exception as e:
+                print(f"\n    [!] Failed to copy {cid + ext}: {e}")
+                errors += 1
+
+    print()
+    print(f"[+] Backup done: {total_copied / 1e9:.2f} GB copied, "
+          f"{total_skipped} file(s) skipped, {errors} error(s)")
+    print(f"[+] Destination: {dest_path}")
+
+
+def _download_with_progress(url, dest_file, expected_size=0):
+    """
+    Download url to dest_file with a progress bar. Resumes if a partial file exists.
+    Tries each url in turn on failure. Returns bytes downloaded, or -1 on error.
+    """
+    CHUNK = 8 * 1024 * 1024  # 8 MB
+    resume_from = 0
+    if os.path.exists(dest_file):
+        resume_from = os.path.getsize(dest_file)
+        if expected_size and resume_from == expected_size:
+            print(f"    Already complete, skipping.")
+            return 0
+
+    headers = {}
+    if resume_from:
+        headers["Range"] = f"bytes={resume_from}-"
+        print(f"    Resuming from {resume_from / 1e9:.2f} GB")
+
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            total = int(resp.headers.get("Content-Length", 0)) + resume_from
+            if not total and expected_size:
+                total = expected_size
+            downloaded = resume_from
+            mode = "ab" if resume_from else "wb"
+            label = os.path.basename(url)[:38]
+            with open(dest_file, mode) as f:
+                while True:
+                    buf = resp.read(CHUNK)
+                    if not buf:
+                        break
+                    f.write(buf)
+                    downloaded += len(buf)
+                    if total:
+                        pct = downloaded * 100 // total
+                        filled = 30 * downloaded // total
+                    else:
+                        pct, filled = 0, 0
+                    bar = "#" * filled + "-" * (30 - filled)
+                    print(f"\r    [{bar}] {pct:3d}%  {downloaded/1073741824:.2f}/{total/1073741824:.2f} GB  {label:<38}",
+                          end="", flush=True)
+            print()
+            return downloaded - resume_from
+    except urllib.error.HTTPError as e:
+        print(f"\n    [!] HTTP {e.code}: {e.reason}")
+        return -1
+    except Exception as e:
+        print(f"\n    [!] {e}")
+        return -1
+
+
+def download_from_cdn(enriched, dest_path, indices=None):
+    """
+    Download Xbox game packages from CDN using URLs extracted from .xvs files.
+    Files are saved with uppercase UUID filenames (no extension) per sideload convention.
+    Resumable: skips or resumes partially downloaded files.
+    """
+    import shutil
+
+    to_dl = [enriched[i] for i in indices if 0 <= i < len(enriched)] if indices is not None else enriched
+    if not to_dl:
+        print("[!] Nothing selected.")
+        return
+
+    no_url = [x for x in to_dl if not x.get("cdnUrls")]
+    if no_url:
+        print(f"[!] {len(no_url)} package(s) have no CDN URL and will be skipped.")
+    to_dl = [x for x in to_dl if x.get("cdnUrls")]
+    if not to_dl:
+        return
+
+    total_bytes = sum(x.get("sizeBytes", 0) for x in to_dl)
+    print(f"\n[*] Downloading {len(to_dl)} package(s) — approx {total_bytes / 1e9:.1f} GB")
+
+    try:
+        os.makedirs(dest_path, exist_ok=True)
+        free = shutil.disk_usage(dest_path).free
+        if total_bytes > 0 and free < total_bytes:
+            print(f"[!] Warning: destination has {free/1e9:.1f} GB free but ~{total_bytes/1e9:.1f} GB needed")
+            if input("    Continue anyway? [y/N]: ").strip().lower() != "y":
+                print("    Cancelled.")
+                return
+    except Exception as e:
+        print(f"[!] Could not check destination: {e}")
+        return
+
+    total_downloaded = 0
+    errors = 0
+
+    for n, item in enumerate(to_dl, 1):
+        cid = item["contentId"].upper()   # uppercase per sideload convention
+        title = item.get("title", cid)
+        sid = item.get("storeId", "")
+        cdn_urls = item.get("cdnUrls", [])
+        expected = item.get("sizeBytes", 0)
+
+        print(f"\n  [{n}/{len(to_dl)}] {title[:60]}")
+        if sid:
+            print(f"    StoreId: {sid}")
+        print(f"    Saving as: {cid}  ({expected/1e9:.2f} GB)")
+
+        dest_file = os.path.join(dest_path, cid)
+        got = -1
+        for url in cdn_urls:
+            print(f"    CDN: {url[:80]}")
+            got = _download_with_progress(url, dest_file, expected)
+            if got >= 0:
+                break
+            print(f"    Trying next mirror...")
+
+        if got < 0:
+            print(f"    [!] All mirrors failed for {cid}")
+            errors += 1
+        else:
+            total_downloaded += got
+
+    print()
+    print(f"[+] Download done: {total_downloaded / 1e9:.2f} GB downloaded, {errors} error(s)")
+    print(f"[+] Destination: {dest_path}")
+
+
+# ===========================================================================
+# CDN Version Discovery
+#
+# Xbox CDN URL format:
+#   http://assets{N}.xboxlive.com/{shard}/{planUUID}/{contentId}/{ver}.{buildId}/{pkg}.xvc
+#
+# buildVersion in XVS is a 16-char hex string encoding 4×uint16 big-endian:
+#   "0001000000040000" → major=1, minor=0, patch=4, rev=0 → "1.0.4.0"
+#
+# We have priorBuildVersion + priorBuildId in the USB DB, so we can
+# reconstruct the prior version's URL exactly. Beyond that, we probe for
+# manifest/index files at the content root that could reveal all buildIds.
+# ===========================================================================
+
+def _xbox_ver_decode(hex_str):
+    """
+    Decode an Xbox build version hex string to a human-readable dotted version.
+    "0001000000040000" → "1.0.4.0"  (4 × uint16 big-endian, leading zeros stripped)
+    Returns the original string unchanged if it cannot be decoded.
+    """
+    if not hex_str or len(hex_str) < 16:
+        return hex_str
+    try:
+        parts = [int(hex_str[i:i+4], 16) for i in range(0, 16, 4)]
+        return ".".join(str(p) for p in parts)
+    except ValueError:
+        return hex_str
+
+
+def _cdn_parse(url, content_id):
+    """
+    Parse a CDN URL into components, using the contentId UUID as an anchor.
+    Returns dict or None if the contentId cannot be located in the URL.
+    """
+    from urllib.parse import urlparse
+    p      = urlparse(url)
+    parts  = p.path.strip("/").split("/")
+    cid_lo = content_id.lower()
+
+    cid_idx = next((i for i, seg in enumerate(parts) if seg.lower() == cid_lo), None)
+    if cid_idx is None or cid_idx + 2 > len(parts) - 1:
+        return None
+
+    ver_idx = cid_idx + 1
+    pkg_idx = cid_idx + 2          # package is always the segment after version
+    return {
+        "scheme_host":   f"{p.scheme}://{p.netloc}",
+        "parts":         parts,
+        "ver_idx":       ver_idx,
+        "pkg_idx":       pkg_idx,
+        "ver_seg":       parts[ver_idx],
+        "pkg_name":      parts[pkg_idx],
+        "content_root":  f"{p.scheme}://{p.netloc}/" + "/".join(parts[:ver_idx]),
+    }
+
+
+def _cdn_rebuild(parsed, new_ver_seg, new_pkg=None):
+    """Reconstruct a CDN URL with a replacement version segment (and optionally package name)."""
+    parts = list(parsed["parts"])
+    parts[parsed["ver_idx"]] = new_ver_seg
+    if new_pkg:
+        parts[parsed["pkg_idx"]] = new_pkg
+    return parsed["scheme_host"] + "/" + "/".join(parts)
+
+
+def _cdn_head(url, timeout=8):
+    """
+    Send a HEAD request. Returns True (200/206), False (404), or None (other/error).
+    """
+    import urllib.request, urllib.error
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        req.add_header("User-Agent", "Microsoft-Delivery-Optimization/10.0")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status in (200, 206)
+    except urllib.error.HTTPError as e:
+        return False if e.code == 404 else None
+    except Exception:
+        return None
+
+
+def _cdn_get_text(url, timeout=8):
+    """Fetch a URL and return its text body, or None on failure."""
+    import urllib.request, urllib.error
+    try:
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "Microsoft-Delivery-Optimization/10.0")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read().decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+
+def discover_cdn_versions(item):
+    """
+    Probe the Xbox CDN for older versions of the given USB item.
+
+    Strategy 1 — Prior version from XVS:
+        priorBuildVersion (hex) decoded → human version string
+        priorBuildId → GUID used directly in the URL version segment
+        → Try same package filename, then also with version replaced in filename
+
+    Strategy 2 — Manifest/index discovery at content root:
+        Probe well-known filenames at the URL level above the version directory.
+        If a JSON manifest is found it may list all available buildIds.
+
+    Returns list of dicts: {url, label, exists, body}
+    """
+    results = []
+
+    cdn_urls = item.get("cdnUrls", [])
+    content_id = item.get("contentId", "")
+    build_ver_hex = item.get("buildVersion", "")
+    prior_ver_hex = item.get("priorBuildVersion", "")
+    prior_bid     = item.get("priorBuildId", "")
+
+    if not cdn_urls or not content_id:
+        return results
+
+    base_url   = cdn_urls[0]
+    parsed     = _cdn_parse(base_url, content_id)
+    if not parsed:
+        return results
+
+    human_ver  = _xbox_ver_decode(build_ver_hex)
+
+    # ── Strategy 1: prior version ────────────────────────────────────────────
+    if prior_ver_hex and prior_bid:
+        prior_human = _xbox_ver_decode(prior_ver_hex)
+        prior_seg   = f"{prior_human}.{prior_bid}"
+
+        if prior_seg != parsed["ver_seg"]:
+            # 1a: same package filename
+            url_a  = _cdn_rebuild(parsed, prior_seg)
+            ex_a   = _cdn_head(url_a)
+            results.append({"url": url_a, "label": f"v{prior_human} prior — same filename",
+                             "exists": ex_a, "body": None})
+
+            # 1b: version replaced inside the package filename
+            old_pkg = parsed["pkg_name"]
+            new_pkg = old_pkg.replace(human_ver, prior_human, 1) if human_ver in old_pkg else None
+            if new_pkg and new_pkg != old_pkg:
+                url_b = _cdn_rebuild(parsed, prior_seg, new_pkg)
+                ex_b  = _cdn_head(url_b)
+                results.append({"url": url_b, "label": f"v{prior_human} prior — renamed pkg",
+                                 "exists": ex_b, "body": None})
+
+    # ── Strategy 2: manifest / index files at content root ───────────────────
+    content_root = parsed["content_root"]
+    manifest_names = [
+        "packages.json", "index.json", "ContentMetadata.json",
+        "packagespec.json", "manifest.json", "buildindex.json",
+        "packagelist.json", "versions.json",
+    ]
+    for name in manifest_names:
+        murl = f"{content_root}/{name}"
+        ex = _cdn_head(murl)
+        if ex:
+            body = _cdn_get_text(murl)
+            results.append({"url": murl, "label": f"manifest: {name}",
+                             "exists": True, "body": body})
+
+    return results
+
+
+def _parse_selection(sel_str, max_idx):
+    """Parse a selection string like '1 3 5-8' into a list of 0-based indices."""
+    indices = []
+    for tok in sel_str.split():
+        if "-" in tok:
+            try:
+                a, b = tok.split("-", 1)
+                indices.extend(range(int(a) - 1, int(b)))
+            except ValueError:
+                pass
+        else:
+            try:
+                indices.append(int(tok) - 1)
+            except ValueError:
+                pass
+    return [i for i in indices if 0 <= i < max_idx]
+
+
+def _cdn_load_items():
+    """Load and enrich items from usb_db.json. Returns sorted list or None on error."""
+    usb_db_file = os.path.join(SCRIPT_DIR, "usb_db.json")
+    if not os.path.isfile(usb_db_file):
+        print("[!] No usb_db.json found. Run [I] (Save USB metadata) first.")
+        return None
+    usb_db = load_json(usb_db_file) or {}
+    items = [v for v in usb_db.values() if not v.get("contentId", "").startswith("_content_")]
+    if not items:
+        print("[!] USB DB is empty.")
+        return None
+    catalog_map = _build_catalog_map()
+    for item in items:
+        sid = item.get("storeId", "")
+        item["_title"] = (catalog_map.get(sid, {}).get("title", "")
+                          or item.get("packageName", sid or "?"))
+    items.sort(key=lambda x: x.get("_title", "").lower())
+    return items
+
+
+def _cdn_finish(all_found):
+    """Print summary, save results, offer download."""
+    print()
+    downloadable = [f for f in all_found if f.get("url", "").endswith(".xvc")]
+    if all_found:
+        print(f"  ✓ {len(all_found)} URL(s) found.")
+        out = os.path.join(SCRIPT_DIR, "cdn_older_versions.json")
+        save_json(out, [{k: v for k, v in f.items() if k != "body"} for f in all_found])
+        print(f"[+] Saved: {out}")
+        if downloadable:
+            print()
+            ans = input(f"  Download {len(downloadable)} older .xvc package(s)? [y/N]: ").strip().lower()
+            if ans == "y":
+                dest = input("  Destination folder: ").strip().strip('"').strip("'")
+                if dest:
+                    os.makedirs(dest, exist_ok=True)
+                    for f in downloadable:
+                        fname = f["url"].rsplit("/", 1)[-1]
+                        _download_with_progress(f["url"], os.path.join(dest, fname), 0)
+    else:
+        print("  Nothing found. Older versions may have been purged from the CDN.")
+
+
+def _cdn_sweep_all(items):
+    """
+    Fast sweep of all items: probe only the prior-version renamed-package URL
+    (the most accurate variant) plus manifest files. Shows one progress line
+    per game, only printing results for hits.
+    Returns list of found dicts.
+    """
+    # Only check items that have what we need
+    candidates = [x for x in items
+                  if x.get("cdnUrls") and x.get("buildVersion")
+                  and x.get("priorBuildVersion") and x.get("priorBuildId")]
+    skipped = len(items) - len(candidates)
+
+    print(f"\n[*] Sweeping {len(candidates)} games"
+          + (f" ({skipped} skipped — no CDN/prior data)" if skipped else "")
+          + " ...")
+    print()
+
+    all_found = []
+    w = 52  # title display width
+
+    for n, item in enumerate(candidates, 1):
+        title     = item.get("_title", "?")
+        title_tr  = title[:w]
+        print(f"\r  [{n:>3}/{len(candidates)}] {title_tr:<{w}}", end="", flush=True)
+
+        content_id    = item.get("contentId", "")
+        build_ver_hex = item.get("buildVersion", "")
+        prior_ver_hex = item.get("priorBuildVersion", "")
+        prior_bid     = item.get("priorBuildId", "")
+        base_url      = item["cdnUrls"][0]
+
+        parsed     = _cdn_parse(base_url, content_id)
+        if not parsed:
+            continue
+
+        human_ver   = _xbox_ver_decode(build_ver_hex)
+        prior_human = _xbox_ver_decode(prior_ver_hex)
+        prior_seg   = f"{prior_human}.{prior_bid}"
+
+        if prior_seg == parsed["ver_seg"]:
+            continue  # prior == current, nothing to try
+
+        # Best-effort: renamed-package URL only (most correct variant)
+        old_pkg = parsed["pkg_name"]
+        new_pkg = old_pkg.replace(human_ver, prior_human, 1) if human_ver in old_pkg else old_pkg
+        url     = _cdn_rebuild(parsed, prior_seg, new_pkg)
+        exists  = _cdn_head(url)
+
+        if exists is True:
+            print(f"\r  [{n:>3}/{len(candidates)}] {title_tr:<{w}}  ✓ FOUND v{prior_human}")
+            all_found.append({"title": title, "url": url,
+                              "label": f"v{prior_human} prior", "exists": True, "body": None})
+        # else: stay quiet — just show the rolling progress line
+
+        # Manifest probe (silent unless found)
+        content_root = parsed["content_root"]
+        for name in ("packages.json", "index.json", "ContentMetadata.json",
+                     "packagespec.json", "versions.json"):
+            murl = f"{content_root}/{name}"
+            mex  = _cdn_head(murl)
+            if mex:
+                body = _cdn_get_text(murl)
+                print(f"\r  [{n:>3}/{len(candidates)}] {title_tr:<{w}}  ✓ MANIFEST {name}")
+                all_found.append({"title": title, "url": murl,
+                                  "label": f"manifest: {name}", "exists": True, "body": body})
+
+    print()  # newline after the rolling progress line
+    return all_found
+
+
+# ── Windows Update Catalog strategy ──────────────────────────────────────────
+#
+# Xbox games are delivered via the Windows Update infrastructure.  Each product
+# has a WuCategoryId which can be used to search the public Microsoft Update
+# Catalog (catalog.update.microsoft.com).  The catalog keeps historical entries
+# even after the Xbox CDN purges old packages, so it's the best public source
+# for older version packages.
+#
+# Flow:
+#   1. DisplayCatalog API → WuCategoryId (public, no auth required)
+#   2. WU Catalog search  → list of update entries (each = one published version)
+#   3. DownloadDialog API → fresh download URLs per entry (URL is time-limited
+#      but the update ID is stable and can always be re-used to get a fresh URL)
+# =============================================================================
+
+def _display_catalog_get_wuid(store_id, timeout=12):
+    """
+    Query the public DisplayCatalog API (no auth) to get the WuCategoryId for
+    an Xbox/Store product.  Returns the WuCategoryId string, or None.
+    """
+    import urllib.request
+    url = (f"https://displaycatalog.mp.microsoft.com/v7.0/products/{store_id}"
+           f"?market=US&languages=en-us&MS-CV=DGU1mcuYo0WMMp")
+    try:
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "WindowsShellClient/9.0.40929.0 (Windows)")
+        req.add_header("Accept", "application/json")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        for dsa in data.get("Product", {}).get("DisplaySkuAvailabilities", []):
+            fd = (dsa.get("Sku", {})
+                     .get("Properties", {})
+                     .get("FulfillmentData", {}))
+            wuid = fd.get("WuCategoryId") or fd.get("WuBundleCategoryId")
+            if wuid:
+                return wuid
+    except Exception:
+        pass
+    return None
+
+
+def _wu_catalog_search(wu_cat_id, timeout=20):
+    """
+    Search the Microsoft Update Catalog for entries matching wu_cat_id.
+    Returns list of dicts: {update_id, uid_info, title, date, size}
+    """
+    import urllib.request, urllib.parse, re, html as _html
+    url = ("https://www.catalog.update.microsoft.com/Search.aspx"
+           f"?q={urllib.parse.quote(wu_cat_id)}")
+    try:
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent",
+                       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        req.add_header("Accept", "text/html,application/xhtml+xml")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            page = r.read().decode("utf-8", errors="replace")
+    except Exception:
+        return []
+
+    results = []
+    # Each update row contains onclick="goToDetails('GUID_RevNum')"
+    detail_pat = re.compile(r"goToDetails\(['\"]([0-9a-fA-F\-]+(?:_\d+)?)['\"]",  re.I)
+    row_pat    = re.compile(r"<tr[^>]*>\s*(.*?)\s*</tr>", re.DOTALL | re.I)
+    td_pat     = re.compile(r"<td[^>]*>(.*?)</td>",       re.DOTALL | re.I)
+    tag_pat    = re.compile(r"<[^>]+>")
+
+    for row in row_pat.finditer(page):
+        row_html = row.group(1)
+        dm = detail_pat.search(row_html)
+        if not dm:
+            continue
+        uid_info  = dm.group(1)
+        update_id = uid_info.split("_")[0]
+        cells = [_html.unescape(tag_pat.sub("", td.group(1))).strip()
+                 for td in td_pat.finditer(row_html)]
+        results.append({
+            "update_id": update_id,
+            "uid_info":  uid_info,
+            "title":     cells[1] if len(cells) > 1 else "",
+            "date":      cells[4] if len(cells) > 4 else "",
+            "size":      cells[6] if len(cells) > 6 else "",
+        })
+    return results
+
+
+def _wu_catalog_get_links(uid_info_list, timeout=20):
+    """
+    POST to DownloadDialog.aspx to get download URLs for a list of uid_info strings
+    (format: 'updateID' or 'updateID_revisionNum').
+    Returns list of URL strings (may be empty if no packages found or they expired).
+    """
+    import urllib.request, urllib.parse, json as _json, re
+    if not uid_info_list:
+        return []
+    payload = [{"size": 0, "uidInfo": ui, "updateID": ui.split("_")[0]}
+               for ui in uid_info_list]
+    body = urllib.parse.urlencode(
+        {"updateIDs": _json.dumps(payload), "updateIDsBlockedForImport": ""}
+    ).encode("utf-8")
+    url = "https://www.catalog.update.microsoft.com/DownloadDialog.aspx"
+    try:
+        req = urllib.request.Request(url, data=body)
+        req.add_header("User-Agent",
+                       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        req.add_header("Referer",      "https://www.catalog.update.microsoft.com/")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            page = r.read().decode("utf-8", errors="replace")
+    except Exception:
+        return []
+    # Response embeds download URLs in JavaScript — grab anything that looks like a file
+    url_pat = re.compile(
+        r'https?://[^\s\'"<>]+\.(?:xvc|exe|cab|msi|appx|msix|appxbundle|xar|zip)',
+        re.I)
+    return list(dict.fromkeys(url_pat.findall(page)))  # deduplicated, order-preserved
+
+
+def _cdn_sweep_wu_catalog(items):
+    """
+    For each item with a storeId:
+      1. Fetch WuCategoryId from DisplayCatalog API (cached in usb_db.json)
+      2. Search Microsoft Update Catalog for all published update entries
+         NOTE: Xbox console (XVC) packages may not appear in WU Catalog — it
+         depends on whether the publisher submitted them to the WU feed.
+         Windows Store / MSIXVC packages are more likely to appear.
+      3. If multiple entries exist → older versions are available
+      4. Fetch download links from DownloadDialog for all entries
+    Returns list of found dicts (one per game that has older versions).
+    """
+    import time
+
+    candidates = [x for x in items if x.get("storeId")]
+    skipped    = len(items) - len(candidates)
+    print(f"\n[*] Scanning {len(candidates)} games via Windows Update Catalog"
+          + (f" ({skipped} skipped — no storeId)" if skipped else "") + " ...")
+    print("    Step 1: displaycatalog.mp.microsoft.com → WuCategoryId")
+    print("    Step 2: catalog.update.microsoft.com   → update history")
+    print()
+
+    # Load usb_db for WuCategoryId caching
+    db_path  = os.path.join(SCRIPT_DIR, "usb_db.json")
+    usb_db   = (load_json(db_path) or {}) if os.path.isfile(db_path) else {}
+    db_dirty = False
+    all_found = []
+    w = 46
+
+    for n, item in enumerate(candidates, 1):
+        sid      = item["storeId"]
+        title    = item.get("_title", sid)
+        title_tr = title[:w]
+        print(f"\r  [{n:>3}/{len(candidates)}] {title_tr:<{w}}  [WuCategoryId…]  ", end="", flush=True)
+
+        # Check cache first to avoid re-fetching
+        wuid = (usb_db.get(sid) or {}).get("wuCategoryId") or item.get("wuCategoryId")
+        if not wuid:
+            wuid = _display_catalog_get_wuid(sid)
+            if wuid and sid in usb_db:
+                usb_db[sid]["wuCategoryId"] = wuid
+                db_dirty = True
+
+        if not wuid:
+            continue  # DisplayCatalog has no WuCategoryId for this title
+
+        print(f"\r  [{n:>3}/{len(candidates)}] {title_tr:<{w}}  [WU search…]     ", end="", flush=True)
+        time.sleep(0.25)  # gentle rate-limiting
+        updates = _wu_catalog_search(wuid)
+        if not updates:
+            continue
+
+        if len(updates) > 1:
+            print(f"\r  [{n:>3}/{len(candidates)}] {title_tr:<{w}}  ✓ {len(updates)} entries in WU Catalog")
+            # Fetch download links for all entries (not just current)
+            uid_infos = [u["uid_info"] for u in updates]
+            links     = _wu_catalog_get_links(uid_infos)
+            all_found.append({
+                "title":   title,
+                "storeId": sid,
+                "wuCatId": wuid,
+                "updates": updates,
+                "links":   links,
+                "label":   f"{len(updates)} WU versions — {len(links)} link(s)",
+                "url":     links[0] if links else "",
+                "exists":  True,
+                "body":    None,
+            })
+        # single entry = only current version published, nothing older
+
+    print()
+
+    if db_dirty:
+        save_json(db_path, usb_db)
+        print(f"[+] WuCategoryId cache saved to usb_db.json")
+
+    return all_found
+
+
+def _cdn_refresh_wu_links(wu_cat_id, timeout=20):
+    """
+    Re-fetch fresh download links for ALL update entries under wu_cat_id.
+    Use this when previously-saved links have expired.
+    Returns list of URL strings.
+    """
+    updates = _wu_catalog_search(wu_cat_id, timeout=timeout)
+    if not updates:
+        return []
+    uid_infos = [u["uid_info"] for u in updates]
+    return _wu_catalog_get_links(uid_infos, timeout=timeout)
+
+
+def process_cdn_version_discovery():
+    """
+    Discover older Xbox game package versions.
+    Modes:
+      [A] Xbox CDN sweep   — probe prior-version URLs derived from XVS priorBuildId/Version
+      [W] WU Catalog scan  — query Windows Update Catalog for full version history
+      [S] Select game      — verbose per-game probe (CDN strategy)
+      [R] Refresh WU links — re-fetch download links for a previously-found WuCategoryId
+    """
+    print("\n[CDN / Version Discovery]")
+
+    items = _cdn_load_items()
+    if not items:
+        return
+
+    total   = len(items)
+    has_cdn = sum(1 for x in items if x.get("cdnUrls"))
+    has_pri = sum(1 for x in items if x.get("priorBuildVersion") and x.get("priorBuildId"))
+    print(f"[*] {total} entries  |  {has_cdn} with CDN URL  |  {has_pri} with prior version data")
+    print()
+    print("    [D] Download current packages — direct CDN download of installed game packages")
+    print("    [C] Compare snapshots  — diff two usb_db scans to find updated games + probe old URLs")
+    print("    [A] Xbox CDN sweep     — probe prior-version URLs from XVS data (fast, silent 404s)")
+    print("    [W] Windows Update Catalog — query update history via WuCategoryId (experimental)")
+    print("    [S] Select game        — verbose CDN probe for specific game(s)")
+    print("    [R] Refresh WU links   — re-fetch fresh download links by WuCategoryId")
+    print("    [Enter] Back")
+    print()
+    mode = input("  Choice: ").strip().upper()
+
+    if mode == "C":
+        process_cdn_snapshot_compare()
+        return
+
+    elif mode == "D":
+        # Direct download of CURRENT version packages from Xbox CDN
+        downloadable = [x for x in items if x.get("cdnUrls") and x.get("contentId")]
+        if not downloadable:
+            print("[!] No items with CDN URLs in USB DB. Run [I] to populate.")
+            return
+        print()
+        print(f"  {'#':>3}  {'Size':>8}  {'Ver':>10}  Title")
+        print("  " + "─" * 70)
+        for i, item in enumerate(downloadable, 1):
+            sz    = item.get("sizeBytes", 0)
+            sz_gb = f"{sz/1e9:.2f}GB" if sz else "?"
+            ver   = _xbox_ver_decode(item.get("buildVersion", "")) if item.get("buildVersion") else "?"
+            print(f"  {i:>3}  {sz_gb:>8}  {ver:>10}  {item.get('_title','')[:50]}")
+        print()
+        sel = input("  Which game(s) to download? [numbers e.g. 1 3 5-8, or * for all]: ").strip()
+        if sel == "*":
+            targets = downloadable
+        else:
+            targets = [downloadable[i] for i in _parse_selection(sel, len(downloadable))]
+        if not targets:
+            print("[!] Nothing selected.")
+            return
+        total_bytes = sum(t.get("sizeBytes", 0) for t in targets)
+        print(f"\n  {len(targets)} package(s) selected  ({total_bytes/1e9:.2f} GB total)")
+        dest = input("  Destination folder: ").strip().strip('"').strip("'")
+        if not dest:
+            return
+        os.makedirs(dest, exist_ok=True)
+        for item in targets:
+            url    = item["cdnUrls"][0]  # always assets1 (mirror, any number works)
+            fname  = url.rsplit("/", 1)[-1]
+            outf   = os.path.join(dest, fname)
+            size   = item.get("sizeBytes", 0)
+            title  = item.get("_title", fname)
+            print(f"\n  ▸ {title}")
+            _download_with_progress(url, outf, size)
+        print(f"\n[+] Done. Files saved to: {dest}")
+        return
+
+    elif mode == "A":
+        all_found = _cdn_sweep_all(items)
+        if all_found:
+            print(f"  Games with prior versions on CDN: {len([f for f in all_found if f['url'].endswith('.xvc')])}")
+            for f in all_found:
+                if f["url"].endswith(".xvc"):
+                    print(f"    {f['title']:<50}  {f['label']}")
+                    print(f"      {f['url']}")
+                elif "manifest" in f["label"]:
+                    print(f"    {f['title']:<50}  {f['label']}")
+                    if f.get("body"):
+                        preview = f["body"][:300].replace("\n", " ")
+                        print(f"      preview: {preview}")
+        _cdn_finish(all_found)
+
+    elif mode == "W":
+        all_found = _cdn_sweep_wu_catalog(items)
+        if all_found:
+            print(f"\n  Games with multiple versions in WU Catalog: {len(all_found)}")
+            print()
+            for f in all_found:
+                print(f"  ▸ {f['title']}")
+                for upd in f.get("updates", []):
+                    print(f"      {upd.get('date',''):>12}  {upd.get('title','')[:60]}  [{upd.get('size','')}]")
+                if f.get("links"):
+                    print(f"      Download links ({len(f['links'])}):")
+                    for lnk in f["links"][:5]:
+                        print(f"        {lnk}")
+                    if len(f["links"]) > 5:
+                        print(f"        … and {len(f['links'])-5} more")
+                print()
+            # Save to file
+            out = os.path.join(SCRIPT_DIR, "cdn_older_versions.json")
+            save_json(out, [{k: v for k, v in f.items() if k != "body"} for f in all_found])
+            print(f"[+] Saved: {out}")
+            # Offer download if we have .xvc links
+            xvc_links = [lnk for f in all_found for lnk in f.get("links", [])
+                         if lnk.lower().endswith(".xvc")]
+            if xvc_links:
+                ans = input(f"\n  Download {len(xvc_links)} .xvc package(s)? [y/N]: ").strip().lower()
+                if ans == "y":
+                    dest = input("  Destination folder: ").strip().strip('"').strip("'")
+                    if dest:
+                        os.makedirs(dest, exist_ok=True)
+                        for lnk in xvc_links:
+                            fname = lnk.rsplit("/", 1)[-1].split("?")[0]
+                            _download_with_progress(lnk, os.path.join(dest, fname), 0)
+        else:
+            print("  Nothing found.  Games may only have one published WU Catalog entry,")
+            print("  or WuCategoryId is unavailable (not all titles have one).")
+
+    elif mode == "S":
+        print()
+        print(f"  {'#':>3}  {'CDN':^3}  {'PRIOR':^5}  Title")
+        print("  " + "─" * 62)
+        for i, item in enumerate(items, 1):
+            has_cdn_flag   = "✓" if item.get("cdnUrls") else " "
+            has_prior_flag = "✓" if item.get("priorBuildVersion") and item.get("priorBuildId") else " "
+            print(f"  {i:>3}  {has_cdn_flag:^3}  {has_prior_flag:^5}  {item.get('_title','')[:50]}")
+        print()
+        sel = input("  Which game(s)? [numbers e.g. 1 3 5-8]: ").strip().lower()
+        targets = [items[i] for i in _parse_selection(sel, len(items))]
+        if not targets:
+            print("[!] Nothing selected.")
+            return
+        print()
+        all_found = []
+        for item in targets:
+            title = item.get("_title", "?")
+            print(f"  ── {title}")
+            if not item.get("cdnUrls"):
+                print("     (no CDN URL — skipping)")
+                continue
+            if not item.get("buildVersion"):
+                print("     (no buildVersion — re-run [I])")
+                continue
+            results = discover_cdn_versions(item)
+            if not results:
+                print("     (could not parse URL — contentId not in path)")
+                continue
+            any_hit = False
+            for r in results:
+                status = "FOUND" if r["exists"] is True else (" 404 " if r["exists"] is False else " ERR ")
+                print(f"     [{status}] {r['label']}")
+                if r["exists"]:
+                    print(f"             {r['url']}")
+                    if r.get("body"):
+                        print(f"             → {r['body'][:300].replace(chr(10),' ')}...")
+                    all_found.append({"title": title, **r})
+                    any_hit = True
+            if not any_hit:
+                print("     (nothing found)")
+        _cdn_finish(all_found)
+
+    elif mode == "R":
+        # Re-fetch fresh download links for a previously-found WuCategoryId
+        wuid = input("  WuCategoryId (paste from cdn_older_versions.json): ").strip()
+        if not wuid:
+            return
+        print(f"[*] Re-fetching links for {wuid} ...")
+        links = _cdn_refresh_wu_links(wuid)
+        if links:
+            print(f"  {len(links)} link(s):")
+            for lnk in links:
+                print(f"    {lnk}")
+            ans = input(f"\n  Download {len(links)} file(s)? [y/N]: ").strip().lower()
+            if ans == "y":
+                dest = input("  Destination folder: ").strip().strip('"').strip("'")
+                if dest:
+                    os.makedirs(dest, exist_ok=True)
+                    for lnk in links:
+                        fname = lnk.rsplit("/", 1)[-1].split("?")[0]
+                        _download_with_progress(lnk, os.path.join(dest, fname), 0)
+        else:
+            print("  No links found — update may no longer be available.")
+
+
+# ===========================================================================
 # Unified Interactive Menu
 # ===========================================================================
 
@@ -6748,12 +8424,9 @@ def interactive_menu():
             return
 
         print_header()
-        print("  Accounts (process library):")
-
-        for i, gt in enumerate(gamertags, 1):
-            age = token_age_str(gt)
-            print(f"    [{i}] {gt} (token: {age})")
-
+        print(f"  Accounts:  ({len(gamertags)} accounts)")
+        print(f"    [0] Select account to process  (or type number directly)")
+        print(f"    [*] Process all accounts")
         print()
         print("  Scan endpoints:")
         print("    [E] Collections API only")
@@ -6779,17 +8452,44 @@ def interactive_menu():
         print("    [A] Add new account")
         print("    [R] Refresh token on existing account")
         print("    [D] Delete an account")
-        print("    [*] Process all accounts")
         print("    [X] Clear cache + rescan all accounts")
         print("    [B] Build index (rebuild HTML from cache)")
+        print()
+        print("  Utilities:")
+        print("    [U] Scan USB drive (index Xbox external drive)")
+        print("    [I] Save USB drive metadata to database (usb_db.json)")
+        print("    [K] Discover older CDN versions (probe prior versions from USB DB)")
+        print("    [V] Xbox Drive Converter (PC ↔ Xbox MBR mode)")
         print("    [Q] Quit")
         print()
 
-        pick = input(f"  Pick [1-{len(gamertags)}, E, T, S, G, M, L, P, N, C, F, W, Z, H, Y, A, R, D, *, X, B, Q]: ").strip()
+        pick = input(f"  Pick [0, E, T, S, G, M, L, P, N, C, F, W, Z, H, Y, A, R, D, *, X, B, U, I, K, V, Q]: ").strip()
         pu = pick.upper()
 
         if pu == "Q":
             break
+        elif pick == "0":
+            print()
+            for i, gt in enumerate(gamertags, 1):
+                age = token_age_str(gt)
+                print(f"    [{i:>2}] {gt}  (token: {age})")
+            print()
+            ap = input(f"  Process which account? [1-{len(gamertags)}]: ").strip()
+            try:
+                idx = int(ap) - 1
+                if 0 <= idx < len(gamertags):
+                    gt = gamertags[idx]
+                    print(f"\n[*] Refreshing token for {gt}...")
+                    refresh_account_token(gt)
+                    html_file, _lib = process_account(gt, method="both")
+                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                    print(f"[*] Opening in browser: {file_url}")
+                    webbrowser.open(file_url)
+                else:
+                    print("  Invalid selection.")
+            except ValueError:
+                print("  Invalid selection.")
+            continue
         elif pu == "A":
             cmd_add()
             continue
@@ -7101,6 +8801,19 @@ def interactive_menu():
                     print(f"[!] No xl token for {gt}. Refresh token first.")
                 else:
                     scan_titlehub_all_regions(xl_token)
+            continue
+        elif pu == "U":
+            process_usb_drive()
+            continue
+        elif pu == "I":
+            drive_letter = input("  Drive letter (default: E): ").strip() or "E"
+            build_usb_db(drive_letter.rstrip(":/\\").upper())
+            continue
+        elif pu == "K":
+            process_cdn_version_discovery()
+            continue
+        elif pu == "V":
+            process_drive_converter()
             continue
         else:
             try:

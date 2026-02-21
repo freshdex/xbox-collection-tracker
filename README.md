@@ -1,8 +1,23 @@
 # Xbox Collection Tracker (XCT)
 
-**v1.2**
+**v1.3**
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
+
+## What's New in v1.3
+
+- **Xbox USB Drive Scanner** — Scans an Xbox external drive and indexes all installed game packages from `.xvs` files. Captures CDN URLs, build versions, content IDs, package sizes, and prior-version data. Accessible via `[U]` in the menu.
+- **USB database `[I]`** — Saves all scanned USB drive metadata to `usb_db.json`. Auto-snapshots the previous state before each rescan so you can diff before/after a game update.
+- **USB badges in HTML** — Games present on your USB drive show a **USB** badge in list and grid view. The detail modal shows a dedicated USB section with content ID, build version, and direct CDN download links.
+- **CDN version discovery `[K]`** — New utility menu for probing the Xbox CDN:
+  - `[D]` **Download current packages** — Direct CDN download of any installed game package (bypasses the Xbox console entirely). Supports selecting individual games or the full library.
+  - `[C]` **Compare snapshots** — Diffs two USB DB scans to detect games that updated (planUUID changed), then probes the old CDN path for the prior-version package.
+  - `[A]` **CDN sweep** — Fast sweep of all games probing prior-version URLs from XVS data.
+  - `[W]` **Windows Update Catalog** — Queries `displaycatalog.mp.microsoft.com` for each game's WuCategoryId, then searches the Microsoft Update Catalog for historical update entries. WuCategoryId is cached in `usb_db.json`.
+  - `[S]` **Select game** — Verbose per-game CDN probe.
+  - `[R]` **Refresh WU links** — Re-fetches fresh download links for a WuCategoryId.
+- **Xbox Drive Converter `[V]`** — Converts an Xbox external drive's MBR signature between Xbox mode (`0x99 0xCC`) and PC mode (`0x55 0xAA`). Also triggers a Disk Management rescan. Equivalent to the XboxOneStorageConverter app, built directly into XCT.
+- **Accounts sub-menu** — With many accounts, the main menu no longer lists every gamertag. Press `[0]` to open the account picker showing all accounts with token age, or type a number directly.
 
 ## What's New in v1.2
 
