@@ -1,8 +1,15 @@
 # Xbox Collection Tracker (XCT)
 
-**v1.4**
+**v1.4.1**
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
+
+## What's New in v1.4.1
+
+- **Bundled `gfwl_links.json`** — GFWL package data (246 titles, 1,775 packages) is now included in the repo so `[J]` works out of the box for new users without needing a separate build step.
+- **Fix GFWL tab not appearing after rebuild** — The HTML tab guard used `window.GFWL` which doesn't work for `const` declarations in modern browsers. Fixed to use `typeof GFWL === 'undefined'`.
+- **GFWL manifest links use `download-ssl.xbox.com`** — Manifest badge links in the GFWL HTML tab now point to `download-ssl.xbox.com` (bypasses Akamai ACL that blocks `download.xbox.com`).
+- **Robust HTML init** — Wrapped the page initialisation chain in `try/catch` so a JS error in one section (e.g. missing library data) no longer prevents the GFWL tab from rendering.
 
 ## What's New in v1.4
 
