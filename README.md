@@ -1,8 +1,17 @@
 # Xbox Collection Tracker (XCT)
 
-**v1.3**
+**v1.4**
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
+
+## What's New in v1.4
+
+- **GFWL Game Downloader `[J]`** — Downloads Games for Windows - LIVE packages directly from Microsoft's CDN (`download-ssl.xbox.com`). Lists all 71 GFWL achievement games with package counts and sizes. Select a game, choose which packages to download, and XCT automatically extracts with 7-Zip and launches the installer (`Game.msi` / `Setup.exe`).
+  - Package types are labelled: **Base** (main installer), **DLC**, **Content** (game data chunks for games with no standard installer), **Trailer** (bonus video bundled alongside games that have a Base installer), **Config** (tiny license blobs).
+  - Falls back to an alternate CDN suffix format when the stored offer ID returns 404.
+  - Downloads resume automatically if interrupted.
+  - Default download folder: `gfwl_downloads/` inside the XCT directory.
+- **GFWL tab in HTML** — The generated HTML page now includes a searchable GFWL tab showing all 71 achievement games with manifest link badges per package (green = Base, blue = DLC/Pack). Includes Legend of the Galactic Heroes (`銀河英雄伝説`, title ID `424107DF`).
 
 ## What's New in v1.3
 

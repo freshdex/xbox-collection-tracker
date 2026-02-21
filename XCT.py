@@ -31,6 +31,7 @@ import json
 import os
 import re
 import ssl
+import subprocess
 import struct
 import sys
 import time
@@ -57,7 +58,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "1.3"
+VERSION = "1.4"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -3082,6 +3083,13 @@ def build_html_template(gamertag=""):
         '.gtbl th.sortable::after{content:"";display:inline-block;width:0;height:0;margin-left:5px;vertical-align:middle;border-left:4px solid transparent;border-right:4px solid transparent;border-bottom:4px solid #555}\n'
         '.gtbl th.sort-asc::after{border-bottom:4px solid #107c10;border-top:none}\n'
         '.gtbl th.sort-desc::after{border-bottom:none;border-top:4px solid #107c10}\n'
+        '.gfwl-table td{padding:5px 8px;vertical-align:middle}\n'
+        '.gfwl-nopkg td{opacity:0.5}\n'
+        '.gfwl-links{white-space:nowrap}\n'
+        '.gfwl-mlink{display:inline-block;margin:1px 2px;padding:2px 6px;border-radius:4px;font-size:11px;text-decoration:none;background:#1e3a2e;color:#4ec9a0;border:1px solid #2a5c42}\n'
+        '.gfwl-mlink:hover{background:#2a5c42}\n'
+        '.gfwl-base{background:#1e3a2e;color:#4ec9a0;padding:1px 5px;border-radius:3px;font-size:10px}\n'
+        '.gfwl-dlc{background:#1e2a3a;color:#4ea0c9;padding:1px 5px;border-radius:3px;font-size:10px}\n'
         '.cb-drop{position:relative;display:inline-block}\n'
         '.cb-btn{padding:7px 10px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;user-select:none}\n'
         '.cb-btn:hover{border-color:#555}\n'
@@ -3239,6 +3247,7 @@ def build_html_template(gamertag=""):
         '<div class="tab" id="tab-ph" onclick="switchTab(\'playhistory\',this)" style="display:none">Play History <span class="cnt" id="tab-ph-cnt"></span></div>\n'
         '<div class="tab" id="tab-hist" onclick="switchTab(\'history\',this)" style="display:none">Scan Log <span class="cnt" id="tab-hist-cnt"></span></div>\n'
         '<div class="tab" id="tab-acct" onclick="switchTab(\'gamertags\',this)" style="display:none">Gamertags <span class="cnt" id="tab-acct-cnt"></span></div>\n'
+        '<div class="tab" id="tab-gfwl" onclick="switchTab(\'gfwl\',this)" style="display:none">GFWL <span class="cnt" id="tab-gfwl-cnt"></span></div>\n'
         '<select id="lib-cur" class="tab-cur" onchange="_onCur()">'
         '<option value="USD" selected>USD $</option>'
         '<option value="EUR">EUR €</option>'
@@ -3424,6 +3433,14 @@ def build_html_template(gamertag=""):
         '<h2>Gamertags</h2>\n'
         '<p class="sub" id="acct-sub"></p>\n'
         '<div id="acct-table"></div>\n'
+        '</div>\n'
+
+        # -- GFWL section --
+        '<div class="section" id="gfwl">\n'
+        '<h2>Games for Windows - LIVE</h2>\n'
+        '<p class="sub" id="gfwl-sub"></p>\n'
+        '<div class="search-row"><input type="text" id="gfwl-search" placeholder="Search GFWL games..." oninput="filterGFWL()"></div>\n'
+        '<div id="gfwl-list"></div>\n'
         '</div>\n'
 
         # -- Context menu + Modal --
@@ -4450,7 +4467,30 @@ def build_html_template(gamertag=""):
 
         "if(GP.length){const _gpPids=new Set(GP.map(g=>g.productId));"
         "LIB.forEach(x=>{x.onGamePass=_gpPids.has(x.productId)})}\n"
-        'initDropdowns();filterLib();filterPH();filterGP();filterMKT();renderHistory();\n'
+
+        # -- GFWL tab logic --
+        "let _gfwlQ='';\n"
+        "function filterGFWL(){_gfwlQ=document.getElementById('gfwl-search').value.toLowerCase().trim();renderGFWL();}\n"
+        "function renderGFWL(){\n"
+        "  const el=document.getElementById('gfwl-list');\n"
+        "  if(!el||!window.GFWL||!GFWL.length)return;\n"
+        "  document.getElementById('tab-gfwl').style.display='';\n"
+        "  const filtered=GFWL.filter(g=>!_gfwlQ||g.name.toLowerCase().includes(_gfwlQ)||g.tid.toLowerCase().includes(_gfwlQ));\n"
+        "  document.getElementById('tab-gfwl-cnt').textContent=filtered.length;\n"
+        "  document.getElementById('gfwl-sub').textContent=GFWL.length+' achievement games · '+filtered.length+' shown';\n"
+        "  function fmtSz(b){if(!b)return '-';if(b>=1e9)return(b/1e9).toFixed(1)+' GB';if(b>=1e6)return(b/1e6).toFixed(0)+' MB';return(b/1024).toFixed(0)+' KB';}\n"
+        "  function offerLabel(s){if(s==='e0000001')return '<span class=\"gfwl-base\">Base</span>';if(s.startsWith('e000'))return '<span class=\"gfwl-dlc\">DLC</span>';return '<span class=\"gfwl-dlc\">Pack</span>';}\n"
+        "  let h='<table class=\"gtbl gfwl-table\" style=\"width:100%\"><thead><tr><th>Game</th><th>Title ID</th><th class=\"num\">Pkgs</th><th class=\"num\">Size</th><th>Manifest Links</th></tr></thead><tbody>';\n"
+        "  filtered.forEach(g=>{\n"
+        "    const hasPkgs=g.packages&&g.packages.length>0;\n"
+        "    const pkgHtml=hasPkgs?g.packages.slice(0,8).map(p=>`<a class=\"gfwl-mlink\" href=\"${p.manifest_url}\" target=\"_blank\" title=\"${p.content_id}\\n${fmtSz(p.package_size)}\">${offerLabel(p.offer_suffix)}</a>`).join('')+(g.packages.length>8?` <span style=\"color:#888\">+${g.packages.length-8} more</span>`:''):'<span style=\"color:#888\">—</span>';\n"
+        "    h+=`<tr class=\"${hasPkgs?'':'gfwl-nopkg'}\"><td>${g.name}</td><td class=\"gt-mono\" style=\"font-size:11px\">${g.tid}${g.short_id?' <span style=\"color:#888\">(${g.short_id})</span>':''}</td><td class=\"num\">${hasPkgs?g.packages.length:'—'}</td><td class=\"num\">${fmtSz(g.total_size)}</td><td class=\"gfwl-links\">${pkgHtml}</td></tr>`;\n"
+        "  });\n"
+        "  h+='</tbody></table>';\n"
+        "  el.innerHTML=h;\n"
+        "}\n"
+
+        'initDropdowns();filterLib();filterPH();filterGP();filterMKT();renderHistory();renderGFWL();\n'
         "document.getElementById('loading-overlay').style.display='none';\n"
         '</script></body></html>'
     )
@@ -4493,6 +4533,40 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
         except Exception:
             pass
 
+    # Load GFWL achievement games catalog
+    GFWL_71_TIDS = {
+        '4E4D0FA2','48450FA0','4D530FA3','534307FF','5343080C','57520FA0',
+        '5A450FA0','534307FA','5454085C','5454086F','58410A6D','415807D5',
+        '45410935','58410A1C','44540FA0','4E4D0FA1','43430803','4343080E',
+        '43430FA2','434D0820','434D0FA0','434D0831','434D0FA1','4D53090A',
+        '425307D6','454D07D4','434D082F','4D530901','4D530842','57520FA3',
+        '5454083B','4D53080F','4D5707E4','4D530FA7','4D530FA8','5451081F',
+        '534307EB','43430808','434307DE','584109F1','4D5308D2','57520FA2',
+        '4D530FA5','434D083E','58410A10','41560829','54510837','434307F7',
+        '43430FA1','48450FA1','535007E3','544707D4','4D5307D6','4C4107EB',
+        '53450826','434307F4','43430FA5','43430FA0','49470FA1','534507F6',
+        '584109EB','4D530FA2','425607F3','534507F0','5345082C','53450FA2',
+        '4D530841','5451082D','58410A01','584109F0',
+        '424107DF',  # Legend of the Galactic Heroes
+    }
+    gfwl_data = []
+    gfwl_file = os.path.join(SCRIPT_DIR, "gfwl_links.json")
+    if os.path.isfile(gfwl_file):
+        try:
+            gfwl_raw = load_json(gfwl_file) or {}
+            for tid, v in gfwl_raw.items():
+                if tid in GFWL_71_TIDS:
+                    gfwl_data.append({
+                        'tid': tid,
+                        'name': v['name'],
+                        'short_id': v.get('short_id', ''),
+                        'packages': v.get('packages', []),
+                        'total_size': v.get('total_size', 0),
+                    })
+            gfwl_data.sort(key=lambda x: x['name'].lower())
+        except Exception:
+            pass
+
     content = (
         "const LIB=" + json.dumps(library, ensure_ascii=False) + ";\n"
         "const GP=" + json.dumps(gp_items, ensure_ascii=False) + ";\n"
@@ -4504,6 +4578,7 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
         "const RATES=" + json.dumps(rates, ensure_ascii=False) + ";\n"
         "const GC_FACTOR=" + str(GC_FACTOR) + ";\n"
         "const USB_DB=" + json.dumps(usb_db, ensure_ascii=False) + ";\n"
+        "const GFWL=" + json.dumps(gfwl_data, ensure_ascii=False) + ";\n"
     )
     with open(data_js_path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -7601,6 +7676,9 @@ def _download_with_progress(url, dest_file, expected_size=0):
             print()
             return downloaded - resume_from
     except urllib.error.HTTPError as e:
+        if e.code == 416:
+            print(f"    Already complete, skipping.")
+            return 0
         print(f"\n    [!] HTTP {e.code}: {e.reason}")
         return -1
     except Exception as e:
@@ -8184,6 +8262,267 @@ def _cdn_refresh_wu_links(wu_cat_id, timeout=20):
     return _wu_catalog_get_links(uid_infos, timeout=timeout)
 
 
+def process_gfwl_download():
+    """
+    Download GFWL (Games for Windows - LIVE) game packages.
+    Uses download-ssl.xbox.com which bypasses the Akamai 403 block on download.xbox.com.
+    URL format: http://download-ssl.xbox.com/content/gfwl/{TID}/{SHA1}_{N}.cab
+    """
+    GFWL_71_TIDS = {
+        '4E4D0FA2','48450FA0','4D530FA3','534307FF','5343080C','57520FA0',
+        '5A450FA0','534307FA','5454085C','5454086F','58410A6D','415807D5',
+        '45410935','58410A1C','44540FA0','4E4D0FA1','43430803','4343080E',
+        '43430FA2','434D0820','434D0FA0','434D0831','434D0FA1','4D53090A',
+        '425307D6','454D07D4','434D082F','4D530901','4D530842','57520FA3',
+        '5454083B','4D53080F','4D5707E4','4D530FA7','4D530FA8','5451081F',
+        '534307EB','43430808','434307DE','584109F1','4D5308D2','57520FA2',
+        '4D530FA5','434D083E','58410A10','41560829','54510837','434307F7',
+        '43430FA1','48450FA1','535007E3','544707D4','4D5307D6','4C4107EB',
+        '53450826','434307F4','43430FA5','43430FA0','49470FA1','534507F6',
+        '584109EB','4D530FA2','425607F3','534507F0','5345082C','53450FA2',
+        '4D530841','5451082D','58410A01','584109F0',
+        '424107DF',  # Legend of the Galactic Heroes
+    }
+
+    gfwl_file = os.path.join(SCRIPT_DIR, "gfwl_links.json")
+    if not os.path.isfile(gfwl_file):
+        print("[!] gfwl_links.json not found.")
+        return
+
+    try:
+        gfwl_raw = load_json(gfwl_file) or {}
+    except Exception as e:
+        print(f"[!] Error loading gfwl_links.json: {e}")
+        return
+
+    games = []
+    for tid, v in gfwl_raw.items():
+        if tid in GFWL_71_TIDS:
+            games.append({
+                'tid': tid,
+                'name': v.get('name', tid),
+                'packages': v.get('packages', []),
+                'total_size': v.get('total_size', 0),
+            })
+    games.sort(key=lambda x: x['name'].lower())
+
+    if not games:
+        print("[!] No GFWL achievement games found in gfwl_links.json.")
+        return
+
+    def fmt_size(b):
+        if not b:
+            return '?'
+        if b >= 1e9:
+            return f"{b/1e9:.2f}GB"
+        if b >= 1e6:
+            return f"{b/1e6:.0f}MB"
+        return f"{b//1024}KB"
+
+    print(f"\n[GFWL Game Downloader]  {len(games)} achievement games")
+    print()
+    print(f"  {'#':>3}  {'Title ID':>10}  {'Pkgs':>4}  {'Size':>9}  Name")
+    print("  " + "─" * 75)
+    for i, g in enumerate(games, 1):
+        pkg_count = len(g['packages'])
+        flag = '' if pkg_count else '  (no pkg data)'
+        print(f"  {i:>3}  {g['tid']:>10}  {pkg_count:>4}  {fmt_size(g['total_size']):>9}  {g['name']}{flag}")
+    print()
+
+    game = None
+    while game is None:
+        sel = input(f"  Select [1-{len(games)}]: ").strip()
+        try:
+            idx = int(sel) - 1
+            if 0 <= idx < len(games):
+                game = games[idx]
+            else:
+                print("  Out of range.")
+        except ValueError:
+            print("  Enter a number.")
+
+    pkgs = game['packages']
+    if not pkgs:
+        print(f"\n[!] {game['name']} has no package data in gfwl_links.json.")
+        return
+
+    has_base = any(p.get('offer_suffix') == 'e0000001' for p in pkgs)
+
+    def offer_label(s):
+        if s == 'e0000001':
+            return 'Base'
+        if s.startswith('e0000'):
+            try:
+                n = int(s[5:], 16)
+                return f'DLC-{n - 1}'
+            except ValueError:
+                return 'DLC'
+        # 0ecf/0100/0130/0140 = tiny service/license config blobs
+        if s[:4] in ('0ecf', '0100', '0130', '0140', '0200', '022f', '033f', '0002'):
+            return 'Config'
+        # 0ebf/0edf/0ec0/0ccf/0bbf/0ebd = game content chunks OR trailers
+        # When a Base installer exists, these are supplementary (trailers/bonus video)
+        if s[:4] in ('0ebf', '0edf', '0ec0', '0ccf', '0bbf', '0ebd'):
+            return 'Trailer' if has_base else 'Content'
+        return 'Pack'
+
+    print(f"\n  Selected: {game['name']}  [{game['tid']}]")
+    print()
+
+    # Summarise what types are present so the user knows what to download
+    labels      = [offer_label(p.get('offer_suffix', '')) for p in pkgs]
+    has_trailer = 'Trailer' in labels
+    has_content = 'Content' in labels
+    has_config  = 'Config'  in labels
+    if has_base:
+        legend = "  Type legend:  Base = main game installer  |  DLC = paid DLC"
+        if has_trailer: legend += "  |  Trailer = bonus video/trailer"
+        if has_config:  legend += "  |  Config = tiny license config"
+        print(legend)
+    else:
+        print("  Note: no standard Base installer — Content chunks ARE the game (download all Content)")
+    print()
+    print(f"  {'#':>3}  {'Type':>7}  {'Offer ID':>10}  {'Size':>9}  SHA-1 Content ID")
+    print("  " + "─" * 78)
+    for i, p in enumerate(pkgs, 1):
+        s = p.get('offer_suffix', '')
+        label = offer_label(s)
+        cid = p.get('content_id', '?')
+        size = fmt_size(p.get('package_size', 0))
+        print(f"  {i:>3}  {label:>7}  {s:>10}  {size:>9}  {cid}")
+    print()
+
+    pkg_sel = input(f"  Download which? [1-{len(pkgs)}, or Enter for all]: ").strip()
+
+    if not pkg_sel:
+        selected_pkgs = pkgs
+    else:
+        indices = _parse_selection(pkg_sel.replace(',', ' '), len(pkgs))
+        selected_pkgs = [pkgs[i] for i in indices]
+
+    if not selected_pkgs:
+        print("[!] Nothing selected.")
+        return
+
+    default_dest = os.path.join(SCRIPT_DIR, "gfwl_downloads")
+    print()
+    dest = input(f"  Destination folder [Enter for {default_dest}]: ").strip().strip('"').strip("'")
+    if not dest:
+        dest = default_dest
+
+    safe_name = "".join(c if c.isalnum() or c in " ._-" else "_" for c in game['name']).strip()
+    game_dir = os.path.join(dest, safe_name)
+    os.makedirs(game_dir, exist_ok=True)
+    print(f"\n  Saving to: {game_dir}")
+
+    tid_upper = game['tid'].upper()
+    tid_lower = game['tid'].lower()
+
+    for pkg in selected_pkgs:
+        s     = pkg.get('offer_suffix', '')
+        sha1  = pkg.get('content_id', '').upper()
+        label = offer_label(s)
+        print(f"\n  ▸ {label} ({s})")
+
+        if label in ('Base', 'DLC'):
+            # Standard catalog offers: /content/gfwl/{TID}/{SHA1}_{N}.cab
+            if not sha1:
+                print("    [!] No content_id for this package, skipping.")
+                continue
+            parts = []
+            for n in range(1, 50):
+                url = f"http://download-ssl.xbox.com/content/gfwl/{tid_upper}/{sha1}_{n}.cab"
+                sys.stdout.write(f"    Probing part {n}...    \r")
+                sys.stdout.flush()
+                ok = _cdn_head(url)
+                if ok:
+                    parts.append(url)
+                else:
+                    break
+            sys.stdout.write("                          \r")
+            if not parts:
+                print(f"    [!] No parts found (all 404).")
+                continue
+            print(f"    {len(parts)} part(s) found.")
+            for url in parts:
+                fname = url.rsplit("/", 1)[-1]
+                _download_with_progress(url, os.path.join(game_dir, fname))
+        else:
+            # Content/Config/Pack: /content/{tid}/{tid}{offer_suffix}.cab  (single file)
+            # Build a list of candidate suffixes: stored value first, then try with 0e prefix
+            # (data sometimes records 0bbf/0cbf/0dbf when the CDN actually uses 0ebf etc.)
+            candidates = [s]
+            if len(s) >= 4 and s[0] == '0' and s[1] != 'e' and s[2:4] in ('bf', 'cf', 'df'):
+                candidates.append('0e' + s[2:])
+            found_url = None
+            for cand in candidates:
+                u = f"http://download-ssl.xbox.com/content/{tid_lower}/{tid_lower}{cand}.cab"
+                sys.stdout.write(f"    Probing {cand}...    \r")
+                sys.stdout.flush()
+                if _cdn_head(u):
+                    found_url = u
+                    break
+            sys.stdout.write("                          \r")
+            if not found_url:
+                tried = ', '.join(candidates)
+                print(f"    [!] Not found (404) — tried: {tried}")
+                continue
+            fname = found_url.rsplit("/", 1)[-1]
+            _download_with_progress(found_url, os.path.join(game_dir, fname))
+
+    print(f"\n[+] Download complete. Files in: {game_dir}")
+
+    # --- Auto-extract with 7-Zip ---
+    sz = None
+    for path in [r"C:\Program Files\7-Zip\7z.exe",
+                 r"C:\Program Files (x86)\7-Zip\7z.exe"]:
+        if os.path.isfile(path):
+            sz = path
+            break
+    if not sz:
+        try:
+            r = subprocess.run(["where", "7z"], capture_output=True, text=True)
+            if r.returncode == 0:
+                sz = r.stdout.strip().splitlines()[0]
+        except Exception:
+            pass
+
+    if not sz:
+        print("\n  [!] 7-Zip not found. Extract .cab files manually and run Game.msi / Setup.exe.")
+        return
+
+    cab_files = sorted(f for f in os.listdir(game_dir) if f.lower().endswith('.cab'))
+    installer = None
+    for cab in cab_files:
+        cab_path   = os.path.join(game_dir, cab)
+        extract_dir = os.path.join(game_dir, os.path.splitext(cab)[0])
+        os.makedirs(extract_dir, exist_ok=True)
+        print(f"\n  Extracting {cab}...")
+        r = subprocess.run([sz, 'x', cab_path, f'-o{extract_dir}', '-y'],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"  [!] 7-Zip error: {r.stderr.strip()[:200]}")
+            continue
+        # Search for installer inside extracted tree
+        for root, _dirs, files in os.walk(extract_dir):
+            for fname in files:
+                if fname.lower() in ('game.msi', 'setup.msi', 'setup.exe', 'install.exe'):
+                    installer = os.path.join(root, fname)
+                    break
+            if installer:
+                break
+
+    if not installer:
+        print(f"\n  No installer found in extracted files. Check: {game_dir}")
+        return
+
+    print(f"\n  Launching installer: {installer}")
+    if installer.lower().endswith('.msi'):
+        subprocess.Popen(['msiexec', '/i', installer])
+    else:
+        subprocess.Popen([installer])
+
+
 def process_cdn_version_discovery():
     """
     Discover older Xbox game package versions.
@@ -8459,11 +8798,12 @@ def interactive_menu():
         print("    [U] Scan USB drive (index Xbox external drive)")
         print("    [I] Save USB drive metadata to database (usb_db.json)")
         print("    [K] Discover older CDN versions (probe prior versions from USB DB)")
+        print("    [J] GFWL Game Downloader (Games for Windows - LIVE packages)")
         print("    [V] Xbox Drive Converter (PC ↔ Xbox MBR mode)")
         print("    [Q] Quit")
         print()
 
-        pick = input(f"  Pick [0, E, T, S, G, M, L, P, N, C, F, W, Z, H, Y, A, R, D, *, X, B, U, I, K, V, Q]: ").strip()
+        pick = input(f"  Pick [0, E, T, S, G, M, L, P, N, C, F, W, Z, H, Y, A, R, D, *, X, B, U, I, K, J, V, Q]: ").strip()
         pu = pick.upper()
 
         if pu == "Q":
@@ -8811,6 +9151,9 @@ def interactive_menu():
             continue
         elif pu == "K":
             process_cdn_version_discovery()
+            continue
+        elif pu == "J":
+            process_gfwl_download()
             continue
         elif pu == "V":
             process_drive_converter()
