@@ -8498,9 +8498,10 @@ def process_gfwl_download():
             # Content/Config/Pack: /content/{tid}/{tid}{offer_suffix}.cab  (single file)
             # Build a list of candidate suffixes: stored value first, then try with 0e prefix
             # (data sometimes records 0bbf/0cbf/0dbf when the CDN actually uses 0ebf etc.)
-            candidates = [s]
+            candidates = [s.upper(), s]
             if len(s) >= 4 and s[0] == '0' and s[1] != 'e' and s[2:4] in ('bf', 'cf', 'df'):
-                candidates.append('0e' + s[2:])
+                fallback = '0e' + s[2:]
+                candidates.extend([fallback.upper(), fallback])
             found_url = None
             for cand in candidates:
                 u = f"http://download-ssl.xbox.com/content/{tid_lower}/{tid_lower}{cand}.cab"
