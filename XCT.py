@@ -4473,7 +4473,7 @@ def build_html_template(gamertag=""):
         "function filterGFWL(){_gfwlQ=document.getElementById('gfwl-search').value.toLowerCase().trim();renderGFWL();}\n"
         "function renderGFWL(){\n"
         "  const el=document.getElementById('gfwl-list');\n"
-        "  if(!el||!window.GFWL||!GFWL.length)return;\n"
+        "  if(!el||typeof GFWL==='undefined'||!GFWL.length)return;\n"
         "  document.getElementById('tab-gfwl').style.display='';\n"
         "  const filtered=GFWL.filter(g=>!_gfwlQ||g.name.toLowerCase().includes(_gfwlQ)||g.tid.toLowerCase().includes(_gfwlQ));\n"
         "  document.getElementById('tab-gfwl-cnt').textContent=filtered.length;\n"
@@ -4483,14 +4483,15 @@ def build_html_template(gamertag=""):
         "  let h='<table class=\"gtbl gfwl-table\" style=\"width:100%\"><thead><tr><th>Game</th><th>Title ID</th><th class=\"num\">Pkgs</th><th class=\"num\">Size</th><th>Manifest Links</th></tr></thead><tbody>';\n"
         "  filtered.forEach(g=>{\n"
         "    const hasPkgs=g.packages&&g.packages.length>0;\n"
-        "    const pkgHtml=hasPkgs?g.packages.slice(0,8).map(p=>`<a class=\"gfwl-mlink\" href=\"${p.manifest_url}\" target=\"_blank\" title=\"${p.content_id}\\n${fmtSz(p.package_size)}\">${offerLabel(p.offer_suffix)}</a>`).join('')+(g.packages.length>8?` <span style=\"color:#888\">+${g.packages.length-8} more</span>`:''):'<span style=\"color:#888\">—</span>';\n"
+        "    const pkgHtml=hasPkgs?g.packages.slice(0,8).map(p=>`<a class=\"gfwl-mlink\" href=\"${p.manifest_url.replace('download.xbox.com','download-ssl.xbox.com')}\" target=\"_blank\" title=\"${p.content_id}\\n${fmtSz(p.package_size)}\">${offerLabel(p.offer_suffix)}</a>`).join('')+(g.packages.length>8?` <span style=\"color:#888\">+${g.packages.length-8} more</span>`:''):'<span style=\"color:#888\">—</span>';\n"
         "    h+=`<tr class=\"${hasPkgs?'':'gfwl-nopkg'}\"><td>${g.name}</td><td class=\"gt-mono\" style=\"font-size:11px\">${g.tid}${g.short_id?' <span style=\"color:#888\">(${g.short_id})</span>':''}</td><td class=\"num\">${hasPkgs?g.packages.length:'—'}</td><td class=\"num\">${fmtSz(g.total_size)}</td><td class=\"gfwl-links\">${pkgHtml}</td></tr>`;\n"
         "  });\n"
         "  h+='</tbody></table>';\n"
         "  el.innerHTML=h;\n"
         "}\n"
 
-        'initDropdowns();filterLib();filterPH();filterGP();filterMKT();renderHistory();renderGFWL();\n'
+        'try{initDropdowns();filterLib();filterPH();filterGP();filterMKT();renderHistory();}catch(e){console.error("init error",e)}\n'
+        'renderGFWL();\n'
         "document.getElementById('loading-overlay').style.display='none';\n"
         '</script></body></html>'
     )
@@ -8798,7 +8799,7 @@ def interactive_menu():
         print("    [U] Scan USB drive (index Xbox external drive)")
         print("    [I] Save USB drive metadata to database (usb_db.json)")
         print("    [K] Discover older CDN versions (probe prior versions from USB DB)")
-        print("    [J] GFWL Game Downloader (Games for Windows - LIVE packages)")
+        print("    [J] Games for Windows Live (GFWL) Game and DLC Installer")
         print("    [V] Xbox Drive Converter (PC ↔ Xbox MBR mode)")
         print("    [Q] Quit")
         print()

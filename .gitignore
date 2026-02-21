@@ -10,6 +10,7 @@ exchange_rates.json
 # Cached API responses & generated files
 *.json
 !tags.json
+!gfwl_links.json
 !requirements.txt
 *.html
 *.js
