@@ -58,7 +58,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "1.5"
+VERSION = "1.6"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -641,10 +641,18 @@ def device_code_auth():
     device_code = resp["device_code"]
     interval = resp.get("interval", 5)
 
+    # Copy code to clipboard if possible
+    try:
+        import subprocess as _sp
+        _sp.Popen(["clip"], stdin=_sp.PIPE, creationflags=0x08000000).communicate(user_code.encode())
+        _clip_ok = True
+    except Exception:
+        _clip_ok = False
+
     print()
     print("=" * 56)
     print(f"  Go to:   {verification_uri}")
-    print(f"  Enter:   {user_code}")
+    print(f"  Enter:   {user_code}" + ("  (copied to clipboard)" if _clip_ok else ""))
     print("=" * 56)
     print()
     print("[*] Waiting for you to sign in...")
@@ -1668,6 +1676,19 @@ def print_header():
     print()
     print(f"  Xbox Collection Tracker by Freshdex v{VERSION}")
     print()
+
+
+def _op_summary(label, success=True, detail="", elapsed=0):
+    """Print a post-operation summary banner."""
+    mark = "+" if success else "!"
+    m, s = divmod(int(elapsed), 60)
+    time_str = f"{m}m {s:02d}s" if m else f"{s}s"
+    print()
+    print(f"  [{mark}] {label}  [{time_str}]")
+    if detail:
+        print(f"      {detail}")
+    print()
+    input("  Press Enter to continue...")
 
 
 def banner(gamertag=None):
@@ -3273,6 +3294,19 @@ def build_html_template(gamertag=""):
         '.hist-diff{font-size:10px;color:#666;padding-left:24px}\n'
         '.hist-diff .old{color:#f44336;text-decoration:line-through}\n'
         '.hist-diff .new{color:#4caf50}\n'
+        '/* Import/Export buttons */\n'
+        '.xct-iobtn{background:#222;color:#aaa;border:1px solid #444;padding:4px 10px;font-size:11px;cursor:pointer;border-radius:3px}\n'
+        '.xct-iobtn:hover{background:#333;color:#fff}\n'
+        '/* Import badge on library cards */\n'
+        '.imp-badge{display:inline-block;background:#444;color:#aaa;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;vertical-align:middle}\n'
+        '/* Imports section cards */\n'
+        '.imp-card{background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:12px 16px;margin:8px 0;display:flex;justify-content:space-between;align-items:center}\n'
+        '.imp-left{flex:1}\n'
+        '.imp-label{font-size:14px;color:#e0e0e0;font-weight:bold}\n'
+        '.imp-meta{font-size:11px;color:#888;margin-top:4px}\n'
+        '.imp-gts{font-size:11px;color:#666;margin-top:2px}\n'
+        '.imp-rm{background:#c62828;color:#fff;border:none;padding:4px 12px;font-size:11px;cursor:pointer;border-radius:3px}\n'
+        '.imp-rm:hover{background:#e53935}\n'
         '</style>\n'
         '</head>\n'
         '<body>\n'
@@ -3294,6 +3328,7 @@ def build_html_template(gamertag=""):
         '<div class="tab" id="tab-hist" onclick="switchTab(\'history\',this)" style="display:none">Scan Log <span class="cnt" id="tab-hist-cnt"></span></div>\n'
         '<div class="tab" id="tab-acct" onclick="switchTab(\'gamertags\',this)" style="display:none">Gamertags <span class="cnt" id="tab-acct-cnt"></span></div>\n'
         '<div class="tab" id="tab-gfwl" onclick="switchTab(\'gfwl\',this)" style="display:none">GFWL <span class="cnt" id="tab-gfwl-cnt"></span></div>\n'
+        '<div class="tab" id="tab-imp" onclick="switchTab(\'imports\',this)" style="display:none">Imports <span class="cnt" id="tab-imp-cnt"></span></div>\n'
         '<select id="lib-cur" class="tab-cur" onchange="_onCur()">'
         '<option value="USD" selected>USD $</option>'
         '<option value="EUR">EUR €</option>'
@@ -3352,7 +3387,12 @@ def build_html_template(gamertag=""):
         '<div class="section active" id="library">\n'
         '<p class="sub" id="lib-sub"></p>\n'
         '<div class="cbar" id="lib-cbar"></div>\n'
-        '<div class="search-row"><input type="text" id="lib-search" placeholder="Search library..." oninput="filterLib()"></div>\n'
+        '<div class="search-row" style="display:flex;gap:8px;align-items:center">'
+        '<input type="text" id="lib-search" placeholder="Search library..." oninput="filterLib()" style="flex:1">'
+        '<button class="xct-iobtn" onclick="xctExport()" title="Export your library as a shareable JSON file">Export</button>'
+        '<button class="xct-iobtn" onclick="document.getElementById(\'imp-file\').click()" title="Import a library from a JSON file">Import</button>'
+        '<input type="file" id="imp-file" accept=".json" style="display:none" onchange="xctImport(this)">'
+        '</div>\n'
         '<div class="filters">\n'
         '<div class="pill" onclick="clearAllFilters()" title="Reset all checkbox filters to default">Clear Filters</div>\n'
         '<div class="cb-drop" id="lib-gamertag" style="display:none"><div class="cb-btn" onclick="toggleCB(this)">Gamertag &#9662;</div><div class="cb-panel"></div></div>\n'
@@ -3481,6 +3521,17 @@ def build_html_template(gamertag=""):
         '<div id="acct-table"></div>\n'
         '</div>\n'
 
+        # -- Imports section --
+        '<div class="section" id="imports">\n'
+        '<h2>Imports</h2>\n'
+        '<p class="sub" id="imp-sub"></p>\n'
+        '<div style="margin-bottom:12px">'
+        '<button class="xct-iobtn" onclick="document.getElementById(\'imp-file2\').click()">Import Collection</button>'
+        '<input type="file" id="imp-file2" accept=".json" style="display:none" onchange="xctImport(this)">'
+        '</div>\n'
+        '<div id="imp-list"></div>\n'
+        '</div>\n'
+
         # -- GFWL section --
         '<div class="section" id="gfwl">\n'
         '<h2>Games for Windows - LIVE</h2>\n'
@@ -3571,8 +3622,10 @@ def build_html_template(gamertag=""):
         "function clearAllFilters(){"
         "document.querySelectorAll('#library .cb-panel input[type=checkbox]').forEach(c=>c.checked=true);"
         "document.querySelectorAll('#library .cb-clear').forEach(c=>c.textContent='Clear All');"
-        "document.getElementById('lib-gp').value='owned';"
+        "document.getElementById('lib-gp').value='all';"
         "document.getElementById('lib-dlc').value='all';"
+        "document.getElementById('lib-sort').value='name';libSortCol=null;"
+        "document.getElementById('lib-search').value='';"
         "filterLib()}\n"
         "document.addEventListener('click',function(e){"
         "if(!e.target.closest('.cb-drop'))document.querySelectorAll('.cb-panel.open').forEach(p=>p.classList.remove('open'))});\n"
@@ -3607,28 +3660,29 @@ def build_html_template(gamertag=""):
         "clr.textContent=anyOn?'Clear All':'Select All';}));"
         "panel.appendChild(clr);}\n"
         # Publishers
-        "const pubs={};LIB.forEach(x=>{const p=x.publisher||'';if(p)pubs[p]=(pubs[p]||0)+1});\n"
+        "const _all=LIB.concat(_impLib||[]);\n"
+        "const pubs={};_all.forEach(x=>{const p=x.publisher||'';if(p)pubs[p]=(pubs[p]||0)+1});\n"
         "fill('lib-pub',Object.entries(pubs).sort((a,b)=>b[1]-a[1]).map(([p,c])=>[p,p+' ('+c+')']),\'filterLib\');\n"
         # Developers
-        "const devs={};LIB.forEach(x=>{const d=x.developer||'';if(d)devs[d]=(devs[d]||0)+1});\n"
+        "const devs={};_all.forEach(x=>{const d=x.developer||'';if(d)devs[d]=(devs[d]||0)+1});\n"
         "fill('lib-dev',Object.entries(devs).sort((a,b)=>b[1]-a[1]).map(([d,c])=>[d,d+' ('+c+')']),\'filterLib\');\n"
         # SKUs
-        "const skus={};LIB.forEach(x=>{const s=x.skuId||'';if(s)skus[s]=(skus[s]||0)+1});\n"
+        "const skus={};_all.forEach(x=>{const s=x.skuId||'';if(s)skus[s]=(skus[s]||0)+1});\n"
         "fill('lib-sku',Object.entries(skus).sort((a,b)=>b[1]-a[1]).map(([s,c])=>[s,s+' ('+c+')']),\'filterLib\');\n"
         # Categories
-        "const cats={};LIB.forEach(x=>{const c=x.category||'';if(c)cats[c]=(cats[c]||0)+1});\n"
+        "const cats={};_all.forEach(x=>{const c=x.category||'';if(c)cats[c]=(cats[c]||0)+1});\n"
         "fill('lib-cat',Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>[c,c+' ('+n+')']),\'filterLib\');\n"
         # Platforms
-        "const plats={};LIB.forEach(x=>(x.platforms||[]).forEach(p=>{plats[p]=(plats[p]||0)+1}));\n"
+        "const plats={};_all.forEach(x=>(x.platforms||[]).forEach(p=>{plats[p]=(plats[p]||0)+1}));\n"
         "fill('lib-plat',Object.entries(plats).sort((a,b)=>b[1]-a[1]).map(([p,c])=>[p,p+' ('+c+')']),\'filterLib\');\n"
         # Release years
-        "const rys=new Set();LIB.forEach(x=>{const y=(x.releaseDate||'').slice(0,4);if(/^\\d{4}$/.test(y)&&y<'2800')rys.add(y)});\n"
+        "const rys=new Set();_all.forEach(x=>{const y=(x.releaseDate||'').slice(0,4);if(/^\\d{4}$/.test(y)&&y<'2800')rys.add(y)});\n"
         "fill('lib-ryear',[...rys].sort().reverse().map(y=>[y,y]),\'filterLib\');\n"
         # Acquired years
-        "const ays=new Set();LIB.forEach(x=>{const y=(x.acquiredDate||'').slice(0,4);if(/^\\d{4}$/.test(y))ays.add(y)});\n"
+        "const ays=new Set();_all.forEach(x=>{const y=(x.acquiredDate||'').slice(0,4);if(/^\\d{4}$/.test(y))ays.add(y)});\n"
         "fill('lib-ayear',[...ays].sort().reverse().map(y=>[y,y]),\'filterLib\');\n"
         # Gamertags (sorted by USD value desc, showing value)
-        "const gts={};const gtVal={};LIB.forEach(x=>{const g=x.gamertag||'';if(g){gts[g]=(gts[g]||0)+1;gtVal[g]=(gtVal[g]||0)+(x.priceUSD||0)}});\n"
+        "const gts={};const gtVal={};_all.forEach(x=>{const g=x.gamertag||'';if(g){gts[g]=(gts[g]||0)+1;gtVal[g]=(gtVal[g]||0)+(x.priceUSD||0)}});\n"
         "const gtKeys=Object.keys(gts);\n"
         "if(gtKeys.length>1){const el=document.getElementById('lib-gamertag');"
         "el.style.display='';const panel=el.querySelector('.cb-panel');"
@@ -3669,7 +3723,7 @@ def build_html_template(gamertag=""):
         "const _today=new Date().toISOString().slice(0,10);"
         "LIB.forEach(x=>{const rd=x.releaseDate||'';x.isPreOrder=rd>_today&&rd.slice(0,4)<'2100'});\n"
         # Tab counts
-        "document.getElementById('tab-lib-cnt').textContent=LIB.length;\n"
+        "document.getElementById('tab-lib-cnt').textContent=LIB.length+(_impLib?_impLib.length:0);\n"
         "if(PH.length){document.getElementById('tab-ph').style.display='';document.getElementById('tab-ph-cnt').textContent=PH.length}\n"
         "if(GP.length){document.getElementById('tab-gp').style.display='';document.getElementById('tab-gp-cnt').textContent=GP.length}\n"
         "if(HISTORY.length){document.getElementById('tab-hist').style.display='';document.getElementById('tab-hist-cnt').textContent=HISTORY.length+' scans'}\n"
@@ -3705,6 +3759,107 @@ def build_html_template(gamertag=""):
         "function switchTab(id,el){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));"
         "document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));"
         "document.getElementById(id).classList.add('active');el.classList.add('active')}\n"
+
+        # -- Import/Export JS --
+        "const IMP_LS_KEY='xct_imports';\n"
+        "let _impLib=[];\n"
+        "function _esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;')}\n"
+
+        "function _loadImports(){\n"
+        "_impLib=[];\n"
+        "let imps=[];\n"
+        "try{imps=JSON.parse(localStorage.getItem(IMP_LS_KEY)||'[]')}catch(e){return}\n"
+        "imps.forEach(imp=>{\n"
+        "if(!imp.library||!imp.library.length)return;\n"
+        "imp.library.forEach(item=>{\n"
+        "item.gamertag=imp.label;\n"
+        "item._imported=true;\n"
+        "_impLib.push(item);\n"
+        "});\n"
+        "});\n"
+        "}\n"
+
+        "function xctExport(){\n"
+        "const items=LIB.filter(x=>!(x.onGamePass&&!x.owned));\n"
+        "if(!items.length){alert('No items to export.');return}\n"
+        "const gts=[...new Set(items.map(x=>x.gamertag||'').filter(Boolean))];\n"
+        "const stripped=items.map(x=>{\n"
+        "const o=Object.assign({},x);\n"
+        "delete o.description;delete o.heroImage;\n"
+        "delete o.onGamePass;delete o._allGTs;delete o.isPreOrder;\n"
+        "delete o._imported;\n"
+        "return o;\n"
+        "});\n"
+        "const data={xct:1,date:new Date().toISOString().slice(0,10),gamertags:gts,library:stripped};\n"
+        "const blob=new Blob([JSON.stringify(data)],{type:'application/json'});\n"
+        "const a=document.createElement('a');\n"
+        "a.href=URL.createObjectURL(blob);\n"
+        "a.download='xct_export_'+data.date+'.json';\n"
+        "a.click();\n"
+        "URL.revokeObjectURL(a.href);\n"
+        "}\n"
+
+        "function xctImport(input){\n"
+        "const file=input.files[0];\n"
+        "if(!file)return;\n"
+        "const reader=new FileReader();\n"
+        "reader.onload=function(e){\n"
+        "let data;\n"
+        "try{data=JSON.parse(e.target.result)}catch(err){alert('Invalid JSON file.');return}\n"
+        "if(!data.xct||!Array.isArray(data.library)){alert('Not a valid XCT export file.');return}\n"
+        "if(!data.library.length){alert('Export file contains no library items.');return}\n"
+        "const gtCounts={};\n"
+        "data.library.forEach(x=>{const g=x.gamertag||'Unknown';gtCounts[g]=(gtCounts[g]||0)+1});\n"
+        "const sorted=Object.entries(gtCounts).sort((a,b)=>b[1]-a[1]);\n"
+        "let label=sorted[0][0];\n"
+        "if(sorted.length>1)label+=' +'+(sorted.length-1);\n"
+        "const imp={\n"
+        "id:'imp_'+Date.now(),\n"
+        "label:label,\n"
+        "date:data.date||new Date().toISOString().slice(0,10),\n"
+        "gamertags:data.gamertags||sorted.map(x=>x[0]),\n"
+        "count:data.library.length,\n"
+        "library:data.library\n"
+        "};\n"
+        "let imps=[];\n"
+        "try{imps=JSON.parse(localStorage.getItem(IMP_LS_KEY)||'[]')}catch(err){imps=[]}\n"
+        "imps.push(imp);\n"
+        "try{localStorage.setItem(IMP_LS_KEY,JSON.stringify(imps))}\n"
+        "catch(err){alert('Storage full. Remove old imports first.');return}\n"
+        "location.reload();\n"
+        "};\n"
+        "reader.readAsText(file);\n"
+        "input.value='';\n"
+        "}\n"
+
+        "function _removeImport(id){\n"
+        "let imps=[];\n"
+        "try{imps=JSON.parse(localStorage.getItem(IMP_LS_KEY)||'[]')}catch(e){imps=[]}\n"
+        "imps=imps.filter(x=>x.id!==id);\n"
+        "localStorage.setItem(IMP_LS_KEY,JSON.stringify(imps));\n"
+        "location.reload();\n"
+        "}\n"
+
+        "function renderImports(){\n"
+        "let imps=[];\n"
+        "try{imps=JSON.parse(localStorage.getItem(IMP_LS_KEY)||'[]')}catch(e){return}\n"
+        "if(!imps.length)return;\n"
+        "document.getElementById('tab-imp').style.display='';\n"
+        "document.getElementById('tab-imp-cnt').textContent=imps.length;\n"
+        "document.getElementById('imp-sub').textContent=imps.length+' imported collection'+(imps.length>1?'s':'');\n"
+        "const el=document.getElementById('imp-list');\n"
+        "let h='';\n"
+        "imps.forEach(imp=>{\n"
+        "h+='<div class=\"imp-card\"><div class=\"imp-left\">'\n"
+        "+'<div class=\"imp-label\">'+_esc(imp.label)+'</div>'\n"
+        "+'<div class=\"imp-meta\">'+_esc(imp.count)+' items &middot; exported '+_esc(imp.date)+'</div>'\n"
+        "+'<div class=\"imp-gts\">Gamertags: '+imp.gamertags.map(g=>_esc(g)).join(', ')+'</div>'\n"
+        "+'</div>'\n"
+        "+'<button class=\"imp-rm\" onclick=\"_removeImport(\\''+imp.id+'\\')\" >Remove</button>'\n"
+        "+'</div>';\n"
+        "});\n"
+        "el.innerHTML=h;\n"
+        "}\n"
 
         "function setGPFilter(f,el){gpF=f;document.querySelectorAll('#gamepass .pill').forEach(p=>p.classList.remove('active'));"
         "el.classList.add('active');filterGP()}\n"
@@ -3897,7 +4052,7 @@ def build_html_template(gamertag=""):
         "if(txt.nodeType===3){const base=v;txt.textContent=' '+base+' ('+c+')'}})}\n"
         # -- _primaryFilter: apply gamertag/status/type filters --
         "function _primaryFilter(gtVals,sVals,tVals){"
-        "return LIB.filter(item=>{"
+        "return LIB.concat(_impLib||[]).filter(item=>{"
         "if(gtVals&&!gtVals.includes(item.gamertag||''))return false;"
         "if(sVals&&!sVals.includes(item.status))return false;"
         "if(tVals){if(!tVals.length)return false;"
@@ -4073,7 +4228,7 @@ def build_html_template(gamertag=""):
         "return `<div class=\"lv-row ${extraCls}\" onclick=\"showLibDetail('${item.productId}')\" oncontextmenu=\"showFlagMenu(event,'${item.productId}','${st}')\">"
         "${imgHtml}<div class=\"lv-title\" title=\"${(item.title||'').replace(/\"/g,'&quot;')}\">"
         "${item.title||item.productId}${po2}${gp2}${tr2}${fl2}${iv2}${dlcBadge}${usbBadge2}</div>"
-        "<div class=\"lv-type\" style=\"color:#aaa\">${item.gamertag||''}${gtE}</div>"
+        "<div class=\"lv-type\" style=\"color:#aaa\">${item.gamertag||''}${gtE}${item._imported?' <span class=\"imp-badge\">imp</span>':''}</div>"
         "<div class=\"lv-pub\">${item.publisher||''}</div>"
         "<div class=\"lv-pub\">${item.developer||''}</div>"
         "<div class=\"lv-type\">${item.category||''}</div>"
@@ -4114,7 +4269,7 @@ def build_html_template(gamertag=""):
         # Grid view: always flat, render every item
         'gh+=`<div class="lib-card" onclick="showLibDetail(\'${item.productId}\')" oncontextmenu="showFlagMenu(event,\'${item.productId}\',\'${safeTitle}\')">'
         '${img}<div class="info"><div class="ln" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">'
-        '${item.title||item.productId}${poBadge}${gpBadge}${trBadge}${flBadge}${invBadge}${usbBadge}</div>'
+        '${item.title||item.productId}${poBadge}${gpBadge}${trBadge}${flBadge}${invBadge}${usbBadge}${item._imported?\'<span class="imp-badge">imported</span>\':\'\'}</div>'
         '<div class="lm">${item.publisher||\'\'} | ${item.productKind||\'\'} | ${item.category||\'\'} | '
         '<span class="${sc}">${item.status||\'\'}</span>${gtExtra}</div>${pr}</div></div>`;\n'
 
@@ -4536,7 +4691,7 @@ def build_html_template(gamertag=""):
         "  el.innerHTML=h;\n"
         "}\n"
 
-        'try{initDropdowns();filterLib();filterPH();filterGP();filterMKT();renderHistory();}catch(e){console.error("init error",e)}\n'
+        'try{_loadImports();initDropdowns();filterLib();filterPH();filterGP();filterMKT();renderHistory();renderImports();}catch(e){console.error("init error",e)}\n'
         'renderGFWL();\n'
         "document.getElementById('loading-overlay').style.display='none';\n"
         '</script></body></html>'
@@ -7484,11 +7639,45 @@ def _build_catalog_map():
     return catalog_map
 
 
-def process_usb_drive():
+def _build_freshdex_db():
+    """Build Freshdex database: all PC/Windows8x games from cached library data."""
+    seen = {}
+    accounts = load_accounts()
+    for gamertag in accounts:
+        for fname in ("library.json", "marketplace.json"):
+            fpath = account_path(gamertag, fname)
+            if not os.path.isfile(fpath):
+                continue
+            try:
+                items = load_json(fpath) or []
+            except (json.JSONDecodeError, IOError):
+                continue
+            for item in items:
+                pid = item.get("productId", "")
+                if not pid or pid in seen:
+                    continue
+                if item.get("productKind") != "Game":
+                    continue
+                plats = item.get("platforms", [])
+                if not any(p in ("PC", "Windows.Windows8x") for p in plats):
+                    continue
+                seen[pid] = {
+                    "productId": pid,
+                    "title": item.get("title", ""),
+                    "publisher": item.get("publisher", ""),
+                    "category": item.get("category", ""),
+                    "releaseDate": item.get("releaseDate", ""),
+                    "platforms": plats,
+                }
+    return sorted(seen.values(), key=lambda x: x.get("title", "").lower())
+
+
+def process_usb_drive(drive_letter=None):
     """Scan an Xbox USB drive and print/save an indexed game list."""
     print("\n[USB Drive Scanner]")
-    drive_letter = input("  Drive letter (default: E): ").strip() or "E"
-    drive_letter = drive_letter.rstrip(":/\\").upper()
+    if not drive_letter:
+        drive_letter = input("  Drive letter (default: E): ").strip() or "E"
+        drive_letter = drive_letter.rstrip(":/\\").upper()
 
     usb_items = scan_usb_drive(drive_letter)
     if not usb_items:
@@ -7678,7 +7867,7 @@ def backup_usb_games(enriched, drive_path, dest_path, indices=None):
     print(f"[+] Destination: {dest_path}")
 
 
-def _download_with_progress(url, dest_file, expected_size=0):
+def _download_with_progress(url, dest_file, expected_size=0, timeout=120):
     """
     Download url to dest_file with a progress bar. Resumes if a partial file exists.
     Tries each url in turn on failure. Returns bytes downloaded, or -1 on error.
@@ -7698,7 +7887,7 @@ def _download_with_progress(url, dest_file, expected_size=0):
 
     try:
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             total = int(resp.headers.get("Content-Length", 0)) + resume_from
             if not total and expected_size:
                 total = expected_size
@@ -8493,7 +8682,7 @@ def process_gfwl_download():
             print(f"    {len(parts)} part(s) found.")
             for url in parts:
                 fname = url.rsplit("/", 1)[-1]
-                _download_with_progress(url, os.path.join(game_dir, fname))
+                _download_with_progress(url, os.path.join(game_dir, fname), timeout=300)
         else:
             # Content/Config/Pack: /content/{tid}/{tid}{offer_suffix}.cab  (single file)
             # Build a list of candidate suffixes: stored value first, then try with 0e prefix
@@ -8516,7 +8705,7 @@ def process_gfwl_download():
                 print(f"    [!] Not found (404) — tried: {tried}")
                 continue
             fname = found_url.rsplit("/", 1)[-1]
-            _download_with_progress(found_url, os.path.join(game_dir, fname))
+            _download_with_progress(found_url, os.path.join(game_dir, fname), timeout=300)
 
     print(f"\n[+] Download complete. Files in: {game_dir}")
 
@@ -8571,115 +8760,656 @@ def process_gfwl_download():
         subprocess.Popen([installer])
 
 
-def _rg_adguard_get_links(value, input_type="ProductId", ring="RP", lang="en-US"):
-    """
-    POST to store.rg-adguard.net/api/GetFiles and return parsed package list.
-    input_type: ProductId | CategoryId | PackageFamilyName | url
-    ring:       RP | Retail | Fast | Slow
-    Returns list of {filename, url, expiry, sha1, size}, empty list if nothing found,
-    or raises RuntimeError on Cloudflare block / network error.
-    """
-    endpoint = "https://store.rg-adguard.net/api/GetFiles"
-    body = urllib.parse.urlencode({
-        "type": input_type,
-        "url":  value,
-        "ring": ring,
-        "lang": lang,
-    }).encode()
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent":   ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                         "AppleWebKit/537.36 (KHTML, like Gecko) "
-                         "Chrome/122.0.0.0 Safari/537.36"),
-        "Referer":      "https://store.rg-adguard.net/",
-        "Origin":       "https://store.rg-adguard.net",
-        "Accept":       "text/html,application/xhtml+xml,*/*;q=0.8",
-    }
-    req = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"HTTP {e.code} from rg-adguard")
-    except Exception as e:
-        raise RuntimeError(str(e))
+# =============================================================================
+# fe3 SOAP API — direct Microsoft delivery CDN (no third-party proxy)
+#
+# 3-step flow (same as alt-app-installer / store.rg-adguard internally):
+#   1. GetCookie         → anonymous WU cookie
+#   2. SyncUpdates       → package filenames + UpdateID/RevisionNumber
+#   3. GetExtUpdateInfo2 → time-limited CDN download URLs
+# =============================================================================
 
-    if "Just a moment" in html or "cf-browser-verification" in html or "Attention Required" in html:
-        raise RuntimeError(
-            "Blocked by Cloudflare.\n"
-            "  Try opening https://store.rg-adguard.net/ in your browser first,\n"
-            "  completing the challenge, then retry here."
-        )
+_FE3_COOKIE_XML = (
+    '<Envelope xmlns="http://www.w3.org/2003/05/soap-envelope"'
+    ' xmlns:a="http://www.w3.org/2005/08/addressing"'
+    ' xmlns:u="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">'
+    '<Header>'
+    '<a:Action mustUnderstand="1">'
+    'http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService/GetCookie'
+    '</a:Action>'
+    '<a:To mustUnderstand="1">'
+    'https://fe3cr.delivery.mp.microsoft.com/ClientWebService/client.asmx'
+    '</a:To>'
+    '<Security mustUnderstand="1"'
+    ' xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">'
+    '<WindowsUpdateTicketsToken'
+    ' xmlns="http://schemas.microsoft.com/msus/2014/10/WindowsUpdateAuthorization"'
+    ' u:id="ClientMSA">'
+    '</WindowsUpdateTicketsToken>'
+    '</Security>'
+    '</Header>'
+    '<Body></Body>'
+    '</Envelope>'
+)
 
-    # Parse HTML table rows: <a href="URL">FILENAME</a> | expiry | sha1 | size
-    results = []
-    row_re = re.compile(
-        r'<tr[^>]*>\s*<td[^>]*>\s*<a\s+href="([^"]+)"[^>]*>([^<]+)</a>\s*</td>'
-        r'\s*<td[^>]*>([^<]*)</td>'
-        r'\s*<td[^>]*>([^<]*)</td>'
-        r'\s*<td[^>]*>([^<]*)</td>',
-        re.DOTALL | re.IGNORECASE,
-    )
-    for m in row_re.finditer(html):
-        link_url, fname, expiry, sha1, size = [x.strip() for x in m.groups()]
-        if link_url.startswith("http"):
-            results.append({
-                "filename": fname,
-                "url":      link_url,
-                "expiry":   expiry,
-                "sha1":     sha1,
-                "size":     size,
-            })
+_FE3_INSTALLED_IDS = [
+    1, 2, 3, 11, 19, 544, 549, 2359974, 2359977, 5169044, 8788830, 23110993,
+    23110994, 54341900, 54343656, 59830006, 59830007, 59830008, 60484010,
+    62450018, 62450019, 62450020, 66027979, 66053150, 97657898, 98822896,
+    98959022, 98959023, 98959024, 98959025, 98959026, 104433538, 104900364,
+    105489019, 117765322, 129905029, 130040031, 132387090, 132393049, 133399034,
+    138537048, 140377312, 143747671, 158941041, 158941042, 158941043, 158941044,
+    159123858, 159130928, 164836897, 164847386, 164848327, 164852241, 164852246,
+    164852252, 164852253,
+]
+
+_FE3_CACHED_IDS = [
+    10, 17, 2359977, 5143990, 5169043, 5169047, 8806526, 9125350, 9154769,
+    10809856, 23110995, 23110996, 23110999, 23111000, 23111001, 23111002,
+    23111003, 23111004, 24513870, 28880263, 30077688, 30486944, 30526991,
+    30528442, 30530496, 30530501, 30530504, 30530962, 30535326, 30536242,
+    30539913, 30545142, 30545145, 30545488, 30546212, 30547779, 30548797,
+    30548860, 30549262, 30551160, 30551161, 30551164, 30553016, 30553744,
+    30554014, 30559008, 30559011, 30560006, 30560011, 30561006, 30563261,
+    30565215, 30578059, 30664998, 30677904, 30681618, 30682195, 30685055,
+    30702579, 30708772, 30709591, 30711304, 30715418, 30720106, 30720273,
+    30732075, 30866952, 30866964, 30870749, 30877852, 30878437, 30890151,
+    30892149, 30990917, 31049444, 31190936, 31196961, 31197811, 31198836,
+    31202713, 31203522, 31205442, 31205557, 31207585, 31208440, 31208451,
+    31209591, 31210536, 31211625, 31212713, 31213588, 31218518, 31219420,
+    31220279, 31220302, 31222086, 31227080, 31229030, 31238236, 31254198,
+    31258008, 36436779, 36437850, 36464012, 41916569, 47249982, 47283134,
+    58577027, 58578040, 58578041, 58628920, 59107045, 59125697, 59142249,
+    60466586, 60478936, 66450441, 66467021, 66479051, 75202978, 77436021,
+    77449129, 85159569, 90199702, 90212090, 96911147, 97110308, 98528428,
+    98665206, 98837995, 98842922, 98842977, 98846632, 98866485, 98874250,
+    98879075, 98904649, 98918872, 98945691, 98959458, 98984707, 100220125,
+    100238731, 100662329, 100795834, 100862457, 103124811, 103348671, 104369981,
+    104372472, 104385324, 104465831, 104465834, 104467697, 104473368, 104482267,
+    104505005, 104523840, 104550085, 104558084, 104659441, 104659675, 104664678,
+    104668274, 104671092, 104673242, 104674239, 104679268, 104686047, 104698649,
+    104751469, 104752478, 104755145, 104761158, 104762266, 104786484, 104853747,
+    104873258, 104983051, 105063056, 105116588, 105178523, 105318602, 105362613,
+    105364552, 105368563, 105369591, 105370746, 105373503, 105373615, 105376634,
+    105377546, 105378752, 105379574, 105381626, 105382587, 105425313, 105495146,
+    105862607, 105939029, 105995585, 106017178, 106129726, 106768485, 107825194,
+    111906429, 115121473, 115578654, 116630363, 117835105, 117850671, 118638500,
+    118662027, 118872681, 118873829, 118879289, 118889092, 119501720, 119551648,
+    119569538, 119640702, 119667998, 119674103, 119697201, 119706266, 119744627,
+    119773746, 120072697, 120144309, 120214154, 120357027, 120392612, 120399120,
+    120553945, 120783545, 120797092, 120881676, 120889689, 120999554, 121168608,
+    121268830, 121341838, 121729951, 121803677, 122165810, 125408034, 127293130,
+    127566683, 127762067, 127861893, 128571722, 128647535, 128698922, 128701748,
+    128771507, 129037212, 129079800, 129175415, 129317272, 129319665, 129365668,
+    129378095, 129424803, 129590730, 129603714, 129625954, 129692391, 129714980,
+    129721097, 129886397, 129968371, 129972243, 130009862, 130033651, 130040030,
+    130040032, 130040033, 130091954, 130100640, 130131267, 130131921, 130144837,
+    130171030, 130172071, 130197218, 130212435, 130291076, 130402427, 130405166,
+    130676169, 130698471, 130713390, 130785217, 131396908, 131455115, 131682095,
+    131689473, 131701956, 132142800, 132525441, 132765492, 132801275, 133399034,
+    134522926, 134524022, 134528994, 134532942, 134536993, 134538001, 134547533,
+    134549216, 134549317, 134550159, 134550214, 134550232, 134551154, 134551207,
+    134551390, 134553171, 134553237, 134554199, 134554227, 134555229, 134555240,
+    134556118, 134557078, 134560099, 134560287, 134562084, 134562180, 134563287,
+    134565083, 134566130, 134568111, 134624737, 134666461, 134672998, 134684008,
+    134916523, 135100527, 135219410, 135222083, 135306997, 135463054, 135779456,
+    135812968, 136097030, 136131333, 136146907, 136157556, 136320962, 136450641,
+    136466000, 136745792, 136761546, 136840245, 138160034, 138181244, 138210071,
+    138210107, 138232200, 138237088, 138277547, 138287133, 138306991, 138324625,
+    138341916, 138372035, 138372036, 138375118, 138378071, 138380128, 138380194,
+    138534411, 138618294, 138931764, 139536037, 139536038, 139536039, 139536040,
+    140367832, 140406050, 140421668, 140422973, 140423713, 140436348, 140483470,
+    140615715, 140802803, 140896470, 141189437, 141192744, 141382548, 141461680,
+    141624996, 141627135, 141659139, 141872038, 141993721, 142006413, 142045136,
+    142095667, 142227273, 142250480, 142518788, 142544931, 142546314, 142555433,
+    142653044, 143191852, 143258496, 143299722, 143331253, 143432462, 143632431,
+    143695326, 144219522, 144590916, 145410436, 146720405, 150810438, 151258773,
+    151315554, 151400090, 151429441, 151439617, 151453617, 151466296, 151511132,
+    151636561, 151823192, 151827116, 151850642, 152016572, 153111675, 153114652,
+    153123147, 153267108, 153389799, 153395366, 153718608, 154171028, 154315227,
+    154559688, 154978771, 154979742, 154985773, 154989370, 155044852, 155065458,
+    155578573, 156403304, 159085959, 159776047, 159816630, 160733048, 160733049,
+    160733050, 160733051, 160733056, 164824922, 164824924, 164824926, 164824930,
+    164831646, 164831647, 164831648, 164831650, 164835050, 164835051, 164835052,
+    164835056, 164835057, 164835059, 164836898, 164836899, 164836900, 164845333,
+    164845334, 164845336, 164845337, 164845341, 164845342, 164845345, 164845346,
+    164845349, 164845350, 164845353, 164845355, 164845358, 164845361, 164845364,
+    164847387, 164847388, 164847389, 164847390, 164848328, 164848329, 164848330,
+    164849448, 164849449, 164849451, 164849452, 164849454, 164849455, 164849457,
+    164849461, 164850219, 164850220, 164850222, 164850223, 164850224, 164850226,
+    164850227, 164850228, 164850229, 164850231, 164850236, 164850237, 164850240,
+    164850242, 164850243, 164852242, 164852243, 164852244, 164852247, 164852248,
+    164852249, 164852250, 164852251, 164852254, 164852256, 164852257, 164852258,
+    164852259, 164852260, 164852261, 164852262, 164853061, 164853063, 164853071,
+    164853072, 164853075, 168118980, 168118981, 168118983, 168118984, 168180375,
+    168180376, 168180378, 168180379, 168270830, 168270831, 168270833, 168270834,
+    168270835,
+]
+
+_FE3_SYNC_XML = (
+    '<s:Envelope xmlns:a="http://www.w3.org/2005/08/addressing"'
+    ' xmlns:s="http://www.w3.org/2003/05/soap-envelope">'
+    '<s:Header>'
+    '<a:Action s:mustUnderstand="1">'
+    'http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService/SyncUpdates'
+    '</a:Action>'
+    '<a:MessageID>urn:uuid:175df68c-4b91-41ee-b70b-f2208c65438e</a:MessageID>'
+    '<a:To s:mustUnderstand="1">'
+    'https://fe3.delivery.mp.microsoft.com/ClientWebService/client.asmx'
+    '</a:To>'
+    '<o:Security s:mustUnderstand="1"'
+    ' xmlns:o="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">'
+    '<Timestamp'
+    ' xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">'
+    '<Created>2017-08-05T02:03:05.038Z</Created>'
+    '<Expires>2017-08-05T02:08:05.038Z</Expires>'
+    '</Timestamp>'
+    '<wuws:WindowsUpdateTicketsToken wsu:id="ClientMSA"'
+    ' xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"'
+    ' xmlns:wuws="http://schemas.microsoft.com/msus/2014/10/WindowsUpdateAuthorization">'
+    '<TicketType Name="MSA" Version="1.0" Policy="MBI_SSL">{ring}</TicketType>'
+    '</wuws:WindowsUpdateTicketsToken>'
+    '</o:Security>'
+    '</s:Header>'
+    '<s:Body>'
+    '<SyncUpdates xmlns="http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService">'
+    '<cookie><Expiration>2045-03-11T02:02:48Z</Expiration>'
+    '<EncryptedData>{cookie}</EncryptedData></cookie>'
+    '<parameters>'
+    '<ExpressQuery>false</ExpressQuery>'
+    '<InstalledNonLeafUpdateIDs>{installed_ints}</InstalledNonLeafUpdateIDs>'
+    '<OtherCachedUpdateIDs>{cached_ints}</OtherCachedUpdateIDs>'
+    '<SkipSoftwareSync>false</SkipSoftwareSync>'
+    '<NeedTwoGroupOutOfScopeUpdates>true</NeedTwoGroupOutOfScopeUpdates>'
+    '<FilterAppCategoryIds>'
+    '<CategoryIdentifier><Id>{cat_id}</Id></CategoryIdentifier>'
+    '</FilterAppCategoryIds>'
+    '<TreatAppCategoryIdsAsInstalled>true</TreatAppCategoryIdsAsInstalled>'
+    '<AlsoPerformRegularSync>false</AlsoPerformRegularSync>'
+    '<ComputerSpec/>'
+    '<ExtendedUpdateInfoParameters>'
+    '<XmlUpdateFragmentTypes>'
+    '<XmlUpdateFragmentType>Extended</XmlUpdateFragmentType>'
+    '</XmlUpdateFragmentTypes>'
+    '<Locales><string>en-US</string><string>en</string></Locales>'
+    '</ExtendedUpdateInfoParameters>'
+    '<ClientPreferredLanguages><string>en-US</string></ClientPreferredLanguages>'
+    '<ProductsParameters>'
+    '<SyncCurrentVersionOnly>false</SyncCurrentVersionOnly>'
+    '<DeviceAttributes>'
+    'BranchReadinessLevel=CB;CurrentBranch=rs_prerelease;FlightRing={ring};'
+    'FlightingBranchName=external;IsFlightingEnabled=1;InstallLanguage=en-US;'
+    'OSUILocale=en-US;InstallationType=Client;DeviceFamily=Windows.Desktop;'
+    '</DeviceAttributes>'
+    '<CallerAttributes>Interactive=1;IsSeeker=0;</CallerAttributes>'
+    '<Products/>'
+    '</ProductsParameters>'
+    '</parameters>'
+    '</SyncUpdates>'
+    '</s:Body>'
+    '</s:Envelope>'
+)
+
+_FE3_FILEURL_XML = (
+    '<Envelope xmlns="http://www.w3.org/2003/05/soap-envelope"'
+    ' xmlns:a="http://www.w3.org/2005/08/addressing"'
+    ' xmlns:u="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">'
+    '<Header>'
+    '<a:Action mustUnderstand="1">'
+    'http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService/GetExtendedUpdateInfo2'
+    '</a:Action>'
+    '<a:To mustUnderstand="1">'
+    'https://fe3cr.delivery.mp.microsoft.com/ClientWebService/client.asmx/secured'
+    '</a:To>'
+    '<Security mustUnderstand="1"'
+    ' xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">'
+    '<WindowsUpdateTicketsToken'
+    ' xmlns="http://schemas.microsoft.com/msus/2014/10/WindowsUpdateAuthorization"'
+    ' u:id="ClientMSA">'
+    '</WindowsUpdateTicketsToken>'
+    '</Security>'
+    '</Header>'
+    '<Body>'
+    '<GetExtendedUpdateInfo2'
+    ' xmlns="http://www.microsoft.com/SoftwareDistribution/Server/ClientWebService">'
+    '<updateIDs>'
+    '<UpdateIdentity>'
+    '<UpdateID>{update_id}</UpdateID>'
+    '<RevisionNumber>{revision}</RevisionNumber>'
+    '</UpdateIdentity>'
+    '</updateIDs>'
+    '<infoTypes>'
+    '<XmlUpdateFragmentType>FileUrl</XmlUpdateFragmentType>'
+    '<XmlUpdateFragmentType>FileDecryption</XmlUpdateFragmentType>'
+    '</infoTypes>'
+    '<deviceAttributes>FlightRing={ring};</deviceAttributes>'
+    '</GetExtendedUpdateInfo2>'
+    '</Body>'
+    '</Envelope>'
+)
+
+_FE3_ENDPOINT = "https://fe3cr.delivery.mp.microsoft.com/ClientWebService/client.asmx"
+_FE3_HEADERS  = {"Content-Type": "application/soap+xml; charset=utf-8"}
+
+
+def _fe3_get_cookie(timeout=30):
+    """Get anonymous WU cookie from fe3 delivery API."""
+    req = urllib.request.Request(_FE3_ENDPOINT, data=_FE3_COOKIE_XML.encode(),
+                                headers=_FE3_HEADERS)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        from xml.dom import minidom
+        doc = minidom.parseString(resp.read())
+    return doc.getElementsByTagName("EncryptedData")[0].firstChild.nodeValue
+
+
+def _fe3_sync_updates(cookie, cat_id, ring="Retail", timeout=30):
+    """
+    Query fe3 SyncUpdates for package metadata.
+    Returns dict of {filename: {"update_id": str, "revision": str, "size": int}}.
+    """
+    import html as _html_mod
+    from xml.dom import minidom
+
+    installed_xml = "".join(f"<int>{i}</int>" for i in _FE3_INSTALLED_IDS)
+    cached_xml    = "".join(f"<int>{i}</int>" for i in _FE3_CACHED_IDS)
+    body = _FE3_SYNC_XML.format(
+        cookie=cookie, cat_id=cat_id, ring=ring,
+        installed_ints=installed_xml, cached_ints=cached_xml,
+    ).encode()
+
+    req = urllib.request.Request(_FE3_ENDPOINT, data=body, headers=_FE3_HEADERS)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8")
+
+    doc = minidom.parseString(_html_mod.unescape(raw))
+
+    # Map internal IDs → (display_filename, size)
+    filenames = {}
+    for node in doc.getElementsByTagName("Files"):
+        try:
+            fe = node.firstChild
+            iid = node.parentNode.parentNode.getElementsByTagName("ID")[0].firstChild.nodeValue
+            fname = f"{fe.getAttribute('InstallerSpecificIdentifier')}_{fe.getAttribute('FileName')}"
+            size_str = fe.getAttribute("Size")
+            filenames[iid] = (fname, int(size_str) if size_str else 0)
+        except (AttributeError, IndexError, ValueError):
+            continue
+
+    # Map filenames → (UpdateID, RevisionNumber)
+    results = {}
+    for node in doc.getElementsByTagName("SecuredFragment"):
+        try:
+            iid = node.parentNode.parentNode.parentNode.getElementsByTagName("ID")[0].firstChild.nodeValue
+            fname, size = filenames[iid]
+            uid_node = node.parentNode.parentNode.firstChild
+            results[fname] = {
+                "update_id": uid_node.getAttribute("UpdateID"),
+                "revision":  uid_node.getAttribute("RevisionNumber"),
+                "size":      size,
+            }
+        except (KeyError, AttributeError, IndexError):
+            continue
+
     return results
 
 
-def process_rg_adguard():
-    """Interactive MS Store package fetcher via store.rg-adguard.net."""
-    print("\n[MS Store Package Fetcher — store.rg-adguard.net]")
+def _fe3_get_url(update_id, revision, ring="Retail", timeout=30):
+    """Get CDN download URL for a single package via GetExtendedUpdateInfo2."""
+    from xml.dom import minidom
+
+    body = _FE3_FILEURL_XML.format(
+        update_id=update_id, revision=revision, ring=ring,
+    ).encode()
+    url = _FE3_ENDPOINT + "/secured"
+    req = urllib.request.Request(url, data=body, headers=_FE3_HEADERS)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        doc = minidom.parseString(resp.read())
+
+    for loc in doc.getElementsByTagName("FileLocation"):
+        url_els = loc.getElementsByTagName("Url")
+        if url_els and url_els[0].firstChild:
+            dl_url = url_els[0].firstChild.nodeValue
+            if len(dl_url) != 99:   # skip blockmap URLs (always 99 chars)
+                return dl_url
+    return None
+
+
+def _detect_arch():
+    """Return MS Store architecture string for this machine (x64/x86/arm/arm64)."""
+    import platform
+    m = platform.machine().lower()
+    if m in ("amd64", "x86_64"):
+        return "x64"
+    if m in ("arm64", "aarch64"):
+        return "arm64"
+    if "arm" in m:
+        return "arm"
+    return "x86"
+
+
+def _pkg_arch(filename):
+    """Extract architecture from MS Store package filename, or 'neutral'."""
+    fn = filename.lower()
+    for arch in ("arm64", "x64", "x86", "arm"):
+        if f"_{arch}__" in fn:
+            return arch
+    if "_neutral_" in fn or "_neutral__" in fn:
+        return "neutral"
+    return "neutral"
+
+
+_APPX_DEP_PREFIXES = (
+    "Microsoft.VCLibs.",
+    "Microsoft.NET.Native.Runtime.",
+    "Microsoft.NET.Native.Framework.",
+    "Microsoft.UI.Xaml.",
+    "Microsoft.DirectX.",
+    "Microsoft.Services.Store.Engagement.",
+)
+
+
+def _is_appx_dependency(filename):
+    """Check if a package filename is a known framework dependency."""
+    return any(filename.startswith(p) for p in _APPX_DEP_PREFIXES)
+
+
+def _dedup_deps(deps):
+    """Deduplicate dependency filenames by package family, keeping highest version.
+
+    Filenames look like: Microsoft.VCLibs.140.00_14.0.30704.0_x64__8wekyb3d8bbwe_<hash>.appx
+    Package family = name + arch + publisher (everything except version).
+    Windows rejects duplicate package families in -DependencyPath.
+    """
+    by_family = {}
+    for f in deps:
+        # Split: Name_Version_Arch__Publisher_Hash.ext
+        parts = f.split("_")
+        if len(parts) >= 4:
+            # Family key = name + arch + publisher (skip version at [1] and hash at end)
+            family = (parts[0], parts[2], parts[3])  # name, arch, __publisher
+            ver = parts[1]
+            if family not in by_family or ver > by_family[family][1]:
+                by_family[family] = (f, ver)
+        else:
+            by_family[f] = (f, "")
+    return [v[0] for v in by_family.values()]
+
+
+def _appx_install(dest, downloaded_files):
+    """Install downloaded packages via PowerShell Add-AppxPackage."""
+    deps = _dedup_deps([f for f in downloaded_files if _is_appx_dependency(f)])
+    mains = [f for f in downloaded_files if not _is_appx_dependency(f)]
+
+    # Sort mains by size descending (largest first = likely the bundle)
+    mains.sort(key=lambda f: os.path.getsize(os.path.join(dest, f)), reverse=True)
+
+    if not mains:
+        for f in deps:
+            path = os.path.join(dest, f)
+            print(f"  Installing dependency: {f}")
+            r = subprocess.run(["powershell", "-Command",
+                f'Add-AppxPackage -Path "{path}"'],
+                capture_output=True, text=True, timeout=120)
+            if r.returncode != 0:
+                print(f"  [!] Failed: {r.stderr.strip()}")
+            else:
+                print(f"  [+] OK")
+        return
+
+    main_path = os.path.join(dest, mains[0])
+    if deps:
+        dep_paths = ",".join(f'"{os.path.join(dest, d)}"' for d in deps)
+        cmd = f'Add-AppxPackage -Path "{main_path}" -DependencyPath {dep_paths}'
+    else:
+        cmd = f'Add-AppxPackage -Path "{main_path}"'
+
+    print(f"  Installing: {mains[0]}")
+    if deps:
+        print(f"  Dependencies: {', '.join(deps)}")
+    r = subprocess.run(["powershell", "-Command", cmd],
+        capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        print(f"  [!] Install failed: {r.stderr.strip()}")
+    else:
+        print(f"  [+] Installed successfully")
+
+    # Install remaining main packages individually (unusual case)
+    for f in mains[1:]:
+        path = os.path.join(dest, f)
+        print(f"  Installing: {f}")
+        r = subprocess.run(["powershell", "-Command",
+            f'Add-AppxPackage -Path "{path}"'],
+            capture_output=True, text=True, timeout=300)
+        if r.returncode != 0:
+            print(f"  [!] Failed: {r.stderr.strip()}")
+        else:
+            print(f"  [+] OK")
+
+
+def _fe3_get_links(value, input_type="ProductId", ring="Retail"):
+    """
+    Fetch MS Store package links via Microsoft's fe3 delivery API.
+    input_type: ProductId | CategoryId | PackageFamilyName | url
+    ring:       Retail | RP | WIF | WIS
+    Returns list of {"filename": str, "url": str, "size": int}.
+    """
+    # --- Step 1: Resolve WuCategoryId ---
+    if input_type == "CategoryId":
+        cat_id = value
+    elif input_type == "ProductId":
+        cat_id = _display_catalog_get_wuid(value)
+        if not cat_id:
+            raise RuntimeError(f"Could not resolve WuCategoryId for ProductId {value}")
+    elif input_type == "PackageFamilyName":
+        se_url = (f"https://storeedgefd.dsx.mp.microsoft.com/v9.0/products/{value}"
+                  f"?market=US&locale=en-us&deviceFamily=Windows.Desktop")
+        req = urllib.request.Request(se_url)
+        req.add_header("User-Agent", "WindowsShellClient/9.0.40929.0 (Windows)")
+        cat_id = None
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode())
+            for sku in data.get("Payload", {}).get("Skus", []):
+                fd = sku.get("FulfillmentData", {})
+                cat_id = fd.get("WuCategoryId") or fd.get("WuBundleCategoryId")
+                if cat_id:
+                    break
+        except Exception:
+            pass
+        if not cat_id:
+            raise RuntimeError(f"Could not resolve WuCategoryId for PFN {value}")
+    elif input_type == "url":
+        # Extract 12-char ProductId from store URL
+        parts = value.rstrip("/").split("/")
+        pid = None
+        for part in reversed(parts):
+            if re.match(r'^[A-Za-z0-9]{12}$', part):
+                pid = part
+                break
+        if not pid:
+            raise RuntimeError(f"Could not extract ProductId from URL: {value}")
+        cat_id = _display_catalog_get_wuid(pid)
+        if not cat_id:
+            raise RuntimeError(f"Could not resolve WuCategoryId for ProductId {pid}")
+    else:
+        raise RuntimeError(f"Unknown input_type: {input_type}")
+
+    print(f"  WuCategoryId: {cat_id}")
+
+    # --- Step 2: Get cookie ---
+    cookie = _fe3_get_cookie()
+
+    # --- Step 3: Sync updates (get package list + UpdateIDs) ---
+    updates = _fe3_sync_updates(cookie, cat_id, ring)
+    if not updates:
+        return []
+
+    # --- Step 4: Resolve download URLs ---
+    results = []
+    for fname, info in updates.items():
+        dl_url = _fe3_get_url(info["update_id"], info["revision"], ring)
+        if dl_url:
+            results.append({
+                "filename": fname,
+                "url":      dl_url,
+                "size":     info.get("size", 0),
+            })
+
+    return results
+
+
+def _freshdex_pick_game(db):
+    """Freshdex interactive filter + paginated picker. Returns productId or None."""
+    PAGE_SIZE = 50
+
+    def _show_page(items, offset):
+        """Print one page of items starting at offset. Returns number shown."""
+        end = min(offset + PAGE_SIZE, len(items))
+        for i in range(offset, end):
+            g = items[i]
+            yr = g["releaseDate"][:4] if len(g.get("releaseDate", "")) >= 4 else "    "
+            cat = g.get("category", "")[:22]
+            title = g.get("title", "")[:44]
+            print(f"  {i+1:>4}  {g['productId']:>12}  {yr}  {cat:<22}  {title}")
+        return end - offset
+
+    def _paginated_pick(items):
+        """Paginate items and let user pick by number. Returns productId or None."""
+        if not items:
+            print("  [!] No matches.")
+            return None
+        print()
+        print(f"  {'#':>4}  {'ProductId':>12}  Year  {'Category':<22}  Title")
+        print("  " + "─" * 92)
+        offset = 0
+        shown = _show_page(items, offset)
+        offset += shown
+        while True:
+            print()
+            if offset < len(items):
+                prompt = f"  [{offset}/{len(items)}] Enter=next page / number=pick / Q=back: "
+            else:
+                prompt = "  Pick game number (Q=back): "
+            sel = input(prompt).strip()
+            if sel.upper() == "Q":
+                return None
+            if sel == "" and offset < len(items):
+                shown = _show_page(items, offset)
+                offset += shown
+                continue
+            try:
+                idx = int(sel) - 1
+                if 0 <= idx < len(items):
+                    return items[idx]["productId"]
+            except ValueError:
+                pass
+            print("  [!] Invalid selection.")
+
+    # --- Filter menu ---
+    print()
+    print("  Filter by:")
+    print("    [A-Z] Starting letter       [#] Non-alpha titles")
+    print("    [Y]   Release year           [G] Genre/category")
+    print("    [S]   Search by title         [Enter] List all")
+    print()
+    filt = input("  Filter: ").strip()
+
+    if filt == "":
+        # List all
+        print(f"\n  Listing all {len(db)} games:")
+        return _paginated_pick(db)
+
+    if filt == "#":
+        # Non-alpha titles
+        items = [g for g in db if g["title"] and not g["title"][0].isalpha()]
+        print(f"\n  {len(items)} games starting with non-alpha characters:")
+        return _paginated_pick(items)
+
+    if len(filt) == 1 and filt.isalpha():
+        # Letter filter
+        letter = filt.upper()
+        items = [g for g in db if g["title"].upper().startswith(letter)]
+        print(f"\n  {len(items)} games starting with '{letter}':")
+        return _paginated_pick(items)
+
+    fu = filt.upper()
+
+    if fu == "Y":
+        yr = input("  Release year (e.g. 2015): ").strip()
+        if not yr:
+            return None
+        items = [g for g in db if g.get("releaseDate", "").startswith(yr)]
+        print(f"\n  {len(items)} games from {yr}:")
+        return _paginated_pick(items)
+
+    if fu == "G":
+        # Collect unique categories
+        cats = {}
+        for g in db:
+            c = g.get("category", "")
+            if c:
+                cats[c] = cats.get(c, 0) + 1
+        if not cats:
+            print("  [!] No category data available.")
+            return None
+        cat_list = sorted(cats.keys(), key=str.lower)
+        print()
+        for i, c in enumerate(cat_list, 1):
+            print(f"    {i:>2}. {c} ({cats[c]})")
+        print()
+        sel = input("  Pick category number: ").strip()
+        try:
+            chosen_cat = cat_list[int(sel) - 1]
+        except (ValueError, IndexError):
+            print("  [!] Invalid selection.")
+            return None
+        items = [g for g in db if g.get("category") == chosen_cat]
+        print(f"\n  {len(items)} games in '{chosen_cat}':")
+        return _paginated_pick(items)
+
+    if fu == "S":
+        q = input("  Search: ").strip().lower()
+        if not q:
+            return None
+        items = [g for g in db
+                 if q in g.get("title", "").lower()
+                 or q in g.get("publisher", "").lower()
+                 or q in g.get("productId", "").lower()]
+        print(f"\n  {len(items)} matches for '{q}':")
+        return _paginated_pick(items)
+
+    print("  [!] Invalid filter.")
+    return None
+
+
+def process_store_packages():
+    """Interactive MS Store package fetcher via Microsoft fe3 delivery API."""
+    print("\n[MS Store Package Fetcher]")
     print()
     print("  Input type:")
+    print("    [F] Freshdex Database (browse PC/Windows games from your library)")
     print("    [1] ProductId         e.g. 9NBLGGH5R558")
     print("    [2] CategoryId        e.g. e89c9ccf-de94-45ed-9cd4-7e11d05c3da4 (WuCategoryId)")
     print("    [3] PackageFamilyName e.g. Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe")
     print("    [4] URL               e.g. https://www.microsoft.com/store/productId/9NBLGGH5R558")
-    print("    [L] Pick from USB drive library (storeId lookup)")
     print()
-    choice = input("  Choice [1]: ").strip().upper() or "1"
+    choice = input("  Choice [F]: ").strip().upper() or "F"
     print()
 
     type_map = {"1": "ProductId", "2": "CategoryId", "3": "PackageFamilyName", "4": "url"}
 
-    if choice == "L":
-        items = _cdn_load_items()
-        if not items:
+    if choice == "F":
+        db = _build_freshdex_db()
+        if not db:
+            print("[!] No PC/Windows games found. Run library scans first.")
             return
-        # Filter to items that have a storeId (needed for ProductId lookup)
-        searchable = [x for x in items if x.get("storeId")]
-        if not searchable:
-            print("[!] No items with storeId in USB DB.")
+        print(f"  Freshdex: {len(db)} PC/Windows games indexed")
+        pid = _freshdex_pick_game(db)
+        if not pid:
             return
-        q = input("  Search (title/storeId, Enter for all): ").strip().lower()
-        filtered = [x for x in searchable
-                    if not q or q in x.get("_title", "").lower() or q in x.get("storeId", "").lower()]
-        if not filtered:
-            print("[!] No matches.")
-            return
-        print()
-        print(f"  {'#':>3}  {'ProductId':>12}  Title")
-        print("  " + "─" * 60)
-        for i, item in enumerate(filtered, 1):
-            print(f"  {i:>3}  {item.get('storeId',''):>12}  {item.get('_title','')[:45]}")
-        print()
-        sel = input("  Pick game number: ").strip()
-        try:
-            idx = int(sel) - 1
-            chosen = filtered[idx]
-        except (ValueError, IndexError):
-            print("[!] Invalid selection.")
-            return
-        value = chosen["storeId"]
+        value = pid
         input_type = "ProductId"
-        print(f"  → ProductId: {value}")
+        print(f"\n  \u2192 ProductId: {value}")
     elif choice in type_map:
         input_type = type_map[choice]
         value = input(f"  Enter {input_type}: ").strip()
@@ -8689,14 +9419,14 @@ def process_rg_adguard():
         return
 
     print()
-    ring_in = input("  Ring [RP/Retail/Fast/Slow, Enter=RP]: ").strip() or "RP"
-    ring = ring_in if ring_in in ("RP", "Retail", "Fast", "Slow") else "RP"
+    ring_in = input("  Ring [RP/Retail/WIF/WIS, Enter=RP]: ").strip() or "RP"
+    ring = ring_in if ring_in in ("RP", "Retail", "WIF", "WIS") else "RP"
     print()
-    print(f"[*] Querying rg-adguard ({input_type}={value}, ring={ring}) ...")
+    print(f"[*] Fetching packages ({input_type}={value}, ring={ring}) ...")
 
     try:
-        links = _rg_adguard_get_links(value, input_type=input_type, ring=ring)
-    except RuntimeError as e:
+        links = _fe3_get_links(value, input_type=input_type, ring=ring)
+    except Exception as e:
         print(f"[!] {e}")
         return
 
@@ -8704,23 +9434,43 @@ def process_rg_adguard():
         print("[!] No packages found. Try a different ring or input type.")
         return
 
-    print(f"\n  {len(links)} package(s) found:\n")
-    print(f"  {'#':>3}  {'Size':>10}  {'Expires':>12}  Filename")
-    print("  " + "─" * 100)
-    for i, lnk in enumerate(links, 1):
-        exp = lnk["expiry"][:10] if lnk["expiry"] else "—"
-        expired = lnk["expiry"].startswith("1970") if lnk["expiry"] else False
-        exp_str = f"{exp} (expired)" if expired else exp
-        print(f"  {i:>3}  {lnk['size']:>10}  {exp_str:>20}  {lnk['filename']}")
+    # --- Architecture filtering ---
+    arch = _detect_arch()
+    matching = [lnk for lnk in links if _pkg_arch(lnk["filename"]) in (arch, "neutral")]
+    display_list = matching
+    show_all = False
+
+    def _print_table(pkg_list):
+        print(f"  {'#':>3}  {'Size':>10}  Filename")
+        print("  " + "─" * 90)
+        for i, lnk in enumerate(pkg_list, 1):
+            sz = lnk["size"]
+            if   sz >= 1073741824: sz_str = f"{sz / 1073741824:.2f} GB"
+            elif sz >= 1048576:    sz_str = f"{sz / 1048576:.1f} MB"
+            elif sz >= 1024:       sz_str = f"{sz / 1024:.0f} KB"
+            elif sz > 0:           sz_str = f"{sz} B"
+            else:                  sz_str = "?"
+            print(f"  {i:>3}  {sz_str:>10}  {lnk['filename']}")
+
+    print(f"\n  {len(links)} package(s) found  —  arch: {arch}  ({len(matching)} matching + neutral)\n")
+    _print_table(display_list)
     print()
 
-    sel = input("  Which file(s) to download? [numbers / Enter=all / Q=skip]: ").strip()
-    if sel.upper() == "Q" or sel.upper() == "":
-        if sel.upper() == "Q":
-            return
-        targets = links
+    sel = input("  Which file(s) to download? [numbers / Enter=all / A=all architectures / Q=skip]: ").strip()
+    if sel.upper() == "A":
+        display_list = links
+        show_all = True
+        print(f"\n  Showing all {len(links)} packages:\n")
+        _print_table(display_list)
+        print()
+        sel = input("  Which file(s) to download? [numbers / Enter=all / Q=skip]: ").strip()
+
+    if sel.upper() == "Q":
+        return
+    if sel == "":
+        targets = display_list
     else:
-        targets = [links[i] for i in _parse_selection(sel, len(links))]
+        targets = [display_list[i] for i in _parse_selection(sel, len(display_list))]
     if not targets:
         print("[!] Nothing selected.")
         return
@@ -8729,18 +9479,109 @@ def process_rg_adguard():
     dest = input(f"  Destination folder [{default_dest}]: ").strip().strip('"').strip("'") or default_dest
     os.makedirs(dest, exist_ok=True)
     print()
+    downloaded = []
     for lnk in targets:
         fname = lnk["filename"]
         out_path = os.path.join(dest, fname)
         print(f"  ▸ {fname}")
-        _download_with_progress(lnk["url"], out_path, 0)
+        _download_with_progress(lnk["url"], out_path, expected_size=lnk.get("size", 0))
+        downloaded.append(fname)
     print(f"\n[+] Done. Files in: {dest}")
+
+    # --- Offer Add-AppxPackage install ---
+    if downloaded:
+        print()
+        install = input("  Install downloaded packages via Add-AppxPackage? [Y/n]: ").strip().lower()
+        if install in ("", "y", "yes"):
+            print()
+            try:
+                _appx_install(dest, downloaded)
+            except subprocess.TimeoutExpired:
+                print("  [!] Install timed out.")
+            except Exception as e:
+                print(f"  [!] Install error: {e}")
+
+
+def _cdn_backup_games(items, select_all=False):
+    """Download current-version game packages from Xbox CDN. Used by USB tool submenu."""
+    downloadable = [x for x in items if x.get("cdnUrls") and x.get("contentId")]
+    if not downloadable:
+        print("[!] No items with CDN URLs in USB DB. Run scan + save first.")
+        return
+    print()
+    print(f"  {'#':>3}  {'Size':>8}  {'Ver':>10}  Title")
+    print("  " + "─" * 70)
+    for i, item in enumerate(downloadable, 1):
+        sz    = item.get("sizeBytes", 0)
+        sz_gb = f"{sz/1e9:.2f}GB" if sz else "?"
+        ver   = _xbox_ver_decode(item.get("buildVersion", "")) if item.get("buildVersion") else "?"
+        print(f"  {i:>3}  {sz_gb:>8}  {ver:>10}  {item.get('_title','')[:50]}")
+    print()
+    if select_all:
+        targets = downloadable
+    else:
+        sel = input("  Which game(s) to download? [numbers e.g. 1 3 5-8, or * for all]: ").strip()
+        if sel == "*":
+            targets = downloadable
+        else:
+            targets = [downloadable[i] for i in _parse_selection(sel, len(downloadable))]
+    if not targets:
+        print("[!] Nothing selected.")
+        return
+    total_bytes = sum(t.get("sizeBytes", 0) for t in targets)
+    print(f"\n  {len(targets)} package(s) selected  ({total_bytes/1e9:.2f} GB total)")
+    dest = input("  Destination folder: ").strip().strip('"').strip("'")
+    if not dest:
+        return
+    os.makedirs(dest, exist_ok=True)
+    for item in targets:
+        url    = item["cdnUrls"][0]
+        fname  = url.rsplit("/", 1)[-1]
+        outf   = os.path.join(dest, fname)
+        size   = item.get("sizeBytes", 0)
+        title  = item.get("_title", fname)
+        print(f"\n  ▸ {title}")
+        _download_with_progress(url, outf, size)
+    print(f"\n[+] Done. Files saved to: {dest}")
+
+
+def process_xbox_usb_tool():
+    """Xbox One/Series X|S USB Hard Drive Tool — submenu."""
+    print("\n[Xbox One / Series X|S USB Hard Drive Tool]")
+    print()
+    print("    [V] Drive converter (PC ↔ Xbox MBR mode)")
+    print("    [S] Scan, index and save metadata to usb_db.json")
+    print("    [B] Backup a game (download from Xbox CDN)")
+    print("    [A] Backup all games")
+    print("    [D] Discover previous versions")
+    print("    [Enter] Back")
+    print()
+    mode = input("  Choice: ").strip().upper()
+
+    if mode == "V":
+        process_drive_converter()
+    elif mode == "S":
+        drive_letter = input("  Drive letter (default: E): ").strip() or "E"
+        drive_letter = drive_letter.rstrip(":/\\").upper()
+        process_usb_drive(drive_letter)
+        build_usb_db(drive_letter)
+    elif mode == "B":
+        items = _cdn_load_items()
+        if items:
+            _cdn_backup_games(items, select_all=False)
+    elif mode == "A":
+        items = _cdn_load_items()
+        if items:
+            _cdn_backup_games(items, select_all=True)
+    elif mode == "D":
+        process_cdn_version_discovery()
 
 
 def process_cdn_version_discovery():
     """
     Discover older Xbox game package versions.
     Modes:
+      [C] Compare snapshots — diff two usb_db scans to find updated games + probe old URLs
       [A] Xbox CDN sweep   — probe prior-version URLs derived from XVS priorBuildId/Version
       [W] WU Catalog scan  — query Windows Update Catalog for full version history
       [S] Select game      — verbose per-game probe (CDN strategy)
@@ -8748,8 +9589,6 @@ def process_cdn_version_discovery():
     """
     print("\n[CDN / Version Discovery]")
     print()
-    print("    [O] MS Store packages  — fetch download links via store.rg-adguard.net")
-    print("    [D] Download current packages — direct CDN download of installed game packages")
     print("    [C] Compare snapshots  — diff two usb_db scans to find updated games + probe old URLs")
     print("    [A] Xbox CDN sweep     — probe prior-version URLs from XVS data (fast, silent 404s)")
     print("    [W] Windows Update Catalog — query update history via WuCategoryId (experimental)")
@@ -8758,10 +9597,6 @@ def process_cdn_version_discovery():
     print("    [Enter] Back")
     print()
     mode = input("  Choice: ").strip().upper()
-
-    if mode == "O":
-        process_rg_adguard()
-        return
 
     items = _cdn_load_items()
     if not items:
@@ -8775,46 +9610,6 @@ def process_cdn_version_discovery():
 
     if mode == "C":
         process_cdn_snapshot_compare()
-        return
-
-    elif mode == "D":
-        # Direct download of CURRENT version packages from Xbox CDN
-        downloadable = [x for x in items if x.get("cdnUrls") and x.get("contentId")]
-        if not downloadable:
-            print("[!] No items with CDN URLs in USB DB. Run [I] to populate.")
-            return
-        print()
-        print(f"  {'#':>3}  {'Size':>8}  {'Ver':>10}  Title")
-        print("  " + "─" * 70)
-        for i, item in enumerate(downloadable, 1):
-            sz    = item.get("sizeBytes", 0)
-            sz_gb = f"{sz/1e9:.2f}GB" if sz else "?"
-            ver   = _xbox_ver_decode(item.get("buildVersion", "")) if item.get("buildVersion") else "?"
-            print(f"  {i:>3}  {sz_gb:>8}  {ver:>10}  {item.get('_title','')[:50]}")
-        print()
-        sel = input("  Which game(s) to download? [numbers e.g. 1 3 5-8, or * for all]: ").strip()
-        if sel == "*":
-            targets = downloadable
-        else:
-            targets = [downloadable[i] for i in _parse_selection(sel, len(downloadable))]
-        if not targets:
-            print("[!] Nothing selected.")
-            return
-        total_bytes = sum(t.get("sizeBytes", 0) for t in targets)
-        print(f"\n  {len(targets)} package(s) selected  ({total_bytes/1e9:.2f} GB total)")
-        dest = input("  Destination folder: ").strip().strip('"').strip("'")
-        if not dest:
-            return
-        os.makedirs(dest, exist_ok=True)
-        for item in targets:
-            url    = item["cdnUrls"][0]  # always assets1 (mirror, any number works)
-            fname  = url.rsplit("/", 1)[-1]
-            outf   = os.path.join(dest, fname)
-            size   = item.get("sizeBytes", 0)
-            title  = item.get("_title", fname)
-            print(f"\n  ▸ {title}")
-            _download_with_progress(url, outf, size)
-        print(f"\n[+] Done. Files saved to: {dest}")
         return
 
     elif mode == "A":
@@ -8940,6 +9735,9 @@ def process_cdn_version_discovery():
 
 def _pick_account(gamertags, prompt="Which account?", allow_all=True):
     """Prompt user to pick an account. Returns gamertag, '*', or None."""
+    if not gamertags:
+        print("  [!] No accounts configured. Use [A] to add one first.")
+        return None
     if len(gamertags) == 1:
         return gamertags[0]
     print()
@@ -8963,29 +9761,17 @@ def _pick_account(gamertags, prompt="Which account?", allow_all=True):
 
 def interactive_menu():
     """Unified interactive menu for all operations."""
-    accounts = load_accounts()
-
-    if not accounts:
-        print("No accounts found. Starting new account setup...")
-        print()
-        cmd_add()
-        # After adding, fall through to menu loop
-        accounts = load_accounts()
-        if not accounts:
-            return
-
     while True:
         accounts = load_accounts()
         gamertags = list(accounts.keys())
 
-        if not gamertags:
-            print("No accounts configured.")
-            return
-
         print_header()
-        print(f"  Accounts:  ({len(gamertags)} accounts)")
-        print(f"    [0] Select account to process  (or type number directly)")
-        print(f"    [*] Process all accounts")
+        if gamertags:
+            print(f"  Accounts:  ({len(gamertags)} accounts)")
+            print(f"    [0] Select account to process  (or type number directly)")
+            print(f"    [*] Process all accounts")
+        else:
+            print("  Accounts:  (none — add one to unlock library features)")
         print()
         print("  Scan endpoints:")
         print("    [E] Collections API only")
@@ -9015,21 +9801,23 @@ def interactive_menu():
         print("    [B] Build index (rebuild HTML from cache)")
         print()
         print("  Utilities:")
-        print("    [U] Scan USB drive (index Xbox external drive)")
-        print("    [I] Save USB drive metadata to database (usb_db.json)")
-        print("    [K] Discover older CDN versions (probe prior versions from USB DB)")
-        print("    [O] MS Store Package Fetcher (store.rg-adguard.net)")
-        print("    [J] Games for Windows Live (GFWL) Game and DLC Installer")
-        print("    [V] Xbox Drive Converter (PC ↔ Xbox MBR mode)")
+        print("    [K] Xbox One / Series X|S USB Hard Drive Tool")
+        print("    [J] Games for Windows Live (GFWL) CDN Installer")
+        print("    [O] Microsoft Store (Win8/8.1/10) CDN Installer")
         print("    [Q] Quit")
         print()
 
-        pick = input(f"  Pick [0, E, T, S, M, L, P, N, C, F, W, Z, H, Y, A, R, D, *, X, B, U, I, K, O, G, J, V, Q]: ").strip()
+        pick = input(f"  Pick [0, E, T, S, M, L, P, N, C, F, W, Z, H, Y, A, R, D, *, X, B, K, J, O, G, Q]: ").strip()
         pu = pick.upper()
+
+        _no_accts = not gamertags
 
         if pu == "Q":
             break
         elif pick == "0":
+            if _no_accts:
+                print("  [!] No accounts configured. Use [A] to add one first.")
+                continue
             print()
             for i, gt in enumerate(gamertags, 1):
                 age = token_age_str(gt)
@@ -9040,12 +9828,17 @@ def interactive_menu():
                 idx = int(ap) - 1
                 if 0 <= idx < len(gamertags):
                     gt = gamertags[idx]
-                    print(f"\n[*] Refreshing token for {gt}...")
-                    refresh_account_token(gt)
-                    html_file, _lib = process_account(gt, method="both")
-                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                    print(f"[*] Opening in browser: {file_url}")
-                    webbrowser.open(file_url)
+                    _t0 = time.time()
+                    try:
+                        print(f"\n[*] Refreshing token for {gt}...")
+                        refresh_account_token(gt)
+                        html_file, _lib = process_account(gt, method="both")
+                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                        print(f"[*] Opening in browser: {file_url}")
+                        webbrowser.open(file_url)
+                        _op_summary("Process account", detail=f"{gt} — {len(_lib):,} items", elapsed=time.time() - _t0)
+                    except Exception as _e:
+                        _op_summary("Process account", success=False, detail=str(_e), elapsed=time.time() - _t0)
                 else:
                     print("  Invalid selection.")
             except ValueError:
@@ -9055,6 +9848,9 @@ def interactive_menu():
             cmd_add()
             continue
         elif pu == "R":
+            if _no_accts:
+                print("  [!] No accounts configured. Use [A] to add one first.")
+                continue
             if len(gamertags) == 1:
                 gt = gamertags[0]
             else:
@@ -9073,327 +9869,460 @@ def interactive_menu():
                 except ValueError:
                     print("  Invalid selection.")
                     continue
-            print(f"\n[*] Refreshing token for {gt}...")
-            refresh_account_token(gt)
-            process_now = input("\n  Process library now? [Y/n]: ").strip().lower()
-            if process_now not in ("n", "no"):
-                html_file, _lib = process_account(gt)
-                file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                print(f"[*] Opening in browser: {file_url}")
-                webbrowser.open(file_url)
+            _t0 = time.time()
+            try:
+                print(f"\n[*] Refreshing token for {gt}...")
+                refresh_account_token(gt)
+                process_now = input("\n  Process library now? [Y/n]: ").strip().lower()
+                if process_now not in ("n", "no"):
+                    html_file, _lib = process_account(gt)
+                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                    print(f"[*] Opening in browser: {file_url}")
+                    webbrowser.open(file_url)
+                _op_summary("Refresh token", detail=f"{gt}", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("Refresh token", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "D":
+            if _no_accts:
+                print("  [!] No accounts configured. Use [A] to add one first.")
+                continue
+            gt = None
             if len(gamertags) == 1:
                 gt = gamertags[0]
-                delete_account(gt)
             else:
                 print()
-                for i, gt in enumerate(gamertags, 1):
-                    print(f"    [{i}] {gt}")
+                for i, g in enumerate(gamertags, 1):
+                    print(f"    [{i}] {g}")
                 print()
                 dp = input(f"  Delete which account? [1-{len(gamertags)}]: ").strip()
                 try:
                     idx = int(dp) - 1
                     if 0 <= idx < len(gamertags):
-                        delete_account(gamertags[idx])
+                        gt = gamertags[idx]
                     else:
                         print("  Invalid selection.")
                 except ValueError:
                     print("  Invalid selection.")
+            if gt:
+                _t0 = time.time()
+                try:
+                    delete_account(gt)
+                    _op_summary("Delete account", detail=f"{gt}", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Delete account", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pick == "*":
-            process_all_accounts()
+            if _no_accts:
+                print("  [!] No accounts configured. Use [A] to add one first.")
+                continue
+            _t0 = time.time()
+            try:
+                process_all_accounts()
+                _op_summary("Process all accounts", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("Process all accounts", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "E":
             gt = _pick_account(gamertags, "Collections API scan for which account?")
             if gt == "*":
-                for g in gamertags:
-                    if _is_token_expired(g):
-                        _auto_refresh_token(g)
-                    process_account(g, method="collection")
-                build_index()
+                _t0 = time.time()
+                try:
+                    for g in gamertags:
+                        if _is_token_expired(g):
+                            _auto_refresh_token(g)
+                        process_account(g, method="collection")
+                    build_index()
+                    _op_summary("Collections API scan", detail="All accounts", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Collections API scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             elif gt:
-                if _is_token_expired(gt):
-                    _auto_refresh_token(gt)
-                html_file, _lib = process_account(gt, method="collection")
-                file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                webbrowser.open(file_url)
+                _t0 = time.time()
+                try:
+                    if _is_token_expired(gt):
+                        _auto_refresh_token(gt)
+                    html_file, _lib = process_account(gt, method="collection")
+                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                    webbrowser.open(file_url)
+                    _op_summary("Collections API scan", detail=f"{gt} — {len(_lib):,} items", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Collections API scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "T":
             gt = _pick_account(gamertags, "TitleHub scan for which account?")
             if gt == "*":
-                for g in gamertags:
-                    if _is_token_expired(g):
-                        _auto_refresh_token(g)
-                    process_account(g, method="titlehub")
-                build_index()
+                _t0 = time.time()
+                try:
+                    for g in gamertags:
+                        if _is_token_expired(g):
+                            _auto_refresh_token(g)
+                        process_account(g, method="titlehub")
+                    build_index()
+                    _op_summary("TitleHub scan", detail="All accounts", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("TitleHub scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             elif gt:
-                if _is_token_expired(gt):
-                    _auto_refresh_token(gt)
-                html_file, _lib = process_account(gt, method="titlehub")
-                file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                webbrowser.open(file_url)
+                _t0 = time.time()
+                try:
+                    if _is_token_expired(gt):
+                        _auto_refresh_token(gt)
+                    html_file, _lib = process_account(gt, method="titlehub")
+                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                    webbrowser.open(file_url)
+                    _op_summary("TitleHub scan", detail=f"{gt} — {len(_lib):,} items", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("TitleHub scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "S":
             gt = _pick_account(gamertags, "Content Access scan for which account?")
             if gt == "*":
-                for g in gamertags:
-                    if _is_token_expired(g):
-                        _auto_refresh_token(g)
-                    process_contentaccess_only(g)
-                html_file = build_index()
-                if html_file:
-                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                    webbrowser.open(file_url)
+                _t0 = time.time()
+                try:
+                    for g in gamertags:
+                        if _is_token_expired(g):
+                            _auto_refresh_token(g)
+                        process_contentaccess_only(g)
+                    html_file = build_index()
+                    if html_file:
+                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                        webbrowser.open(file_url)
+                    _op_summary("Content Access scan", detail="All accounts", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Content Access scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             elif gt:
-                if _is_token_expired(gt):
-                    _auto_refresh_token(gt)
-                html_file, _lib = process_contentaccess_only(gt)
-                if html_file:
-                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                    webbrowser.open(file_url)
+                _t0 = time.time()
+                try:
+                    if _is_token_expired(gt):
+                        _auto_refresh_token(gt)
+                    html_file, _lib = process_contentaccess_only(gt)
+                    if html_file:
+                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                        webbrowser.open(file_url)
+                    _op_summary("Content Access scan", detail=f"{gt}", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Content Access scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "X":
+            if _no_accts:
+                print("  [!] No accounts configured. Use [A] to add one first.")
+                continue
             print()
             print("  This will delete all cached API data and rescan every account.")
             confirm = input("  Are you sure? [y/N]: ").strip().lower()
             if confirm in ("y", "yes"):
-                for gt in gamertags:
-                    clear_api_cache(gt)
-                process_all_accounts()
+                _t0 = time.time()
+                try:
+                    for gt in gamertags:
+                        clear_api_cache(gt)
+                    process_all_accounts()
+                    _op_summary("Clear cache + rescan", detail="All accounts rescanned", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Clear cache + rescan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "B":
-            html_file = build_index()
-            if html_file:
-                file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                print(f"[*] Opening in browser: {file_url}")
-                webbrowser.open(file_url)
+            _t0 = time.time()
+            try:
+                html_file = build_index()
+                if html_file:
+                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                    print(f"[*] Opening in browser: {file_url}")
+                    webbrowser.open(file_url)
+                _op_summary("Build index", detail="HTML rebuilt from cache", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("Build index", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "G":
-            process_gamepass_library()
+            _t0 = time.time()
+            try:
+                process_gamepass_library()
+                _op_summary("Game Pass catalog", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("Game Pass catalog", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "M":
             gt = _pick_account(gamertags, "Marketplace scan using which account?")
             if gt == "*":
                 gt = gamertags[0]
             if gt:
-                html_file, _mkt = process_marketplace(gt)
-                if html_file:
-                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                    webbrowser.open(file_url)
+                _t0 = time.time()
+                try:
+                    html_file, _mkt = process_marketplace(gt)
+                    if html_file:
+                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                        webbrowser.open(file_url)
+                    _op_summary("Marketplace scan", detail=f"{gt} — {len(_mkt):,} items", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Marketplace scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "L":
             gt = _pick_account(gamertags, "All-regions marketplace using which account?")
             if gt == "*":
                 gt = gamertags[0]
             if gt:
-                html_file, _mkt = process_marketplace_all_regions(gt)
-                if html_file:
-                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                    webbrowser.open(file_url)
+                _t0 = time.time()
+                try:
+                    html_file, _mkt = process_marketplace_all_regions(gt)
+                    if html_file:
+                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                        webbrowser.open(file_url)
+                    _op_summary("Marketplace (all regions)", detail=f"{gt} — {len(_mkt):,} items", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Marketplace (all regions)", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "P":
             gt = _pick_account(gamertags, "Regional prices using which account?")
             if gt == "*":
                 gt = gamertags[0]
             if gt:
-                set_account_paths(gt)
-                if _is_token_expired(gt):
-                    _auto_refresh_token(gt)
-                acct = account_dir(gt)
-                auth_token_xl = _read_xl_token()
-                if not auth_token_xl:
-                    print("[!] auth_token_xl.txt required for regional pricing")
-                    continue
-                mkt_file = os.path.join(acct, "marketplace.json")
-                if not os.path.isfile(mkt_file):
-                    print("[!] No marketplace.json found. Run [M] Full Marketplace first.")
-                    continue
-                mkt_items = load_json(mkt_file)
-                print(f"[*] Enriching {len(mkt_items)} marketplace items with regional prices...")
-                mkt_items = enrich_regional_prices(mkt_items, auth_token_xl)
-                save_json(mkt_file, mkt_items)
-                # Rebuild data.js and HTML
-                library = load_json(LIBRARY_FILE) if os.path.isfile(LIBRARY_FILE) else []
-                play_history = load_json(PLAY_HISTORY_FILE) if os.path.isfile(PLAY_HISTORY_FILE) else []
-                scan_history = load_all_scans(gt)
-                acct_meta = collect_account_metadata()
-                data_js_path = os.path.join(acct, "data.js")
-                write_data_js(library, _load_gp_details(), scan_history, data_js_path, play_history,
-                              marketplace=mkt_items, accounts_meta=acct_meta)
-                html = build_html_template(gamertag=gt)
-                with open(OUTPUT_HTML_FILE, "w", encoding="utf-8") as f:
-                    f.write(html)
-                print(f"[+] Done: {OUTPUT_HTML_FILE}")
-                file_url = "file:///" + OUTPUT_HTML_FILE.replace("\\", "/").replace(" ", "%20")
-                webbrowser.open(file_url)
+                _t0 = time.time()
+                try:
+                    set_account_paths(gt)
+                    if _is_token_expired(gt):
+                        _auto_refresh_token(gt)
+                    acct = account_dir(gt)
+                    auth_token_xl = _read_xl_token()
+                    if not auth_token_xl:
+                        print("[!] auth_token_xl.txt required for regional pricing")
+                        continue
+                    mkt_file = os.path.join(acct, "marketplace.json")
+                    if not os.path.isfile(mkt_file):
+                        print("[!] No marketplace.json found. Run [M] Full Marketplace first.")
+                        continue
+                    mkt_items = load_json(mkt_file)
+                    print(f"[*] Enriching {len(mkt_items)} marketplace items with regional prices...")
+                    mkt_items = enrich_regional_prices(mkt_items, auth_token_xl)
+                    save_json(mkt_file, mkt_items)
+                    # Rebuild data.js and HTML
+                    library = load_json(LIBRARY_FILE) if os.path.isfile(LIBRARY_FILE) else []
+                    play_history = load_json(PLAY_HISTORY_FILE) if os.path.isfile(PLAY_HISTORY_FILE) else []
+                    scan_history = load_all_scans(gt)
+                    acct_meta = collect_account_metadata()
+                    data_js_path = os.path.join(acct, "data.js")
+                    write_data_js(library, _load_gp_details(), scan_history, data_js_path, play_history,
+                                  marketplace=mkt_items, accounts_meta=acct_meta)
+                    html = build_html_template(gamertag=gt)
+                    with open(OUTPUT_HTML_FILE, "w", encoding="utf-8") as f:
+                        f.write(html)
+                    print(f"[+] Done: {OUTPUT_HTML_FILE}")
+                    file_url = "file:///" + OUTPUT_HTML_FILE.replace("\\", "/").replace(" ", "%20")
+                    webbrowser.open(file_url)
+                    _op_summary("Regional prices", detail=f"{gt}", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Regional prices", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "N":
             gt = _pick_account(gamertags, "New Games scan using which account?")
             if gt == "*":
                 gt = gamertags[0]
             if gt:
-                html_file, _mkt = process_marketplace(gt, channels=["MobileNewGames"])
-                if html_file:
-                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                    webbrowser.open(file_url)
+                _t0 = time.time()
+                try:
+                    html_file, _mkt = process_marketplace(gt, channels=["MobileNewGames"])
+                    if html_file:
+                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                        webbrowser.open(file_url)
+                    _op_summary("New Games scan", detail=f"{gt} — {len(_mkt):,} items", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("New Games scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "C":
             gt = _pick_account(gamertags, "Coming Soon scan using which account?")
             if gt == "*":
                 gt = gamertags[0]
             if gt:
-                html_file, _mkt = process_marketplace(gt, channels=["GamesComingSoon"])
-                if html_file:
-                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                    webbrowser.open(file_url)
+                _t0 = time.time()
+                try:
+                    html_file, _mkt = process_marketplace(gt, channels=["GamesComingSoon"])
+                    if html_file:
+                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                        webbrowser.open(file_url)
+                    _op_summary("Coming Soon scan", detail=f"{gt} — {len(_mkt):,} items", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Coming Soon scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "F":
             gt = _pick_account(gamertags, "Game Demos scan using which account?")
             if gt == "*":
                 gt = gamertags[0]
             if gt:
-                html_file, _mkt = process_marketplace(gt, channels=["GameDemos"])
-                if html_file:
-                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                    webbrowser.open(file_url)
+                _t0 = time.time()
+                try:
+                    html_file, _mkt = process_marketplace(gt, channels=["GameDemos"])
+                    if html_file:
+                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                        webbrowser.open(file_url)
+                    _op_summary("Game Demos scan", detail=f"{gt} — {len(_mkt):,} items", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Game Demos scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "W":
             gt = _pick_account(gamertags, "Browse catalog using which account?", allow_all=False)
             if gt:
-                set_account_paths(gt)
-                if _is_token_expired(gt):
-                    _auto_refresh_token(gt)
-                # Try both tokens — emerald endpoint RP is unknown
-                auth = read_auth_token(optional=True)
-                auth_xl = _read_xl_token()
-                token = auth_xl or auth
-                if not token:
-                    print(f"[!] No auth token for {gt}. Refresh token first.")
-                else:
-                    print(f"  Using {'xl' if token == auth_xl else 'mp'} token")
-                    products = fetch_browse_all(token)
-                    if products:
-                        browse_items = browse_to_marketplace(products, gt)
-                        # Merge with existing marketplace data (keep old channels)
-                        existing = load_json(MARKETPLACE_FILE) if os.path.isfile(MARKETPLACE_FILE) else []
-                        mkt_items = _merge_marketplace(existing, browse_items)
-                        save_json(MARKETPLACE_FILE, mkt_items)
-                        print(f"[+] Saved {len(mkt_items)} marketplace items")
-                        # Rebuild all HTML (per-account + combined index)
-                        html_file = build_index()
-                        if html_file:
-                            file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                            webbrowser.open(file_url)
+                _t0 = time.time()
+                try:
+                    set_account_paths(gt)
+                    if _is_token_expired(gt):
+                        _auto_refresh_token(gt)
+                    # Try both tokens — emerald endpoint RP is unknown
+                    auth = read_auth_token(optional=True)
+                    auth_xl = _read_xl_token()
+                    token = auth_xl or auth
+                    products = None
+                    if not token:
+                        print(f"[!] No auth token for {gt}. Refresh token first.")
+                    else:
+                        print(f"  Using {'xl' if token == auth_xl else 'mp'} token")
+                        products = fetch_browse_all(token)
+                        if products:
+                            browse_items = browse_to_marketplace(products, gt)
+                            # Merge with existing marketplace data (keep old channels)
+                            existing = load_json(MARKETPLACE_FILE) if os.path.isfile(MARKETPLACE_FILE) else []
+                            mkt_items = _merge_marketplace(existing, browse_items)
+                            save_json(MARKETPLACE_FILE, mkt_items)
+                            print(f"[+] Saved {len(mkt_items)} marketplace items")
+                            # Rebuild all HTML (per-account + combined index)
+                            html_file = build_index()
+                            if html_file:
+                                file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                                webbrowser.open(file_url)
+                    _op_summary("Browse catalog (US)", detail=f"{gt} — {len(products):,} products" if products else f"{gt}", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Browse catalog (US)", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "Z":
             gt = _pick_account(gamertags, "Multi-region browse using which account?", allow_all=False)
             if gt:
-                set_account_paths(gt)
-                if _is_token_expired(gt):
-                    _auto_refresh_token(gt)
-                auth = read_auth_token(optional=True)
-                auth_xl = _read_xl_token()
-                token = auth_xl or auth
-                if not token:
-                    print(f"[!] No auth token for {gt}. Refresh token first.")
-                else:
-                    print(f"  Using {'xl' if token == auth_xl else 'mp'} token")
-                    products = fetch_browse_all_regions(token, gt)
-                    if products:
-                        browse_items = browse_to_marketplace_multi(products, gt)
-                        existing = load_json(MARKETPLACE_FILE) if os.path.isfile(MARKETPLACE_FILE) else []
-                        mkt_items = _merge_marketplace(existing, browse_items)
-                        save_json(MARKETPLACE_FILE, mkt_items)
-                        print(f"[+] Saved {len(mkt_items)} marketplace items")
-                        html_file = build_index()
-                        if html_file:
-                            file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                            webbrowser.open(file_url)
+                _t0 = time.time()
+                try:
+                    set_account_paths(gt)
+                    if _is_token_expired(gt):
+                        _auto_refresh_token(gt)
+                    auth = read_auth_token(optional=True)
+                    auth_xl = _read_xl_token()
+                    token = auth_xl or auth
+                    products = None
+                    if not token:
+                        print(f"[!] No auth token for {gt}. Refresh token first.")
+                    else:
+                        print(f"  Using {'xl' if token == auth_xl else 'mp'} token")
+                        products = fetch_browse_all_regions(token, gt)
+                        if products:
+                            browse_items = browse_to_marketplace_multi(products, gt)
+                            existing = load_json(MARKETPLACE_FILE) if os.path.isfile(MARKETPLACE_FILE) else []
+                            mkt_items = _merge_marketplace(existing, browse_items)
+                            save_json(MARKETPLACE_FILE, mkt_items)
+                            print(f"[+] Saved {len(mkt_items)} marketplace items")
+                            html_file = build_index()
+                            if html_file:
+                                file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                                webbrowser.open(file_url)
+                    _op_summary("Browse catalog (all regions)", detail=f"{gt} — {len(products):,} products" if products else f"{gt}", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Browse catalog (all regions)", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "Y":
             gt = _pick_account(gamertags, "Full discovery using which account?", allow_all=False)
             if gt:
-                html_file = None
+                _t0 = time.time()
+                try:
+                    html_file = None
 
-                # Step 1: Marketplace channels (bronze endpoint)
-                print("\n=== Step 1/3: Marketplace channels ===\n")
-                html_file, _mkt = process_marketplace(gt)
+                    # Step 1: Marketplace channels (bronze endpoint)
+                    print("\n=== Step 1/3: Marketplace channels ===\n")
+                    html_file, _mkt = process_marketplace(gt)
 
-                # Step 2: Browse catalog all regions (emerald endpoint) + merge
-                print("\n=== Step 2/3: Browse catalog (all regions) ===\n")
-                set_account_paths(gt)
-                auth = read_auth_token(optional=True)
-                auth_xl = _read_xl_token()
-                token = auth_xl or auth
-                if token:
-                    print(f"  Using {'xl' if token == auth_xl else 'mp'} token")
-                    products = fetch_browse_all_regions(token, gt)
-                    if products:
-                        browse_items = browse_to_marketplace_multi(products, gt)
-                        existing = load_json(MARKETPLACE_FILE) if os.path.isfile(MARKETPLACE_FILE) else []
-                        mkt_items = _merge_marketplace(existing, browse_items)
-                        save_json(MARKETPLACE_FILE, mkt_items)
-                        print(f"[+] Saved {len(mkt_items)} marketplace items")
-                else:
-                    print("[!] No auth token for browse — skipping step 2")
+                    # Step 2: Browse catalog all regions (emerald endpoint) + merge
+                    print("\n=== Step 2/3: Browse catalog (all regions) ===\n")
+                    set_account_paths(gt)
+                    auth = read_auth_token(optional=True)
+                    auth_xl = _read_xl_token()
+                    token = auth_xl or auth
+                    if token:
+                        print(f"  Using {'xl' if token == auth_xl else 'mp'} token")
+                        products = fetch_browse_all_regions(token, gt)
+                        if products:
+                            browse_items = browse_to_marketplace_multi(products, gt)
+                            existing = load_json(MARKETPLACE_FILE) if os.path.isfile(MARKETPLACE_FILE) else []
+                            mkt_items = _merge_marketplace(existing, browse_items)
+                            save_json(MARKETPLACE_FILE, mkt_items)
+                            print(f"[+] Saved {len(mkt_items)} marketplace items")
+                    else:
+                        print("[!] No auth token for browse — skipping step 2")
 
-                # Step 3: TitleHub coarse scan (all regions)
-                print("\n=== Step 3/3: TitleHub ID scan (all regions) ===\n")
-                set_account_paths(gt)
-                xl_token = _read_xl_token()
-                if xl_token:
-                    scan_titlehub_all_regions(xl_token)
-                else:
-                    print("[!] No xl token — skipping TitleHub scan")
+                    # Step 3: TitleHub coarse scan (all regions)
+                    print("\n=== Step 3/3: TitleHub ID scan (all regions) ===\n")
+                    set_account_paths(gt)
+                    xl_token = _read_xl_token()
+                    if xl_token:
+                        scan_titlehub_all_regions(xl_token)
+                    else:
+                        print("[!] No xl token — skipping TitleHub scan")
 
-                # Final rebuild
-                html_file = build_index()
-                if html_file:
-                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                    webbrowser.open(file_url)
+                    # Final rebuild
+                    html_file = build_index()
+                    if html_file:
+                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                        webbrowser.open(file_url)
+                    _op_summary("Full discovery", detail=f"{gt}", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Full discovery", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "H":
             gt = _pick_account(gamertags, "TitleHub scan using which account?", allow_all=False)
             if gt:
-                set_account_paths(gt)
-                xl_token = _read_xl_token()
-                if not xl_token:
-                    print(f"[!] No xl token for {gt}. Refresh token first.")
-                else:
-                    scan_titlehub_all_regions(xl_token)
-            continue
-        elif pu == "U":
-            process_usb_drive()
-            continue
-        elif pu == "I":
-            drive_letter = input("  Drive letter (default: E): ").strip() or "E"
-            build_usb_db(drive_letter.rstrip(":/\\").upper())
+                _t0 = time.time()
+                try:
+                    set_account_paths(gt)
+                    xl_token = _read_xl_token()
+                    if not xl_token:
+                        print(f"[!] No xl token for {gt}. Refresh token first.")
+                    else:
+                        scan_titlehub_all_regions(xl_token)
+                    _op_summary("TitleHub ID scan", detail=f"{gt}", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("TitleHub ID scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "K":
-            process_cdn_version_discovery()
-            continue
-        elif pu == "O":
-            process_rg_adguard()
+            _t0 = time.time()
+            try:
+                process_xbox_usb_tool()
+                _op_summary("USB Hard Drive Tool", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("USB Hard Drive Tool", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "J":
-            process_gfwl_download()
+            _t0 = time.time()
+            try:
+                process_gfwl_download()
+                _op_summary("GFWL CDN Installer", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("GFWL CDN Installer", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "V":
-            process_drive_converter()
+        elif pu == "O":
+            _t0 = time.time()
+            try:
+                process_store_packages()
+                _op_summary("MS Store Installer", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("MS Store Installer", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         else:
             try:
                 idx = int(pick) - 1
                 if 0 <= idx < len(gamertags):
                     gt = gamertags[idx]
-                    # Refresh token (clears API cache) so we always get fresh data
-                    print(f"\n[*] Refreshing token for {gt}...")
-                    refresh_account_token(gt)
-                    html_file, _lib = process_account(gt, method="both")
-                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                    print(f"[*] Opening in browser: {file_url}")
-                    webbrowser.open(file_url)
+                    _t0 = time.time()
+                    try:
+                        # Refresh token (clears API cache) so we always get fresh data
+                        print(f"\n[*] Refreshing token for {gt}...")
+                        refresh_account_token(gt)
+                        html_file, _lib = process_account(gt, method="both")
+                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                        print(f"[*] Opening in browser: {file_url}")
+                        webbrowser.open(file_url)
+                        _op_summary("Process account", detail=f"{gt} — {len(_lib):,} items", elapsed=time.time() - _t0)
+                    except Exception as _e:
+                        _op_summary("Process account", success=False, detail=str(_e), elapsed=time.time() - _t0)
                     continue
                 else:
                     print("  Invalid selection.")

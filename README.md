@@ -1,12 +1,14 @@
 # Xbox Collection Tracker (XCT)
 
-**v1.5**
-
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
+
+## What's New in v1.6
+
+- **Library Import/Export** — Share your Xbox game collection without exposing credentials. Export your library as a JSON file (excludes Game Pass-only entitlements, strips large fields for size). Import collections from others — imported items appear alongside your own in the same filters, dropdowns, and grid/list views with a subtle "imported" badge. Manage imports from a dedicated Imports tab. Uses localStorage for persistence.
 
 ## What's New in v1.5
 
-- **MS Store Package Fetcher `[O]`** — Fetches direct CDN download links for any Microsoft Store app or game (including delisted titles) via `store.rg-adguard.net`. Accepts ProductId, CategoryId (WuCategoryId), PackageFamilyName, or a store URL. Can also pick games from your USB drive library. Supports all rings (RP, Retail, Fast, Slow). Downloads `.appx`, `.appxbundle`, `.msix`, `.msixbundle` and `.BlockMap` files directly. Also accessible via `[O]` inside the `[K]` CDN discovery submenu.
+- **MS Store Package Fetcher `[O]`** — Fetches direct CDN download links for any Microsoft Store app or game (including delisted titles) directly from Microsoft's delivery CDN (`fe3cr.delivery.mp.microsoft.com`). No third-party proxy — talks to the Windows Update SOAP API directly. Accepts ProductId, CategoryId (WuCategoryId), PackageFamilyName, or a store URL. Supports all rings (RP, Retail, WIF, WIS). Downloads `.appx`, `.appxbundle`, `.msix`, `.msixbundle` and `.BlockMap` files directly. Includes **Freshdex Database** — browse all PC/Windows games from your combined library across all accounts with letter, year, genre, and search filters. Also accessible via `[O]` inside the `[K]` CDN discovery submenu.
 
 ## What's New in v1.4.2
 
