@@ -2,6 +2,14 @@
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
 
+## What's New in v1.6.2
+
+- **Fix Display Catalog crash** — The API sometimes returns `null` for array fields (Images, Packages, etc.), causing "'NoneType' object is not iterable" errors during catalog enrichment. Fixed with null-safe iteration.
+- **Export filename** — Exported JSON now includes the top gamertag and GT count in the filename (e.g. `xct_export_Play_Jamsesh_52gt_2026-02-22.json`).
+- **Consistent terminology** — All user-facing "Account" labels renamed to "Gamertag" across CLI and HTML.
+- **Reorganized menu** — Gamertag management options (add, refresh, delete, rescan) moved under the Gamertags section header.
+- **HTML title** — Browser tab now shows "Xbox Collection Tracker vX.X.X by Freshdex".
+
 ## What's New in v1.6.1
 
 - **Import storage fix** — Switched from localStorage (5MB limit) to IndexedDB for imported library data, so large collections import without errors.
