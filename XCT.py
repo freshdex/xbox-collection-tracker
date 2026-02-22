@@ -3307,6 +3307,9 @@ def build_html_template(gamertag=""):
         '.imp-gts{font-size:11px;color:#666;margin-top:2px}\n'
         '.imp-rm{background:#c62828;color:#fff;border:none;padding:4px 12px;font-size:11px;cursor:pointer;border-radius:3px}\n'
         '.imp-rm:hover{background:#e53935}\n'
+        '.cb-divider{padding:6px 8px;color:#888;font-size:10px;border-top:1px solid #333;margin-top:4px;display:flex;align-items:center;gap:6px;column-span:all}\n'
+        '.cb-divider button{background:none;border:none;color:#c62828;cursor:pointer;font-size:12px;padding:0 2px}\n'
+        '.cb-divider button:hover{color:#e53935}\n'
         '</style>\n'
         '</head>\n'
         '<body>\n'
@@ -3681,18 +3684,40 @@ def build_html_template(gamertag=""):
         # Acquired years
         "const ays=new Set();_all.forEach(x=>{const y=(x.acquiredDate||'').slice(0,4);if(/^\\d{4}$/.test(y))ays.add(y)});\n"
         "fill('lib-ayear',[...ays].sort().reverse().map(y=>[y,y]),\'filterLib\');\n"
-        # Gamertags (sorted by USD value desc, showing value)
-        "const gts={};const gtVal={};_all.forEach(x=>{const g=x.gamertag||'';if(g){gts[g]=(gts[g]||0)+1;gtVal[g]=(gtVal[g]||0)+(x.priceUSD||0)}});\n"
-        "const gtKeys=Object.keys(gts);\n"
-        "if(gtKeys.length>1){const el=document.getElementById('lib-gamertag');"
-        "el.style.display='';const panel=el.querySelector('.cb-panel');"
-        "gtKeys.sort((a,b)=>(gtVal[b]||0)-(gtVal[a]||0)).forEach(g=>{const lbl=document.createElement('label');"
-        "const v=gtVal[g]||0;const vs=v>0?'$'+v.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}):'';"
-        "lbl.innerHTML='<input type=\"checkbox\" value=\"'+g+'\" checked onchange=\"filterLib()\"> '+g+' ('+gts[g]+')'"
+        # Gamertags — native section + per-import sections with remove buttons
+        "const nGts={},nGtV={};\n"
+        "LIB.forEach(x=>{const g=x.gamertag||'';if(g){nGts[g]=(nGts[g]||0)+1;nGtV[g]=(nGtV[g]||0)+(x.priceUSD||0)}});\n"
+        "const _idx=_impIdx();\n"
+        "const iGrps={};\n"
+        "(_impLib||[]).forEach(x=>{const iid=x._importId;if(!iGrps[iid])iGrps[iid]={gts:{},vals:{}};"
+        "const g=x.gamertag||'';if(g){iGrps[iid].gts[g]=(iGrps[iid].gts[g]||0)+1;iGrps[iid].vals[g]=(iGrps[iid].vals[g]||0)+(x.priceUSD||0)}});\n"
+        "const _allGtSet=new Set(Object.keys(nGts));\n"
+        "_idx.forEach(m=>{const gr=iGrps[m.id];if(gr)Object.keys(gr.gts).forEach(g=>_allGtSet.add(g))});\n"
+        "function _gtLabel(g,cnt,val){"
+        "const vs=val>0?'$'+val.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}):'';"
+        "const lbl=document.createElement('label');"
+        "lbl.innerHTML='<input type=\"checkbox\" value=\"'+g+'\" checked onchange=\"filterLib()\"> '+g+' ('+cnt+')'"
         "+(vs?' <span style=\"color:#42a5f5;font-size:10px\">'+vs+'</span>':'');"
-        "panel.appendChild(lbl)});"
-        "const cols=gtKeys.length>24?3:gtKeys.length>12?2:1;"
-        "if(cols>1){panel.classList.add('cb-cols');panel.style.columnCount=cols;panel.style.minWidth=(cols*220)+'px'}"
+        "return lbl}\n"
+        "if(_allGtSet.size>1){\n"
+        "const el=document.getElementById('lib-gamertag');"
+        "el.style.display='';const panel=el.querySelector('.cb-panel');\n"
+        # Native gamertags
+        "const nKeys=Object.keys(nGts).sort((a,b)=>(nGtV[b]||0)-(nGtV[a]||0));\n"
+        "nKeys.forEach(g=>panel.appendChild(_gtLabel(g,nGts[g],nGtV[g]||0)));\n"
+        # Import groups
+        "_idx.forEach((m,i)=>{\n"
+        "const gr=iGrps[m.id];if(!gr)return;\n"
+        "const ik=Object.keys(gr.gts);if(!ik.length)return;\n"
+        "const dv=document.createElement('div');dv.className='cb-divider';\n"
+        "dv.innerHTML='Import #'+(i+1)+': '+_esc(m.label)"
+        "+' <button onclick=\"_removeImport(\\''+m.id+'\\')\" title=\"Remove import\">&times;</button>';\n"
+        "panel.appendChild(dv);\n"
+        "ik.sort((a,b)=>(gr.vals[b]||0)-(gr.vals[a]||0)).forEach(g=>panel.appendChild(_gtLabel(g,gr.gts[g],gr.vals[g]||0)));\n"
+        "});\n"
+        # Columns + Clear All
+        "const cols=_allGtSet.size>24?3:_allGtSet.size>12?2:1;\n"
+        "if(cols>1){panel.classList.add('cb-cols');panel.style.columnCount=cols;panel.style.minWidth=(cols*220)+'px'}\n"
         "const clr=document.createElement('div');clr.className='cb-clear';clr.textContent='Clear All';"
         "clr.onclick=function(){const boxes=panel.querySelectorAll('input');"
         "const anyChecked=[...boxes].some(c=>c.checked);boxes.forEach(c=>c.checked=!anyChecked);"
@@ -3806,7 +3831,7 @@ def build_html_template(gamertag=""):
         "if(!idx.length)return Promise.resolve();\n"
         "return Promise.all(idx.map(m=>_impGet(m.id).then(lib=>{\n"
         "if(!lib||!lib.length)return;\n"
-        "lib.forEach(item=>{item.gamertag=m.label;item._imported=true;_impLib.push(item)});\n"
+        "lib.forEach(item=>{item._imported=true;item._importId=m.id;item._importLabel=m.label;_impLib.push(item)});\n"
         "}).catch(()=>{})));\n"
         "}\n"
 
