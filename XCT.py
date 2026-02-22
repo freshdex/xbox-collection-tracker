@@ -2185,7 +2185,7 @@ def extract_catalog_data(product, market="GB"):
     result = {}
     pid = product.get("ProductId", "")
 
-    lp = product.get("LocalizedProperties", [])
+    lp = product.get("LocalizedProperties") or []
     lp0 = lp[0] if lp else {}
 
     # -- Title, description, developer, publisher (always extract) --
@@ -2195,7 +2195,7 @@ def extract_catalog_data(product, market="GB"):
     result["publisher"] = lp0.get("PublisherName", "")
 
     # -- Images: find BoxArt and Hero/SuperHeroArt --
-    images = lp0.get("Images", [])
+    images = lp0.get("Images") or []
     box_art = ""
     hero_art = ""
     for img in images:
@@ -2217,7 +2217,7 @@ def extract_catalog_data(product, market="GB"):
     result["isDemo"] = props.get("IsDemo", False)
 
     # -- DisplaySkuAvailabilities: prices, trial, platforms, releaseDate --
-    skus = product.get("DisplaySkuAvailabilities", [])
+    skus = product.get("DisplaySkuAvailabilities") or []
 
     best_msrp = 0
     best_list = 0
@@ -2235,14 +2235,14 @@ def extract_catalog_data(product, market="GB"):
             has_trial_sku = True
 
         # Packages -> PlatformDependencies
-        for pkg in sku_props.get("Packages", []):
-            for pdep in pkg.get("PlatformDependencies", []):
+        for pkg in (sku_props.get("Packages") or []):
+            for pdep in (pkg.get("PlatformDependencies") or []):
                 pname = pdep.get("PlatformName", "")
                 mapped = PLATFORM_MAP.get(pname, pname)
                 if mapped:
                     platforms.add(mapped)
 
-        avails = sku_entry.get("Availabilities", [])
+        avails = sku_entry.get("Availabilities") or []
         for avail in avails:
             # Price
             omd = avail.get("OrderManagementData", {})
