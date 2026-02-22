@@ -911,9 +911,9 @@ def sisu_auth_for_account(existing_gamertag=None):
     gamertag = existing_gamertag or gamertag_resolved
 
     if not gamertag:
-        gamertag = input("  Enter gamertag label for this account: ").strip()
+        gamertag = input("  Enter gamertag label: ").strip()
         if not gamertag:
-            gamertag = f"Account_{xuid[:8] if xuid else 'unknown'}"
+            gamertag = f"Gamertag_{xuid[:8] if xuid else 'unknown'}"
 
     # Save state (refresh token + EC key for device-bound reuse)
     ensure_account_dir(gamertag)
@@ -949,7 +949,7 @@ def sisu_auth_for_account(existing_gamertag=None):
     clear_api_cache(gamertag=gamertag)
 
     print()
-    print(f"[+] Account: {gamertag}")
+    print(f"[+] Gamertag: {gamertag}")
     print(f"[+] Tokens saved to {account_dir(gamertag)}")
     print(f"    Collections token: {len(xbl3_mp)} chars")
     print(f"    TitleHub token:    {len(xbl3_xl)} chars")
@@ -1352,7 +1352,7 @@ def cmd_add():
     """Add a new account via device code flow. Loops until user declines."""
     while True:
         print("=" * 56)
-        print("  XCT — Add New Account")
+        print("  XCT — Add New Gamertag")
         print("=" * 56)
         print()
         gamertag = sisu_auth_for_account()
@@ -1365,7 +1365,7 @@ def cmd_add():
                 print(f"[*] Opening in browser: {file_url}")
                 webbrowser.open(file_url)
         print()
-        again = input("Add another account? [y/N]: ").strip().lower()
+        again = input("Add another gamertag? [y/N]: ").strip().lower()
         if again not in ("y", "yes"):
             break
         print()
@@ -1376,9 +1376,9 @@ def delete_account(gamertag):
     import shutil
     accounts = load_accounts()
     if gamertag not in accounts:
-        print(f"[!] Account '{gamertag}' not found.")
+        print(f"[!] Gamertag '{gamertag}' not found.")
         return
-    confirm = input(f"  Delete account '{gamertag}' and all its data? [y/N]: ").strip().lower()
+    confirm = input(f"  Delete gamertag '{gamertag}' and all its data? [y/N]: ").strip().lower()
     if confirm not in ("y", "yes"):
         print("  Cancelled.")
         return
@@ -1389,7 +1389,7 @@ def delete_account(gamertag):
     # Remove from registry
     del accounts[gamertag]
     save_accounts(accounts)
-    print(f"[+] Account '{gamertag}' deleted.")
+    print(f"[+] Gamertag '{gamertag}' deleted.")
 
 
 def refresh_account_token(gamertag):
@@ -1406,7 +1406,7 @@ def refresh_account_token(gamertag):
     else:
         debug(f"  account dir does NOT exist: {acct_dir}")
     if not os.path.isfile(state_file):
-        print(f"[*] No auth state for {gamertag} (HAR-only account)")
+        print(f"[*] No auth state for {gamertag} (HAR-only gamertag)")
         print(f"    Device code login needed to enable TitleHub access.")
         answer = input(f"    Authenticate {gamertag} now? [Y/n]: ").strip().lower()
         debug(f"  user answer: '{answer}'")
@@ -1587,9 +1587,9 @@ def har_extract(arg=None):
         else:
             label = detected
     else:
-        label = input(f"  Enter gamertag label for this account (uhs={uhs}): ").strip()
+        label = input(f"  Enter gamertag label (uhs={uhs}): ").strip()
         if not label:
-            label = f"Account_{uhs[:8]}"
+            label = f"Gamertag_{uhs[:8]}"
 
     # Save to account directory
     ensure_account_dir(label)
@@ -1604,7 +1604,7 @@ def har_extract(arg=None):
     clear_api_cache(gamertag=label)
 
     print()
-    print(f"[+] Account: {label}")
+    print(f"[+] Gamertag: {label}")
     print(f"[+] Token saved to {token_file}")
     print(f"    Length: {len(selected)} chars")
 
@@ -1731,7 +1731,7 @@ def read_auth_token(optional=False):
         if optional:
             return None
         print(f"ERROR: {AUTH_TOKEN_FILE} not found.")
-        print("  Run `python XCT.py add` to set up your account.")
+        print("  Run `python XCT.py add` to set up a gamertag.")
         sys.exit(1)
     with open(AUTH_TOKEN_FILE, "r") as f:
         token = f.read().strip()
@@ -3465,7 +3465,7 @@ def build_html_template(gamertag=""):
         '<p class="sub" id="ph-sub">Games from TitleHub not in your Collections (disc, trials, rentals, etc.)</p>\n'
         '<div class="search-row"><input type="text" id="ph-search" placeholder="Search play history..." oninput="filterPH()"></div>\n'
         '<div class="filters">\n'
-        '<div class="cb-drop" id="ph-gamertag" style="display:none"><div class="cb-btn" onclick="toggleCB(this)">Account &#9662;</div><div class="cb-panel"></div></div>\n'
+        '<div class="cb-drop" id="ph-gamertag" style="display:none"><div class="cb-btn" onclick="toggleCB(this)">Gamertag &#9662;</div><div class="cb-panel"></div></div>\n'
         '<select id="ph-sort" onchange="filterPH()"><option value="playDesc" selected>Sort: Last Played (Recent)</option>'
         '<option value="playAsc">Sort: Last Played (Oldest)</option>'
         '<option value="name">Sort: Name</option></select>\n'
@@ -4649,7 +4649,7 @@ def build_html_template(gamertag=""):
         "if(typeof ACCOUNTS==='undefined'||!ACCOUNTS.length)return;\n"
         "const el=document.getElementById('acct-table');\n"
         "const sub=document.getElementById('acct-sub');\n"
-        "sub.textContent=ACCOUNTS.length+' accounts';\n"
+        "sub.textContent=ACCOUNTS.length+' gamertags';\n"
         # Compute per-gamertag stats from LIB
         "const gtStats={};\n"
         "LIB.forEach(item=>{\n"
@@ -5103,7 +5103,7 @@ def prompt_data_source(gamertag):
         # har_extract saves to an account dir — re-check this account's token
         has_collection = os.path.isfile(os.path.join(acct, "auth_token.txt"))
         if not has_collection:
-            print("  Token was saved to a different account. Falling back to Both.")
+            print("  Token was saved to a different gamertag. Falling back to Both.")
             return "both"
         return "collection"
     elif pick == "C":
@@ -5396,7 +5396,7 @@ def process_account(gamertag, method=None):
     elapsed = time.time() - start_time
     print(f"  Library: {len(library)} items")
     if len(combined_library) > len(library):
-        print(f"  Combined: {len(combined_library)} items (all accounts)")
+        print(f"  Combined: {len(combined_library)} items (all gamertags)")
     print(f"  Completed in {elapsed:.1f}s")
     print()
 
@@ -5427,7 +5427,7 @@ def build_index():
     """
     accounts = load_accounts()
     if not accounts:
-        print("No accounts found.")
+        print("No gamertags found.")
         return
 
     gamertags = list(accounts.keys())
@@ -5523,7 +5523,7 @@ def build_index():
     with open(combined_html, "w", encoding="utf-8") as f:
         f.write(html)
 
-    print(f"\n[+] Index rebuilt: {len(combined_library)} items across {len(gamertags)} accounts")
+    print(f"\n[+] Index rebuilt: {len(combined_library)} items across {len(gamertags)} gamertags")
     return combined_html
 
 
@@ -5536,7 +5536,7 @@ def process_gamepass_library():
     accounts = load_accounts()
     gamertags = list(accounts.keys())
     if not gamertags:
-        print("[!] No accounts configured.")
+        print("[!] No gamertags configured.")
         return
 
     # Pick an account for auth token (needed for catalog enrichment)
@@ -6835,14 +6835,14 @@ def process_all_accounts():
     """
     accounts = load_accounts()
     if not accounts:
-        print("No accounts found. Use 'add' to set up an account.")
+        print("No gamertags found. Use 'add' to set up a gamertag.")
         return
 
     gamertags = list(accounts.keys())
 
     # Single data-source prompt for all accounts
     print()
-    print("  Data source for all accounts:")
+    print("  Data source for all gamertags:")
     print("    [B] Both (recommended)      - full collection + game metadata")
     print("    [C] Collections API only    - all entitlements (~5000)")
     print("    [T] TitleHub only           - games with metadata (~1000)")
@@ -9806,7 +9806,7 @@ def process_cdn_version_discovery():
 def _pick_account(gamertags, prompt="Which account?", allow_all=True):
     """Prompt user to pick an account. Returns gamertag, '*', or None."""
     if not gamertags:
-        print("  [!] No accounts configured. Use [A] to add one first.")
+        print("  [!] No gamertags configured. Use [A] to add one first.")
         return None
     if len(gamertags) == 1:
         return gamertags[0]
@@ -9814,7 +9814,7 @@ def _pick_account(gamertags, prompt="Which account?", allow_all=True):
     for i, gt in enumerate(gamertags, 1):
         print(f"    [{i}] {gt}")
     if allow_all:
-        print(f"    [*] All accounts")
+        print(f"    [*] All gamertags")
     print()
     sp = input(f"  {prompt} [1-{len(gamertags)}{', *' if allow_all else ''}]: ").strip()
     if allow_all and sp == "*":
@@ -9837,11 +9837,11 @@ def interactive_menu():
 
         print_header()
         if gamertags:
-            print(f"  Accounts:  ({len(gamertags)} accounts)")
-            print(f"    [0] Select account to process  (or type number directly)")
-            print(f"    [*] Process all accounts")
+            print(f"  Gamertags:  ({len(gamertags)} gamertags)")
+            print(f"    [0] Select gamertag to process  (or type number directly)")
+            print(f"    [*] Process all gamertags")
         else:
-            print("  Accounts:  (none — add one to unlock library features)")
+            print("  Gamertags:  (none — add one to unlock library features)")
         print()
         print("  Scan endpoints:")
         print("    [E] Collections API only")
@@ -9863,11 +9863,11 @@ def interactive_menu():
         print("    [H] TitleHub ID scan (coarse, all regions)")
         print("    [Y] Full discovery (Marketplace + Browse + TitleHub, all regions)")
         print()
-        print("  Account management:")
-        print("    [A] Add new account")
-        print("    [R] Refresh token on existing account")
-        print("    [D] Delete an account")
-        print("    [X] Clear cache + rescan all accounts")
+        print("  Gamertag management:")
+        print("    [A] Add new gamertag")
+        print("    [R] Refresh token on existing gamertag")
+        print("    [D] Delete a gamertag")
+        print("    [X] Clear cache + rescan all gamertags")
         print("    [B] Build index (rebuild HTML from cache)")
         print()
         print("  Utilities:")
@@ -9886,14 +9886,14 @@ def interactive_menu():
             break
         elif pick == "0":
             if _no_accts:
-                print("  [!] No accounts configured. Use [A] to add one first.")
+                print("  [!] No gamertags configured. Use [A] to add one first.")
                 continue
             print()
             for i, gt in enumerate(gamertags, 1):
                 age = token_age_str(gt)
                 print(f"    [{i:>2}] {gt}  (token: {age})")
             print()
-            ap = input(f"  Process which account? [1-{len(gamertags)}]: ").strip()
+            ap = input(f"  Process which gamertag? [1-{len(gamertags)}]: ").strip()
             try:
                 idx = int(ap) - 1
                 if 0 <= idx < len(gamertags):
@@ -9906,9 +9906,9 @@ def interactive_menu():
                         file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
                         print(f"[*] Opening in browser: {file_url}")
                         webbrowser.open(file_url)
-                        _op_summary("Process account", detail=f"{gt} — {len(_lib):,} items", elapsed=time.time() - _t0)
+                        _op_summary("Process gamertag", detail=f"{gt} — {len(_lib):,} items", elapsed=time.time() - _t0)
                     except Exception as _e:
-                        _op_summary("Process account", success=False, detail=str(_e), elapsed=time.time() - _t0)
+                        _op_summary("Process gamertag", success=False, detail=str(_e), elapsed=time.time() - _t0)
                 else:
                     print("  Invalid selection.")
             except ValueError:
@@ -9919,7 +9919,7 @@ def interactive_menu():
             continue
         elif pu == "R":
             if _no_accts:
-                print("  [!] No accounts configured. Use [A] to add one first.")
+                print("  [!] No gamertags configured. Use [A] to add one first.")
                 continue
             if len(gamertags) == 1:
                 gt = gamertags[0]
@@ -9928,7 +9928,7 @@ def interactive_menu():
                 for i, gt in enumerate(gamertags, 1):
                     print(f"    [{i}] {gt} (token: {token_age_str(gt)})")
                 print()
-                rp = input(f"  Refresh which account? [1-{len(gamertags)}]: ").strip()
+                rp = input(f"  Refresh which gamertag? [1-{len(gamertags)}]: ").strip()
                 try:
                     idx = int(rp) - 1
                     if 0 <= idx < len(gamertags):
@@ -9955,7 +9955,7 @@ def interactive_menu():
             continue
         elif pu == "D":
             if _no_accts:
-                print("  [!] No accounts configured. Use [A] to add one first.")
+                print("  [!] No gamertags configured. Use [A] to add one first.")
                 continue
             gt = None
             if len(gamertags) == 1:
@@ -9965,7 +9965,7 @@ def interactive_menu():
                 for i, g in enumerate(gamertags, 1):
                     print(f"    [{i}] {g}")
                 print()
-                dp = input(f"  Delete which account? [1-{len(gamertags)}]: ").strip()
+                dp = input(f"  Delete which gamertag? [1-{len(gamertags)}]: ").strip()
                 try:
                     idx = int(dp) - 1
                     if 0 <= idx < len(gamertags):
@@ -9978,20 +9978,20 @@ def interactive_menu():
                 _t0 = time.time()
                 try:
                     delete_account(gt)
-                    _op_summary("Delete account", detail=f"{gt}", elapsed=time.time() - _t0)
+                    _op_summary("Delete gamertag", detail=f"{gt}", elapsed=time.time() - _t0)
                 except Exception as _e:
-                    _op_summary("Delete account", success=False, detail=str(_e), elapsed=time.time() - _t0)
+                    _op_summary("Delete gamertag", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pick == "*":
             if _no_accts:
-                print("  [!] No accounts configured. Use [A] to add one first.")
+                print("  [!] No gamertags configured. Use [A] to add one first.")
                 continue
             _t0 = time.time()
             try:
                 process_all_accounts()
-                _op_summary("Process all accounts", detail="Done", elapsed=time.time() - _t0)
+                _op_summary("Process all gamertags", detail="Done", elapsed=time.time() - _t0)
             except Exception as _e:
-                _op_summary("Process all accounts", success=False, detail=str(_e), elapsed=time.time() - _t0)
+                _op_summary("Process all gamertags", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "E":
             gt = _pick_account(gamertags, "Collections API scan for which account?")
@@ -10003,7 +10003,7 @@ def interactive_menu():
                             _auto_refresh_token(g)
                         process_account(g, method="collection")
                     build_index()
-                    _op_summary("Collections API scan", detail="All accounts", elapsed=time.time() - _t0)
+                    _op_summary("Collections API scan", detail="All gamertags", elapsed=time.time() - _t0)
                 except Exception as _e:
                     _op_summary("Collections API scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             elif gt:
@@ -10028,7 +10028,7 @@ def interactive_menu():
                             _auto_refresh_token(g)
                         process_account(g, method="titlehub")
                     build_index()
-                    _op_summary("TitleHub scan", detail="All accounts", elapsed=time.time() - _t0)
+                    _op_summary("TitleHub scan", detail="All gamertags", elapsed=time.time() - _t0)
                 except Exception as _e:
                     _op_summary("TitleHub scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             elif gt:
@@ -10056,7 +10056,7 @@ def interactive_menu():
                     if html_file:
                         file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
                         webbrowser.open(file_url)
-                    _op_summary("Content Access scan", detail="All accounts", elapsed=time.time() - _t0)
+                    _op_summary("Content Access scan", detail="All gamertags", elapsed=time.time() - _t0)
                 except Exception as _e:
                     _op_summary("Content Access scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             elif gt:
@@ -10074,10 +10074,10 @@ def interactive_menu():
             continue
         elif pu == "X":
             if _no_accts:
-                print("  [!] No accounts configured. Use [A] to add one first.")
+                print("  [!] No gamertags configured. Use [A] to add one first.")
                 continue
             print()
-            print("  This will delete all cached API data and rescan every account.")
+            print("  This will delete all cached API data and rescan every gamertag.")
             confirm = input("  Are you sure? [y/N]: ").strip().lower()
             if confirm in ("y", "yes"):
                 _t0 = time.time()
@@ -10085,7 +10085,7 @@ def interactive_menu():
                     for gt in gamertags:
                         clear_api_cache(gt)
                     process_all_accounts()
-                    _op_summary("Clear cache + rescan", detail="All accounts rescanned", elapsed=time.time() - _t0)
+                    _op_summary("Clear cache + rescan", detail="All gamertags rescanned", elapsed=time.time() - _t0)
                 except Exception as _e:
                     _op_summary("Clear cache + rescan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
@@ -10390,9 +10390,9 @@ def interactive_menu():
                         file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
                         print(f"[*] Opening in browser: {file_url}")
                         webbrowser.open(file_url)
-                        _op_summary("Process account", detail=f"{gt} — {len(_lib):,} items", elapsed=time.time() - _t0)
+                        _op_summary("Process gamertag", detail=f"{gt} — {len(_lib):,} items", elapsed=time.time() - _t0)
                     except Exception as _e:
-                        _op_summary("Process account", success=False, detail=str(_e), elapsed=time.time() - _t0)
+                        _op_summary("Process gamertag", success=False, detail=str(_e), elapsed=time.time() - _t0)
                     continue
                 else:
                     print("  Invalid selection.")
@@ -10434,7 +10434,7 @@ def main():
             with open(html_file, "w", encoding="utf-8") as f:
                 f.write(html)
             write_data_js([], [], [], os.path.join(ACCOUNTS_DIR, "data.js"))
-            print(f"[+] Preview HTML written (no account data)")
+            print(f"[+] Preview HTML written (no gamertag data)")
             if html_file:
                 file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
                 print(f"[*] Opening in browser: {file_url}")
@@ -10450,9 +10450,9 @@ def main():
             gamertag = args[0]
             accounts = load_accounts()
             if gamertag not in accounts:
-                print(f"ERROR: Account '{gamertag}' not found in accounts.json")
-                print(f"  Known accounts: {', '.join(accounts.keys()) or '(none)'}")
-                print("  Run `python XCT.py add` to set up an account.")
+                print(f"ERROR: Gamertag '{gamertag}' not found in accounts.json")
+                print(f"  Known gamertags: {', '.join(accounts.keys()) or '(none)'}")
+                print("  Run `python XCT.py add` to set up a gamertag.")
             else:
                 # Refresh token
                 print(f"[*] Refreshing token for {gamertag}...")
