@@ -9438,10 +9438,26 @@ def _freshdex_pick_game(db):
 
 def process_store_packages():
     """Interactive MS Store package fetcher via Microsoft fe3 delivery API."""
-    print("\n[MS Store Package Fetcher]")
+    print("\n[Microsoft Store (Win8/8.1/10) CDN Installer]")
+    # Quick count of PC/Windows games for menu label
+    _pc_count = 0
+    try:
+        _accts = load_accounts()
+        _seen_pids = set()
+        for _gt in _accts:
+            for _fn in ("library.json", "marketplace.json"):
+                _fp = account_path(_gt, _fn)
+                if os.path.isfile(_fp):
+                    for _it in (load_json(_fp) or []):
+                        _pid = _it.get("productId", "")
+                        if _pid and _pid not in _seen_pids and _it.get("productKind") == "Game" and any(p in ("PC", "Windows.Windows8x") for p in _it.get("platforms", [])):
+                            _seen_pids.add(_pid)
+            _pc_count = len(_seen_pids)
+    except Exception:
+        pass
     print()
     print("  Input type:")
-    print("    [F] Freshdex Database (browse PC/Windows games from your library)")
+    print(f"    [F] Your Library ({_pc_count} Games)" if _pc_count else "    [F] Your Library")
     print("    [1] ProductId         e.g. 9NBLGGH5R558")
     print("    [2] CategoryId        e.g. e89c9ccf-de94-45ed-9cd4-7e11d05c3da4 (WuCategoryId)")
     print("    [3] PackageFamilyName e.g. Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe")
