@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-XCT — Xbox Collection Tracker by Freshdex
+XCT — Xbox Collection Tracker by Freshdex (version set in VERSION constant)
 ==========================================
 Authenticates with Xbox Live, fetches your Xbox/Microsoft Store entitlements,
 resolves catalog details (titles, prices, images, platforms) for both GBP and
@@ -1674,7 +1674,7 @@ def print_header():
     print("  ██╔╝ ██╗╚██████╗   ██║")
     print("  ╚═╝  ╚═╝ ╚═════╝   ╚═╝")
     print()
-    print(f"  Xbox Collection Tracker by Freshdex v{VERSION}")
+    print(f"  Xbox Collection Tracker v{VERSION} by Freshdex")
     print()
 
 
@@ -3094,7 +3094,7 @@ def build_html_template(gamertag=""):
     Only needs to be written once; subsequent scans only update data.js.
     """
     ls_key = f"xboxLibFlags_{gamertag}" if gamertag else "xboxLibFlags"
-    page_title = "XCT"
+    page_title = f"Xbox Collection Tracker v{VERSION} by Freshdex"
 
     html = (
         '<!DOCTYPE html>\n'
