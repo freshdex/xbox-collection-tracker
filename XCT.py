@@ -9354,7 +9354,7 @@ def _freshdex_pick_game(db):
             try:
                 idx = int(sel) - 1
                 if 0 <= idx < len(items):
-                    return items[idx]["productId"]
+                    return items[idx]
             except ValueError:
                 pass
             print("  [!] Invalid selection.")
@@ -9499,12 +9499,18 @@ def process_store_packages():
             print("[!] No Windows games found. Run library scans first.")
             return
         print(f"  Your Library: {len(db)} Windows games indexed")
-        pid = _freshdex_pick_game(db)
-        if not pid:
+        game = _freshdex_pick_game(db)
+        if not game:
             return
-        value = pid
+        value = game["productId"]
         input_type = "ProductId"
-        print(f"\n  \u2192 ProductId: {value}")
+        print()
+        print(f"  Title:     {game.get('title', '')}")
+        print(f"  Publisher: {game.get('publisher', '')}")
+        print(f"  Category:  {game.get('category', '')}")
+        print(f"  Released:  {game.get('releaseDate', '')[:10]}")
+        print(f"  Platforms: {', '.join(game.get('platforms', []))}")
+        print(f"  ProductId: {value}")
     elif choice in type_map:
         input_type = type_map[choice]
         value = input(f"  Enter {input_type}: ").strip()
@@ -9514,8 +9520,15 @@ def process_store_packages():
         return
 
     print()
-    ring_in = input("  Ring [RP/Retail/WIF/WIS, Enter=RP]: ").strip() or "RP"
-    ring = ring_in if ring_in in ("RP", "Retail", "WIF", "WIS") else "RP"
+    print("  Ring:")
+    print("    [1] RP (Release Preview)")
+    print("    [2] Retail")
+    print("    [3] WIF (Windows Insider Fast)")
+    print("    [4] WIS (Windows Insider Slow)")
+    print()
+    _ring_pick = input("  Ring [1]: ").strip() or "1"
+    _ring_map = {"1": "RP", "2": "Retail", "3": "WIF", "4": "WIS"}
+    ring = _ring_map.get(_ring_pick, "RP")
     print()
     print(f"[*] Fetching packages ({input_type}={value}, ring={ring}) ...")
 
