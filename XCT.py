@@ -9362,9 +9362,13 @@ def _freshdex_pick_game(db):
     # --- Filter menu ---
     print()
     print("  Filter by:")
-    print("    [A-Z] Starting letter       [#] Non-alpha titles")
-    print("    [Y]   Release year           [G] Genre/category")
-    print("    [S]   Search by title         [Enter] List all")
+    print("    [A-Z] Starting letter")
+    print("    [#]   Non-alpha titles")
+    print("    [Y]   Release year")
+    print("    [G]   Genre/category")
+    print("    [P]   Platform (Windows 8/8.1 or 10/11)")
+    print("    [S]   Search by title")
+    print("    [Enter] List all")
     print()
     filt = input("  Filter: ").strip()
 
@@ -9432,6 +9436,27 @@ def _freshdex_pick_game(db):
         print(f"\n  {len(items)} matches for '{q}':")
         return _paginated_pick(items)
 
+    if fu == "P":
+        print()
+        print("    [1] Windows 8/8.1 only")
+        print("    [2] Windows 10/11 only")
+        print("    [3] Both (Win 8/8.1 + Win 10/11)")
+        print()
+        ps = input("  Platform: ").strip()
+        if ps == "1":
+            items = [g for g in db if "Windows.Windows8x" in g.get("platforms", []) and "PC" not in g.get("platforms", [])]
+            print(f"\n  {len(items)} Windows 8/8.1 only games:")
+        elif ps == "2":
+            items = [g for g in db if "PC" in g.get("platforms", []) and "Windows.Windows8x" not in g.get("platforms", [])]
+            print(f"\n  {len(items)} Windows 10/11 only games:")
+        elif ps == "3":
+            items = [g for g in db if "PC" in g.get("platforms", []) and "Windows.Windows8x" in g.get("platforms", [])]
+            print(f"\n  {len(items)} games on both Windows 8/8.1 and Windows 10/11:")
+        else:
+            print("  [!] Invalid selection.")
+            return None
+        return _paginated_pick(items)
+
     print("  [!] Invalid filter.")
     return None
 
@@ -9471,9 +9496,9 @@ def process_store_packages():
     if choice == "F":
         db = _build_freshdex_db()
         if not db:
-            print("[!] No PC/Windows games found. Run library scans first.")
+            print("[!] No Windows games found. Run library scans first.")
             return
-        print(f"  Freshdex: {len(db)} PC/Windows games indexed")
+        print(f"  Your Library: {len(db)} Windows games indexed")
         pid = _freshdex_pick_game(db)
         if not pid:
             return
