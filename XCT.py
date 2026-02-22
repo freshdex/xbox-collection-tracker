@@ -9525,10 +9525,52 @@ def process_store_packages():
     print("    [2] Retail")
     print("    [3] WIF (Windows Insider Fast)")
     print("    [4] WIS (Windows Insider Slow)")
+    print("    [*] Scan all rings")
     print()
     _ring_pick = input("  Ring [1]: ").strip() or "1"
     _ring_map = {"1": "RP", "2": "Retail", "3": "WIF", "4": "WIS"}
-    ring = _ring_map.get(_ring_pick, "RP")
+    _ring_order = [("RP", "Release Preview"), ("Retail", "Retail"), ("WIF", "Windows Insider Fast"), ("WIS", "Windows Insider Slow")]
+
+    if _ring_pick == "*":
+        print()
+        print(f"[*] Scanning all rings for {input_type}={value} ...")
+        print()
+        _any_hit = False
+        for _rcode, _rname in _ring_order:
+            try:
+                _rlinks = _fe3_get_links(value, input_type=input_type, ring=_rcode)
+            except Exception as _re:
+                print(f"  {_rcode:<7} ({_rname}):  ERROR — {_re}")
+                continue
+            if not _rlinks:
+                print(f"  {_rcode:<7} ({_rname}):  No packages")
+                continue
+            _any_hit = True
+            # Extract version numbers from filenames
+            _versions = set()
+            for _rl in _rlinks:
+                _vm = re.search(r'_(\d+\.\d+\.\d+\.\d+)_', _rl["filename"])
+                if _vm:
+                    _versions.add(_vm.group(1))
+            _vstr = ", ".join(sorted(_versions)) if _versions else "unknown"
+            _tsz = sum(_rl["size"] for _rl in _rlinks)
+            if _tsz >= 1073741824:
+                _szstr = f"{_tsz / 1073741824:.2f} GB"
+            elif _tsz >= 1048576:
+                _szstr = f"{_tsz / 1048576:.1f} MB"
+            else:
+                _szstr = f"{_tsz / 1024:.0f} KB"
+            print(f"  {_rcode:<7} ({_rname}):  {len(_rlinks)} pkg(s)  —  v{_vstr}  —  {_szstr}")
+        if not _any_hit:
+            print("\n  [!] No packages found on any ring.")
+        print()
+        _cont = input("  Download from a specific ring? [1-4 / Q=back]: ").strip()
+        if _cont.upper() == "Q" or _cont not in _ring_map:
+            return
+        ring = _ring_map[_cont]
+    else:
+        ring = _ring_map.get(_ring_pick, "RP")
+
     print()
     print(f"[*] Fetching packages ({input_type}={value}, ring={ring}) ...")
 
