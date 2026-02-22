@@ -2,9 +2,15 @@
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
 
+## What's New in v1.6.1
+
+- **Import storage fix** — Switched from localStorage (5MB limit) to IndexedDB for imported library data, so large collections import without errors.
+- **Import gamertag dropdown** — All gamertags from an import now appear individually in the Gamertag filter dropdown, grouped under labeled sections ("Import #1: label") with inline remove buttons.
+- **Import remove confirmation** — Removing an import now shows a confirmation dialog with the collection name and item count.
+
 ## What's New in v1.6
 
-- **Library Import/Export** — Share your Xbox game collection without exposing credentials. Export your library as a JSON file (excludes Game Pass-only entitlements, strips large fields for size). Import collections from others — imported items appear alongside your own in the same filters, dropdowns, and grid/list views with a subtle "imported" badge. Manage imports from a dedicated Imports tab. Uses localStorage for persistence.
+- **Library Import/Export** — Share your Xbox game collection without exposing credentials. Export your library as a JSON file (excludes Game Pass-only entitlements, strips large fields for size). Import collections from others — imported items appear alongside your own in the same filters, dropdowns, and grid/list views with a subtle "imported" badge. Manage imports from a dedicated Imports tab.
 
 ## What's New in v1.5
 
