@@ -9868,7 +9868,7 @@ def interactive_menu():
         print("    [R] Refresh token on existing gamertag")
         print("    [D] Delete a gamertag")
         print("    [X] Clear cache + rescan all gamertags")
-        print("    [B] Build index (rebuild HTML from cache)")
+        print("    [B] Build/Rebuild Index")
         print()
         print("  Utilities:")
         print("    [K] Xbox One / Series X|S USB Hard Drive Tool")
