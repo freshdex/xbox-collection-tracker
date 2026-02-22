@@ -9837,9 +9837,9 @@ def interactive_menu():
 
         print_header()
         if gamertags:
-            print(f"  Gamertags:  ({len(gamertags)} gamertags)")
-            print(f"    [0] Select gamertag to process  (or type number directly)")
-            print(f"    [*] Process all gamertags")
+            print(f"  Gamertags ({len(gamertags)}):")
+            print(f"    [0] Show list")
+            print(f"    [*] Process all")
         else:
             print("  Gamertags:  (none — add one to unlock library features)")
         print()
