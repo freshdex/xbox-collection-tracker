@@ -3882,6 +3882,8 @@ def build_html_template(gamertag=""):
         "}\n"
 
         "function _removeImport(id){\n"
+        "const m=_impIdx().find(x=>x.id===id);\n"
+        "if(!confirm('Remove imported collection'+(m?' \"'+m.label+'\"':'')+' ('+((m&&m.count)||'?')+' items)?'))return;\n"
         "_impDel(id).then(()=>{\n"
         "const idx=_impIdx().filter(x=>x.id!==id);\n"
         "localStorage.setItem(IMP_IDX_KEY,JSON.stringify(idx));\n"
