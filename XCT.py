@@ -58,7 +58,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "1.6.2"
+VERSION = "1.6.3"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -1358,7 +1358,7 @@ def cmd_add():
         gamertag = sisu_auth_for_account()
         if gamertag:
             print()
-            scan_now = input("  Process full library scan now? [Y/n]: ").strip().lower()
+            scan_now = input("  Process full collection scan now? [Y/n]: ").strip().lower()
             if scan_now not in ("n", "no"):
                 html_file, _lib = process_account(gamertag, method="both")
                 file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
@@ -1861,7 +1861,7 @@ def fetch_entitlements_titlehub(gamertag):
         print("[!] TitleHub tokens empty")
         return None
 
-    print("[*] Fetching library from TitleHub...")
+    print("[*] Fetching collection from TitleHub...")
     try:
         items = fetch_titlehub_library(xl_token, xuid)
         debug(f"  TitleHub returned {len(items)} items")
@@ -1946,7 +1946,7 @@ def fetch_entitlements(auth_token, gamertag=None, method=None):
     if is_cache_fresh(ENTITLEMENTS_FILE) and method in (None, "both"):
         items = load_json(ENTITLEMENTS_FILE)
         debug(f"  cache hit: {len(items)} items")
-        print(f"[+] Library loaded from cache ({len(items)} items)")
+        print(f"[+] Collection loaded from cache ({len(items)} items)")
         return items
 
     items = None
@@ -2424,10 +2424,8 @@ def merge_library(entitlements, catalog, gamertag=""):
             "priceUSD":        cat.get("priceUSD", 0),
             "currentPriceUSD": cat.get("currentPriceUSD", 0),
             # Ownership classification
-            # _contentaccess_only items come from ContentAccess API (Game Pass/subscription)
-            # not from Collections API — they are NOT purchased
             "onGamePass":      False,  # set by JS cross-ref with fresh GP data
-            "owned":           not ent.get("_contentaccess_only", False),
+            "owned":           True,
             # Last played (from TitleHub TitleHistory decoration)
             "lastTimePlayed":  th.get("lastTimePlayed", ""),
             # Catalog validity
@@ -3324,7 +3322,7 @@ def build_html_template(gamertag=""):
 
         # -- Tabs (counts populated by JS) --
         '<div class="tabs">\n'
-        '<div class="tab active" onclick="switchTab(\'library\',this)">My Library <span class="cnt" id="tab-lib-cnt"></span></div>\n'
+        '<div class="tab active" onclick="switchTab(\'library\',this)">My Collection <span class="cnt" id="tab-lib-cnt"></span></div>\n'
         '<div class="tab" id="tab-mkt" onclick="switchTab(\'marketplace\',this)" style="display:none">Marketplace <span class="cnt" id="tab-mkt-cnt"></span></div>\n'
         '<div class="tab" id="tab-gp" onclick="switchTab(\'gamepass\',this)" style="display:none">Game Pass <span class="cnt" id="tab-gp-cnt"></span></div>\n'
         '<div class="tab" id="tab-ph" onclick="switchTab(\'playhistory\',this)" style="display:none">Play History <span class="cnt" id="tab-ph-cnt"></span></div>\n'
@@ -3391,9 +3389,9 @@ def build_html_template(gamertag=""):
         '<p class="sub" id="lib-sub"></p>\n'
         '<div class="cbar" id="lib-cbar"></div>\n'
         '<div class="search-row" style="display:flex;gap:8px;align-items:center">'
-        '<input type="text" id="lib-search" placeholder="Search library..." oninput="filterLib()" style="flex:1">'
-        '<button class="xct-iobtn" onclick="xctExport()" title="Export your library as a shareable JSON file">Export</button>'
-        '<button class="xct-iobtn" onclick="document.getElementById(\'imp-file\').click()" title="Import a library from a JSON file">Import</button>'
+        '<input type="text" id="lib-search" placeholder="Search collection..." oninput="filterLib()" style="flex:1">'
+        '<button class="xct-iobtn" onclick="xctExport()" title="Export your collection as a shareable JSON file">Export</button>'
+        '<button class="xct-iobtn" onclick="document.getElementById(\'imp-file\').click()" title="Import a collection from a JSON file">Import</button>'
         '<input type="file" id="imp-file" accept=".json" style="display:none" onchange="xctImport(this)">'
         '</div>\n'
         '<div class="filters">\n'
@@ -3602,7 +3600,7 @@ def build_html_template(gamertag=""):
         "h+=`<td><span class=\"usd\">${_p(x.val)||'-'}</span></td>`});"
         "h+=`<td class=\"stbl-div\"><span class=\"usd\">${_p(tv)||'-'}</span></td>`;"
         "h+=`<td class=\"stbl-div\">${gts||''}</td></tr>`}\n"
-        "row('','Library',libD,ownedGTs>1?ownedGTs:'');"
+        "row('','Collection',libD,ownedGTs>1?ownedGTs:'');"
         "if(gpDD.length){row('stbl-gp','Game Pass',gpD,'')}"
         "row('','Current Filter',filD,fGTs);"
         "h+='</tbody></table>';return h}\n"
@@ -3865,7 +3863,7 @@ def build_html_template(gamertag=""):
         "let data;\n"
         "try{data=JSON.parse(e.target.result)}catch(err){alert('Invalid JSON file.');return}\n"
         "if(!data.xct||!Array.isArray(data.library)){alert('Not a valid XCT export file.');return}\n"
-        "if(!data.library.length){alert('Export file contains no library items.');return}\n"
+        "if(!data.library.length){alert('Export file contains no collection items.');return}\n"
         "const gtCounts={};\n"
         "data.library.forEach(x=>{const g=x.gamertag||'Unknown';gtCounts[g]=(gtCounts[g]||0)+1});\n"
         "const sorted=Object.entries(gtCounts).sort((a,b)=>b[1]-a[1]);\n"
@@ -5066,13 +5064,16 @@ def prompt_data_source(gamertag):
 
     print()
     print("  Data source:")
-    print(f"    [B] Both (recommended)      - full collection + game metadata")
+    print(f"    [Enter] Both (recommended)  - full collection + game metadata")
     print(f"    [C] Collections API only    - {col_status} — all entitlements (~5000)")
     print(f"    [T] TitleHub only           - {th_status} — games with metadata (~1000)")
     print(f"    [F] Import HAR file         - extract token from .har then process")
+    print(f"    [B] Back")
     print()
 
-    pick = input("  Pick [B/C/T/F, default=B]: ").strip().upper()
+    pick = input("  Pick [Enter=Both / C/T/F / B=back]: ").strip().upper()
+    if pick == "B":
+        return None
 
     if pick == "F":
         # Import fresh token from HAR file, then use Collections API
@@ -5150,6 +5151,8 @@ def process_account(gamertag, method=None):
     # -- Prompt for data source if not specified --
     if method is None:
         method = prompt_data_source(gamertag)
+        if method is None:
+            return None, []
 
     # -- Step 1: Auth tokens --
     auth_token = read_auth_token(optional=(method == "titlehub"))
@@ -5318,7 +5321,7 @@ def process_account(gamertag, method=None):
     priced    = sum(1 for x in library if (x.get("priceUSD") or 0) > 0)
 
     print()
-    print(f"  Library value: USD {total_usd:,.2f} ({priced} priced)")
+    print(f"  Collection value: USD {total_usd:,.2f} ({priced} priced)")
 
     # Game Pass catalog is NOT fetched during per-account scan.
     # Use the [G] menu option or process_gamepass_library() for GP data.
@@ -5394,7 +5397,7 @@ def process_account(gamertag, method=None):
         OUTPUT_HTML_COMBINED = OUTPUT_HTML_FILE
 
     elapsed = time.time() - start_time
-    print(f"  Library: {len(library)} items")
+    print(f"  Collection: {len(library)} items")
     if len(combined_library) > len(library):
         print(f"  Combined: {len(combined_library)} items (all gamertags)")
     print(f"  Completed in {elapsed:.1f}s")
@@ -5469,7 +5472,7 @@ def build_index():
         library, play_hist = merge_library(entitlements, catalog, gamertag=gt)
         save_json(os.path.join(acct, "library.json"), library)
         save_json(os.path.join(acct, "play_history.json"), play_hist)
-        print(f"  [{gt}] {len(library)} items, {len(play_hist)} play history")
+        print(f"  [{gt}] {len(library)} collection items, {len(play_hist)} play history")
 
         # Load scan history
         scan_history = load_all_scans(gt)
@@ -6843,12 +6846,15 @@ def process_all_accounts():
     # Single data-source prompt for all accounts
     print()
     print("  Data source for all gamertags:")
-    print("    [B] Both (recommended)      - full collection + game metadata")
+    print("    [Enter] Both (recommended)  - full collection + game metadata")
     print("    [C] Collections API only    - all entitlements (~5000)")
     print("    [T] TitleHub only           - games with metadata (~1000)")
+    print("    [B] Back")
     print()
-    pick = input("  Pick [B/C/T, default=B]: ").strip().upper()
-    if pick == "C":
+    pick = input("  Pick [Enter=Both / C/T / B=back]: ").strip().upper()
+    if pick == "B":
+        return
+    elif pick == "C":
         method = "collection"
     elif pick == "T":
         method = "titlehub"
@@ -7046,7 +7052,7 @@ def process_contentaccess_only(gamertag):
 
     # Merge and rebuild
     library, play_history = merge_library(entitlements, catalog_us, gamertag=gamertag)
-    print(f"  Library: {len(library)} items, Play history: {len(play_history)} items")
+    print(f"  Collection: {len(library)} items, Play history: {len(play_history)} items")
 
     save_json(LIBRARY_FILE, library)
     save_json(PLAY_HISTORY_FILE, play_history)
@@ -7239,9 +7245,9 @@ def process_drive_converter():
     print("    [1] Convert to PC mode   (makes drive visible to Windows/Explorer)")
     print("    [2] Refresh Disks        (rescan hardware — like Disk Management > Rescan Disks)")
     print("    [3] Convert to Xbox mode (makes drive usable by Xbox)")
-    print("    [Enter] Back")
+    print("    [B] Back")
     print()
-    choice = input("  Choice: ").strip()
+    choice = input("  Choice: ").strip().upper()
 
     if choice == "2":
         print("[*] Rescanning disks...")
@@ -7252,7 +7258,7 @@ def process_drive_converter():
             print(f"[!] Rescan failed: {out}")
         return
 
-    if choice not in ("1", "3"):
+    if choice not in ("1", "3"):  # B or anything else → back
         return
 
     to_xbox      = (choice == "3")
@@ -7580,7 +7586,9 @@ def process_cdn_snapshot_compare():
         print(f"    [{i}] {ts_fmt}  ({s})")
     print(f"    [C] Use current usb_db.json as 'new'")
     print()
-    old_pick = input("  Use which snapshot as BEFORE (old)? [number]: ").strip()
+    old_pick = input("  Use which snapshot as BEFORE (old)? [number / B=back]: ").strip()
+    if old_pick.upper() == "B":
+        return
     try:
         old_idx = int(old_pick) - 1
         if not (0 <= old_idx < len(snaps)):
@@ -7590,7 +7598,9 @@ def process_cdn_snapshot_compare():
         print("[!] Invalid selection.")
         return
 
-    new_pick = input("  Use which as AFTER (new)? [number or C for current]: ").strip().upper()
+    new_pick = input("  Use which as AFTER (new)? [number / C=current / B=back]: ").strip().upper()
+    if new_pick == "B":
+        return
     if new_pick == "C":
         new_path = current_path
     else:
@@ -7773,10 +7783,10 @@ def process_usb_drive(drive_letter=None):
         title = item.get("title", "")[:w]
         sid = item.get("storeId", "") or "?"
         gb = f"{item.get('sizeBytes', 0) / 1e9:.2f} GB" if item.get("sizeBytes") else "    ?"
-        status = "in library" if item.get("inLibrary") else ("no match" if item.get("storeId") else "no xvs data")
+        status = "in collection" if item.get("inLibrary") else ("no match" if item.get("storeId") else "no xvs data")
         print(f"{i:>4}  {title:<{w}} {sid:<14} {gb:>7}  {status}")
     print("─" * (4 + 2 + w + 1 + 14 + 1 + 7 + 2 + 10))
-    print(f"  {len(enriched)} packages | {matched} matched to library | {total_gb:.1f} GB total")
+    print(f"  {len(enriched)} packages | {matched} matched to collection | {total_gb:.1f} GB total")
 
     index_file = os.path.join(SCRIPT_DIR, "usb_index.json")
     save_json(index_file, enriched)
@@ -7785,18 +7795,19 @@ def process_usb_drive(drive_letter=None):
     # Action menu
     print()
     print("  What next?")
-    print("    [B] Backup files from drive to folder")
+    print("    [C] Copy files from drive to folder")
     print("    [D] Download from Xbox CDN")
-    print("    [Enter] Nothing")
+    print("    [B] Back")
     print()
     action = input("  Choice: ").strip().upper()
 
-    if action in ("B", "D"):
-        dest = input("  Destination folder path: ").strip().strip('"').strip("'")
-        if not dest:
-            print("  No destination specified.")
+    if action in ("C", "D"):
+        dest = input("  Destination folder path (B=back): ").strip().strip('"').strip("'")
+        if not dest or dest.upper() == "B":
             return
-        sel = input("  Which games? [all / numbers e.g. 1 3 5-8]: ").strip().lower()
+        sel = input("  Which games? [all / numbers e.g. 1 3 5-8 / B=back]: ").strip().lower()
+        if sel == "b":
+            return
         if not sel or sel == "all":
             indices = None
         else:
@@ -7813,7 +7824,7 @@ def process_usb_drive(drive_letter=None):
                         indices.append(int(tok) - 1)
                     except ValueError:
                         pass
-        if action == "B":
+        if action == "C":
             backup_usb_games(enriched, drive_letter + ":/", dest, indices)
         else:
             download_from_cdn(enriched, dest, indices)
@@ -8621,7 +8632,9 @@ def process_gfwl_download():
 
     game = None
     while game is None:
-        sel = input(f"  Select [1-{len(games)}]: ").strip()
+        sel = input(f"  Select [1-{len(games)} / B=back]: ").strip()
+        if sel.upper() == "B":
+            return
         try:
             idx = int(sel) - 1
             if 0 <= idx < len(games):
@@ -8638,7 +8651,10 @@ def process_gfwl_download():
 
     has_base = any(p.get('offer_suffix') == 'e0000001' for p in pkgs)
 
-    def offer_label(s):
+    def offer_label(pkg):
+        s = pkg.get('offer_suffix', '')
+        if pkg.get('type'):
+            return pkg.get('type')
         if s == 'e0000001':
             return 'Base'
         if s.startswith('e0000'):
@@ -8660,7 +8676,7 @@ def process_gfwl_download():
     print()
 
     # Summarise what types are present so the user knows what to download
-    labels      = [offer_label(p.get('offer_suffix', '')) for p in pkgs]
+    labels      = [offer_label(p) for p in pkgs]
     has_trailer = 'Trailer' in labels
     has_content = 'Content' in labels
     has_config  = 'Config'  in labels
@@ -8668,6 +8684,7 @@ def process_gfwl_download():
         legend = "  Type legend:  Base = main game installer  |  DLC = paid DLC"
         if has_trailer: legend += "  |  Trailer = bonus video/trailer"
         if has_config:  legend += "  |  Config = tiny license config"
+        if 'Demo' in labels: legend += "  |  Demo = playable demo"
         print(legend)
     else:
         print("  Note: no standard Base installer — Content chunks ARE the game (download all Content)")
@@ -8676,14 +8693,16 @@ def process_gfwl_download():
     print("  " + "─" * 78)
     for i, p in enumerate(pkgs, 1):
         s = p.get('offer_suffix', '')
-        label = offer_label(s)
+        label = offer_label(p)
         cid = p.get('content_id', '?')
         size = fmt_size(p.get('package_size', 0))
         print(f"  {i:>3}  {label:>7}  {s:>10}  {size:>9}  {cid}")
     print()
 
-    pkg_sel = input(f"  Download which? [1-{len(pkgs)}, or Enter for all]: ").strip()
+    pkg_sel = input(f"  Download which? [1-{len(pkgs)} / Enter=all / B=back]: ").strip()
 
+    if pkg_sel.upper() == "B":
+        return
     if not pkg_sel:
         selected_pkgs = pkgs
     else:
@@ -8696,7 +8715,9 @@ def process_gfwl_download():
 
     default_dest = os.path.join(SCRIPT_DIR, "gfwl_downloads")
     print()
-    dest = input(f"  Destination folder [Enter for {default_dest}]: ").strip().strip('"').strip("'")
+    dest = input(f"  Destination folder [Enter={default_dest} / B=back]: ").strip().strip('"').strip("'")
+    if dest.upper() == "B":
+        return
     if not dest:
         dest = default_dest
 
@@ -8711,7 +8732,7 @@ def process_gfwl_download():
     for pkg in selected_pkgs:
         s     = pkg.get('offer_suffix', '')
         sha1  = pkg.get('content_id', '').upper()
-        label = offer_label(s)
+        label = offer_label(pkg)
         print(f"\n  ▸ {label} ({s})")
 
         if label in ('Base', 'DLC'):
@@ -9191,8 +9212,15 @@ def _dedup_deps(deps):
 
 def _appx_install(dest, downloaded_files):
     """Install downloaded packages via PowerShell Add-AppxPackage."""
-    deps = _dedup_deps([f for f in downloaded_files if _is_appx_dependency(f)])
-    mains = [f for f in downloaded_files if not _is_appx_dependency(f)]
+    # Filter out Xbox-only encrypted bundles (.eappxbundle) — not installable on PC
+    skipped = [f for f in downloaded_files if f.lower().endswith(".eappxbundle")]
+    installable = [f for f in downloaded_files if not f.lower().endswith(".eappxbundle")]
+    if skipped:
+        for f in skipped:
+            print(f"  Skipping (Xbox-only): {f}")
+
+    deps = _dedup_deps([f for f in installable if _is_appx_dependency(f)])
+    mains = [f for f in installable if not _is_appx_dependency(f)]
 
     # Sort mains by size descending (largest first = likely the bundle)
     mains.sort(key=lambda f: os.path.getsize(os.path.join(dest, f)), reverse=True)
@@ -9210,34 +9238,24 @@ def _appx_install(dest, downloaded_files):
                 print(f"  [+] OK")
         return
 
-    main_path = os.path.join(dest, mains[0])
-    if deps:
-        dep_paths = ",".join(f'"{os.path.join(dest, d)}"' for d in deps)
-        cmd = f'Add-AppxPackage -Path "{main_path}" -DependencyPath {dep_paths}'
-    else:
-        cmd = f'Add-AppxPackage -Path "{main_path}"'
+    dep_paths = ",".join(f'"{os.path.join(dest, d)}"' for d in deps) if deps else ""
 
-    print(f"  Installing: {mains[0]}")
-    if deps:
-        print(f"  Dependencies: {', '.join(deps)}")
-    r = subprocess.run(["powershell", "-Command", cmd],
-        capture_output=True, text=True, timeout=300)
-    if r.returncode != 0:
-        print(f"  [!] Install failed: {r.stderr.strip()}")
-    else:
-        print(f"  [+] Installed successfully")
+    for f in mains:
+        main_path = os.path.join(dest, f)
+        if dep_paths:
+            cmd = f'Add-AppxPackage -Path "{main_path}" -DependencyPath {dep_paths}'
+        else:
+            cmd = f'Add-AppxPackage -Path "{main_path}"'
 
-    # Install remaining main packages individually (unusual case)
-    for f in mains[1:]:
-        path = os.path.join(dest, f)
         print(f"  Installing: {f}")
-        r = subprocess.run(["powershell", "-Command",
-            f'Add-AppxPackage -Path "{path}"'],
+        if deps:
+            print(f"  Dependencies: {', '.join(deps)}")
+        r = subprocess.run(["powershell", "-Command", cmd],
             capture_output=True, text=True, timeout=300)
         if r.returncode != 0:
             print(f"  [!] Failed: {r.stderr.strip()}")
         else:
-            print(f"  [+] OK")
+            print(f"  [+] Installed successfully")
 
 
 def _fe3_get_links(value, input_type="ProductId", ring="Retail"):
@@ -9341,11 +9359,11 @@ def _freshdex_pick_game(db):
         while True:
             print()
             if offset < len(items):
-                prompt = f"  [{offset}/{len(items)}] Enter=next page / number=pick / Q=back: "
+                prompt = f"  [{offset}/{len(items)}] Enter=next page / number=pick / B=back: "
             else:
-                prompt = "  Pick game number (Q=back): "
+                prompt = "  Pick game number (B=back): "
             sel = input(prompt).strip()
-            if sel.upper() == "Q":
+            if sel.upper() == "B":
                 return None
             if sel == "" and offset < len(items):
                 shown = _show_page(items, offset)
@@ -9369,8 +9387,12 @@ def _freshdex_pick_game(db):
     print("    [P]   Platform (Windows 8/8.1 or 10/11)")
     print("    [S]   Search by title")
     print("    [Enter] List all")
+    print("    [B]   Back")
     print()
     filt = input("  Filter: ").strip()
+
+    if filt.upper() == "B":
+        return None
 
     if filt == "":
         # List all
@@ -9393,8 +9415,8 @@ def _freshdex_pick_game(db):
     fu = filt.upper()
 
     if fu == "Y":
-        yr = input("  Release year (e.g. 2015): ").strip()
-        if not yr:
+        yr = input("  Release year (e.g. 2015 / B=back): ").strip()
+        if not yr or yr.upper() == "B":
             return None
         items = [g for g in db if g.get("releaseDate", "").startswith(yr)]
         print(f"\n  {len(items)} games from {yr}:")
@@ -9415,7 +9437,9 @@ def _freshdex_pick_game(db):
         for i, c in enumerate(cat_list, 1):
             print(f"    {i:>2}. {c} ({cats[c]})")
         print()
-        sel = input("  Pick category number: ").strip()
+        sel = input("  Pick category number (B=back): ").strip()
+        if sel.upper() == "B":
+            return None
         try:
             chosen_cat = cat_list[int(sel) - 1]
         except (ValueError, IndexError):
@@ -9426,8 +9450,8 @@ def _freshdex_pick_game(db):
         return _paginated_pick(items)
 
     if fu == "S":
-        q = input("  Search: ").strip().lower()
-        if not q:
+        q = input("  Search (B=back): ").strip().lower()
+        if not q or q == "b":
             return None
         items = [g for g in db
                  if q in g.get("title", "").lower()
@@ -9441,6 +9465,7 @@ def _freshdex_pick_game(db):
         print("    [1] Windows 8/8.1 only")
         print("    [2] Windows 10/11 only")
         print("    [3] Both (Win 8/8.1 + Win 10/11)")
+        print("    [B] Back")
         print()
         ps = input("  Platform: ").strip()
         if ps == "1":
@@ -9480,15 +9505,32 @@ def process_store_packages():
             _pc_count = len(_seen_pids)
     except Exception:
         pass
+    _XBOX_APPS = [
+        ("Microsoft Store",              "9WZDNCRFJBMP"),
+        ("Xbox",                         "9MV0B5HZVK9Z"),
+        ("Xbox Console Companion",       "9WZDNCRFJBD8"),
+        ("Xbox Insider Hub",             "9PLDPG46G47Z"),
+        ("Xbox Game Bar",                "9NZKPSTSNW4P"),
+        ("Xbox Game Bar Plugin",         "9NBLGGH537C2"),
+        ("Xbox Accessories",             "9NBLGGH30XJ3"),
+        ("Xbox Identity Provider",       "9WZDNCRD1HKW"),
+        ("Xbox Live In-Game Experience", "9NKNC0LD5NN6"),
+        ("Xbox Speech to Text Overlay",  "9P086NHDNB9W"),
+    ]
+
     print()
     print("  Input type:")
-    print(f"    [F] Your Library ({_pc_count} Games)" if _pc_count else "    [F] Your Library")
+    print(f"    [F] Your Collection ({_pc_count} Games)" if _pc_count else "    [F] Your Collection")
+    print(f"    [X] Xbox Apps & Utilities ({len(_XBOX_APPS)})")
     print("    [1] ProductId         e.g. 9NBLGGH5R558")
     print("    [2] CategoryId        e.g. e89c9ccf-de94-45ed-9cd4-7e11d05c3da4 (WuCategoryId)")
     print("    [3] PackageFamilyName e.g. Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe")
     print("    [4] URL               e.g. https://www.microsoft.com/store/productId/9NBLGGH5R558")
+    print("    [B] Back")
     print()
     choice = input("  Choice [F]: ").strip().upper() or "F"
+    if choice == "B":
+        return
     print()
 
     type_map = {"1": "ProductId", "2": "CategoryId", "3": "PackageFamilyName", "4": "url"}
@@ -9496,9 +9538,9 @@ def process_store_packages():
     if choice == "F":
         db = _build_freshdex_db()
         if not db:
-            print("[!] No Windows games found. Run library scans first.")
+            print("[!] No Windows games found. Run collection scans first.")
             return
-        print(f"  Your Library: {len(db)} Windows games indexed")
+        print(f"  Your Collection: {len(db)} Windows games indexed")
         game = _freshdex_pick_game(db)
         if not game:
             return
@@ -9511,10 +9553,24 @@ def process_store_packages():
         print(f"  Released:  {game.get('releaseDate', '')[:10]}")
         print(f"  Platforms: {', '.join(game.get('platforms', []))}")
         print(f"  ProductId: {value}")
+    elif choice == "X":
+        print("  Xbox Apps & Utilities:")
+        for _xi, (_xname, _xpid) in enumerate(_XBOX_APPS, 1):
+            print(f"    [{_xi:>2}] {_xname:<33} {_xpid}")
+        print()
+        _xpick = input(f"  Choice [1-{len(_XBOX_APPS)} / B=back]: ").strip()
+        if _xpick.upper() == "B":
+            return
+        if not _xpick.isdigit() or int(_xpick) < 1 or int(_xpick) > len(_XBOX_APPS):
+            return
+        _xname, value = _XBOX_APPS[int(_xpick) - 1]
+        input_type = "ProductId"
+        print()
+        print(f"  {_xname} — {value}")
     elif choice in type_map:
         input_type = type_map[choice]
-        value = input(f"  Enter {input_type}: ").strip()
-        if not value:
+        value = input(f"  Enter {input_type} (B=back): ").strip()
+        if not value or value.upper() == "B":
             return
     else:
         return
@@ -9525,47 +9581,138 @@ def process_store_packages():
     print("    [2] Retail")
     print("    [3] WIF (Windows Insider Fast)")
     print("    [4] WIS (Windows Insider Slow)")
-    print("    [*] Scan all rings")
+    print("    [Enter] Scan all rings")
+    print("    [B] Back")
     print()
-    _ring_pick = input("  Ring [1]: ").strip() or "1"
+    _ring_pick = input("  Ring [Enter=all]: ").strip()
+    if _ring_pick.upper() == "B":
+        return
     _ring_map = {"1": "RP", "2": "Retail", "3": "WIF", "4": "WIS"}
     _ring_order = [("RP", "Release Preview"), ("Retail", "Retail"), ("WIF", "Windows Insider Fast"), ("WIS", "Windows Insider Slow")]
 
-    if _ring_pick == "*":
+    if _ring_pick == "" or _ring_pick == "*":
         print()
         print(f"[*] Scanning all rings for {input_type}={value} ...")
         print()
-        _any_hit = False
-        for _rcode, _rname in _ring_order:
+        # --- Resolve WuCategoryId + cookie once ---
+        try:
+            if input_type == "CategoryId":
+                _scan_catid = value
+            elif input_type == "ProductId":
+                _scan_catid = _display_catalog_get_wuid(value)
+                if not _scan_catid:
+                    print(f"  [!] Could not resolve WuCategoryId for {value}")
+                    return
+            elif input_type == "PackageFamilyName":
+                _se_url = (f"https://storeedgefd.dsx.mp.microsoft.com/v9.0/products/{value}"
+                           f"?market=US&locale=en-us&deviceFamily=Windows.Desktop")
+                _se_req = urllib.request.Request(_se_url)
+                _se_req.add_header("User-Agent", "WindowsShellClient/9.0.40929.0 (Windows)")
+                _scan_catid = None
+                with urllib.request.urlopen(_se_req, timeout=15) as _se_resp:
+                    _se_data = json.loads(_se_resp.read().decode())
+                for _se_sku in _se_data.get("Payload", {}).get("Skus", []):
+                    _scan_catid = _se_sku.get("FulfillmentData", {}).get("WuCategoryId") or _se_sku.get("FulfillmentData", {}).get("WuBundleCategoryId")
+                    if _scan_catid:
+                        break
+                if not _scan_catid:
+                    print(f"  [!] Could not resolve WuCategoryId for PFN {value}")
+                    return
+            elif input_type == "url":
+                _u_parts = value.rstrip("/").split("/")
+                _u_pid = None
+                for _u_p in reversed(_u_parts):
+                    if re.match(r'^[A-Za-z0-9]{12}$', _u_p):
+                        _u_pid = _u_p
+                        break
+                if not _u_pid:
+                    print(f"  [!] Could not extract ProductId from URL")
+                    return
+                _scan_catid = _display_catalog_get_wuid(_u_pid)
+                if not _scan_catid:
+                    print(f"  [!] Could not resolve WuCategoryId for {_u_pid}")
+                    return
+            else:
+                return
+            print(f"  WuCategoryId: {_scan_catid}")
+            _scan_cookie = _fe3_get_cookie()
+        except Exception as _e:
+            print(f"  [!] Setup error: {_e}")
+            return
+        # --- Query all 4 rings in parallel (metadata only, no download URLs) ---
+        from concurrent.futures import ThreadPoolExecutor
+        def _probe_ring(_rcode):
             try:
-                _rlinks = _fe3_get_links(value, input_type=input_type, ring=_rcode)
-            except Exception as _re:
-                print(f"  {_rcode:<7} ({_rname}):  ERROR — {_re}")
+                updates = _fe3_sync_updates(_scan_cookie, _scan_catid, _rcode)
+                if not updates:
+                    return (_rcode, {}, None)
+                return (_rcode, updates, None)
+            except Exception as _e:
+                return (_rcode, {}, str(_e))
+        _ring_raw = {}
+        with ThreadPoolExecutor(max_workers=4) as _tp:
+            for _rcode, _updates, _err in _tp.map(_probe_ring, [r for r, _ in _ring_order]):
+                _ring_raw[_rcode] = (_updates, _err)
+        # --- Build display data ---
+        _any_hit = False
+        _ring_results = []
+        _all_versions = set()
+        _common_versions = None
+        for _rcode, _rname in _ring_order:
+            _updates, _err = _ring_raw[_rcode]
+            if _err:
+                _ring_results.append((_rcode, _rname, 0, set(), 0, _err))
                 continue
-            if not _rlinks:
-                print(f"  {_rcode:<7} ({_rname}):  No packages")
+            if not _updates:
+                _ring_results.append((_rcode, _rname, 0, set(), 0, None))
                 continue
             _any_hit = True
-            # Extract version numbers from filenames
             _versions = set()
-            for _rl in _rlinks:
-                _vm = re.search(r'_(\d+\.\d+\.\d+\.\d+)_', _rl["filename"])
+            _tsz = 0
+            for _fname, _info in _updates.items():
+                _tsz += _info.get("size", 0)
+                _vm = re.search(r'_(\d+\.\d+\.\d+\.\d+)_', _fname)
                 if _vm:
                     _versions.add(_vm.group(1))
-            _vstr = ", ".join(sorted(_versions)) if _versions else "unknown"
-            _tsz = sum(_rl["size"] for _rl in _rlinks)
+            _all_versions.update(_versions)
+            if _common_versions is None:
+                _common_versions = set(_versions)
+            else:
+                _common_versions &= _versions
+            _ring_results.append((_rcode, _rname, len(_updates), _versions, _tsz, None))
+        print()
+        # --- Display results ---
+        for _rcode, _rname, _cnt, _versions, _tsz, _err in _ring_results:
+            print(f"  {_rcode} ({_rname}):")
+            if _err:
+                print(f"    ERROR — {_err}")
+                print()
+                continue
+            if not _cnt:
+                print(f"    No packages")
+                print()
+                continue
             if _tsz >= 1073741824:
                 _szstr = f"{_tsz / 1073741824:.2f} GB"
             elif _tsz >= 1048576:
                 _szstr = f"{_tsz / 1048576:.1f} MB"
             else:
                 _szstr = f"{_tsz / 1024:.0f} KB"
-            print(f"  {_rcode:<7} ({_rname}):  {len(_rlinks)} pkg(s)  —  v{_vstr}  —  {_szstr}")
+            print(f"    {_cnt} packages — {_szstr}")
+            for _v in sorted(_versions):
+                if _common_versions is not None and _v not in _common_versions:
+                    print(f"    * v{_v}  ← UNIQUE")
+                else:
+                    print(f"      v{_v}")
+            print()
+        if _all_versions and _common_versions == _all_versions:
+            print("  All rings identical.")
+            print()
         if not _any_hit:
-            print("\n  [!] No packages found on any ring.")
-        print()
-        _cont = input("  Download from a specific ring? [1-4 / Q=back]: ").strip()
-        if _cont.upper() == "Q" or _cont not in _ring_map:
+            print("  [!] No packages found on any ring.")
+            print()
+        _cont = input("  Download from a specific ring? [1-4 / B=back]: ").strip()
+        if _cont.upper() == "B" or _cont not in _ring_map:
             return
         ring = _ring_map[_cont]
     else:
@@ -9606,16 +9753,16 @@ def process_store_packages():
     _print_table(display_list)
     print()
 
-    sel = input("  Which file(s) to download? [numbers / Enter=all / A=all architectures / Q=skip]: ").strip()
+    sel = input("  Which file(s) to download? [numbers / Enter=all / A=all architectures / B=back]: ").strip()
     if sel.upper() == "A":
         display_list = links
         show_all = True
         print(f"\n  Showing all {len(links)} packages:\n")
         _print_table(display_list)
         print()
-        sel = input("  Which file(s) to download? [numbers / Enter=all / Q=skip]: ").strip()
+        sel = input("  Which file(s) to download? [numbers / Enter=all / B=back]: ").strip()
 
-    if sel.upper() == "Q":
+    if sel.upper() == "B":
         return
     if sel == "":
         targets = display_list
@@ -9626,7 +9773,10 @@ def process_store_packages():
         return
 
     default_dest = os.path.join(SCRIPT_DIR, "store_downloads")
-    dest = input(f"  Destination folder [{default_dest}]: ").strip().strip('"').strip("'") or default_dest
+    dest = input(f"  Destination folder [{default_dest} / B=back]: ").strip().strip('"').strip("'")
+    if dest.upper() == "B":
+        return
+    dest = dest or default_dest
     os.makedirs(dest, exist_ok=True)
     print()
     downloaded = []
@@ -9670,7 +9820,9 @@ def _cdn_backup_games(items, select_all=False):
     if select_all:
         targets = downloadable
     else:
-        sel = input("  Which game(s) to download? [numbers e.g. 1 3 5-8, or * for all]: ").strip()
+        sel = input("  Which game(s) to download? [numbers e.g. 1 3 5-8 / *=all / B=back]: ").strip()
+        if sel.upper() == "B":
+            return
         if sel == "*":
             targets = downloadable
         else:
@@ -9680,8 +9832,8 @@ def _cdn_backup_games(items, select_all=False):
         return
     total_bytes = sum(t.get("sizeBytes", 0) for t in targets)
     print(f"\n  {len(targets)} package(s) selected  ({total_bytes/1e9:.2f} GB total)")
-    dest = input("  Destination folder: ").strip().strip('"').strip("'")
-    if not dest:
+    dest = input("  Destination folder (B=back): ").strip().strip('"').strip("'")
+    if not dest or dest.upper() == "B":
         return
     os.makedirs(dest, exist_ok=True)
     for item in targets:
@@ -9701,21 +9853,25 @@ def process_xbox_usb_tool():
     print()
     print("    [V] Drive converter (PC ↔ Xbox MBR mode)")
     print("    [S] Scan, index and save metadata to usb_db.json")
-    print("    [B] Backup a game (download from Xbox CDN)")
-    print("    [A] Backup all games")
+    print("    [C] CDN backup a game")
+    print("    [A] CDN backup all games")
     print("    [D] Discover previous versions")
-    print("    [Enter] Back")
+    print("    [B] Back")
     print()
     mode = input("  Choice: ").strip().upper()
 
-    if mode == "V":
+    if mode == "B" or not mode:
+        return
+    elif mode == "V":
         process_drive_converter()
     elif mode == "S":
-        drive_letter = input("  Drive letter (default: E): ").strip() or "E"
+        drive_letter = input("  Drive letter (default: E / B=back): ").strip() or "E"
+        if drive_letter.upper() == "B":
+            return
         drive_letter = drive_letter.rstrip(":/\\").upper()
         process_usb_drive(drive_letter)
         build_usb_db(drive_letter)
-    elif mode == "B":
+    elif mode == "C":
         items = _cdn_load_items()
         if items:
             _cdn_backup_games(items, select_all=False)
@@ -9744,9 +9900,12 @@ def process_cdn_version_discovery():
     print("    [W] Windows Update Catalog — query update history via WuCategoryId (experimental)")
     print("    [S] Select game        — verbose CDN probe for specific game(s)")
     print("    [R] Refresh WU links   — re-fetch fresh download links by WuCategoryId")
-    print("    [Enter] Back")
+    print("    [B] Back")
     print()
     mode = input("  Choice: ").strip().upper()
+
+    if mode == "B" or not mode:
+        return
 
     items = _cdn_load_items()
     if not items:
@@ -9822,7 +9981,9 @@ def process_cdn_version_discovery():
             has_prior_flag = "✓" if item.get("priorBuildVersion") and item.get("priorBuildId") else " "
             print(f"  {i:>3}  {has_cdn_flag:^3}  {has_prior_flag:^5}  {item.get('_title','')[:50]}")
         print()
-        sel = input("  Which game(s)? [numbers e.g. 1 3 5-8]: ").strip().lower()
+        sel = input("  Which game(s)? [numbers e.g. 1 3 5-8 / B=back]: ").strip().lower()
+        if sel == "b":
+            return
         targets = [items[i] for i in _parse_selection(sel, len(items))]
         if not targets:
             print("[!] Nothing selected.")
@@ -9858,8 +10019,8 @@ def process_cdn_version_discovery():
 
     elif mode == "R":
         # Re-fetch fresh download links for a previously-found WuCategoryId
-        wuid = input("  WuCategoryId (paste from cdn_older_versions.json): ").strip()
-        if not wuid:
+        wuid = input("  WuCategoryId (paste / B=back): ").strip()
+        if not wuid or wuid.upper() == "B":
             return
         print(f"[*] Re-fetching links for {wuid} ...")
         links = _cdn_refresh_wu_links(wuid)
@@ -9896,7 +10057,9 @@ def _pick_account(gamertags, prompt="Which account?", allow_all=True):
     if allow_all:
         print(f"    [*] All gamertags")
     print()
-    sp = input(f"  {prompt} [1-{len(gamertags)}{', *' if allow_all else ''}]: ").strip()
+    sp = input(f"  {prompt} [1-{len(gamertags)}{', *' if allow_all else ''}, B=back]: ").strip()
+    if sp.upper() == "B":
+        return None
     if allow_all and sp == "*":
         return "*"
     try:
@@ -9926,7 +10089,7 @@ def interactive_menu():
             print(f"    [X] Clear cache + rescan all")
         else:
             print("  Gamertags:  (none)")
-            print("    [A] Add a gamertag to unlock library features")
+            print("    [A] Add a gamertag to unlock collection features")
         print()
         print("  Scan endpoints:")
         print("    [E] Collections API only")
@@ -9934,7 +10097,7 @@ def interactive_menu():
         print("    [S] Content Access only (Xbox 360)")
         print()
         print("  Catalogs:")
-        print("    [G] Game Pass Library")
+        print("    [G] Game Pass Catalog")
         print("    [M] Full Marketplace")
         print("    [L] Full Marketplace (all regions)")
         print("    [P] Regional Prices (enrich marketplace)")
@@ -9953,12 +10116,15 @@ def interactive_menu():
         print()
         print("  Utilities:")
         print("    [K] Xbox One / Series X|S USB Hard Drive Tool")
-        print("    [J] Games for Windows Live (GFWL) CDN Installer")
+        print("    [I] Xbox One / Series X|S CDN Installer")
+        print("    [U] Xbox One / Series X|S Hard Delist Installer")
         print("    [O] Microsoft Store (Win8/8.1/10) CDN Installer")
+        print("    [J] Games for Windows Live (GFWL) CDN Installer")
+        print()
         print("    [Q] Quit")
         print()
 
-        pick = input(f"  Pick [0, E, T, S, M, L, P, N, C, F, W, Z, H, Y, A, R, D, *, X, B, K, J, O, G, Q]: ").strip()
+        pick = input(f"  Pick [0, E, T, S, M, L, P, N, C, F, W, Z, H, Y, A, R, D, *, X, B, K, I, U, O, J, G, Q]: ").strip()
         pu = pick.upper()
 
         _no_accts = not gamertags
@@ -9974,7 +10140,9 @@ def interactive_menu():
                 age = token_age_str(gt)
                 print(f"    [{i:>2}] {gt}  (token: {age})")
             print()
-            ap = input(f"  Process which gamertag? [1-{len(gamertags)}]: ").strip()
+            ap = input(f"  Process which gamertag? [1-{len(gamertags)} / B=back]: ").strip()
+            if ap.upper() == "B":
+                continue
             try:
                 idx = int(ap) - 1
                 if 0 <= idx < len(gamertags):
@@ -10009,7 +10177,9 @@ def interactive_menu():
                 for i, gt in enumerate(gamertags, 1):
                     print(f"    [{i}] {gt} (token: {token_age_str(gt)})")
                 print()
-                rp = input(f"  Refresh which gamertag? [1-{len(gamertags)}]: ").strip()
+                rp = input(f"  Refresh which gamertag? [1-{len(gamertags)} / B=back]: ").strip()
+                if rp.upper() == "B":
+                    continue
                 try:
                     idx = int(rp) - 1
                     if 0 <= idx < len(gamertags):
@@ -10024,12 +10194,13 @@ def interactive_menu():
             try:
                 print(f"\n[*] Refreshing token for {gt}...")
                 refresh_account_token(gt)
-                process_now = input("\n  Process library now? [Y/n]: ").strip().lower()
+                process_now = input("\n  Process collection now? [Y/n]: ").strip().lower()
                 if process_now not in ("n", "no"):
                     html_file, _lib = process_account(gt)
-                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                    print(f"[*] Opening in browser: {file_url}")
-                    webbrowser.open(file_url)
+                    if html_file:
+                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                        print(f"[*] Opening in browser: {file_url}")
+                        webbrowser.open(file_url)
                 _op_summary("Refresh token", detail=f"{gt}", elapsed=time.time() - _t0)
             except Exception as _e:
                 _op_summary("Refresh token", success=False, detail=str(_e), elapsed=time.time() - _t0)
@@ -10046,7 +10217,9 @@ def interactive_menu():
                 for i, g in enumerate(gamertags, 1):
                     print(f"    [{i}] {g}")
                 print()
-                dp = input(f"  Delete which gamertag? [1-{len(gamertags)}]: ").strip()
+                dp = input(f"  Delete which gamertag? [1-{len(gamertags)} / B=back]: ").strip()
+                if dp.upper() == "B":
+                    continue
                 try:
                     idx = int(dp) - 1
                     if 0 <= idx < len(gamertags):
@@ -10441,6 +10614,14 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("USB Hard Drive Tool", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
+        elif pu == "I":
+            print("\n[Xbox One / Series X|S CDN Installer]")
+            print("  Coming soon.")
+            continue
+        elif pu == "U":
+            print("\n[Xbox One / Series X|S Hard Delist Installer]")
+            print("  Coming soon.")
+            continue
         elif pu == "J":
             _t0 = time.time()
             try:
@@ -10540,9 +10721,10 @@ def main():
                 refresh_account_token(gamertag)
 
                 html_file, _lib = process_account(gamertag)
-                file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                print(f"[*] Opening in browser: {file_url}")
-                webbrowser.open(file_url)
+                if html_file:
+                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                    print(f"[*] Opening in browser: {file_url}")
+                    webbrowser.open(file_url)
 
     # Always enter interactive menu
     interactive_menu()

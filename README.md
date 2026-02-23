@@ -2,6 +2,17 @@
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
 
+## What's New in v1.6.3
+
+- **Fix Xbox 360 platform filter** — Xbox 360 backward-compatible titles from Content Access API were marked as not owned, so the default "Owned" filter hid all 336 Xbox 360 games. Fixed: all library items are now correctly marked as owned.
+- **Ring scan speedup** — "Scan all rings" now resolves WuCategoryId and cookie once, queries all 4 rings in parallel, and skips download URL resolution. ~80 sequential HTTP calls reduced to ~6.
+- **Xbox Apps & Utilities `[X]`** — New preset list in the MS Store CDN Installer with 10 Xbox-related apps (Xbox app, Game Bar, Identity Provider, Accessories, etc.) and their ProductIds.
+- **Scan all rings default** — Pressing Enter at the ring prompt now scans all rings (previously required typing `*`).
+- **AppxPackage install fix** — `.eappxbundle` files (Xbox-only encrypted bundles) are now skipped during PC install. Dependencies are passed to all main packages, not just the first.
+- **B = Back everywhere** — All interactive prompts now consistently use `[B]` for back/cancel.
+- **"Library" → "Collection"** — All user-facing text renamed from "Library" to "Collection" (tab label, search placeholder, tooltips, CLI messages). Internal code unchanged.
+- **New menu options** — Added `[I]` Xbox CDN Installer and `[U]` Hard Delist Installer placeholders. Reordered Utilities section.
+
 ## What's New in v1.6.2
 
 - **Fix Display Catalog crash** — The API sometimes returns `null` for array fields (Images, Packages, etc.), causing "'NoneType' object is not iterable" errors during catalog enrichment. Fixed with null-safe iteration.
