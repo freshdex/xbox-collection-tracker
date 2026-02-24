@@ -2,6 +2,16 @@
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
 
+## What's New in v1.7
+
+- **Raw NTFS CDN Scraper — no mount, no conversion, no risk** — The `[E] Scrape CDN Links` tool in the Xbox Hard Drive menu now reads .xvs files directly from raw disk sectors using a built-in NTFS parser (MFT traversal, data run decoding, fixup arrays). Your Xbox drive **never needs to be converted to PC mode or mounted** — the scraper opens the physical disk read-only, walks the MFT, and extracts every .xvs file's CDN URLs, build versions, content IDs, and package metadata. Zero writes to the drive, zero risk of Windows NTFS corruption. Just plug in your Xbox drive, pick it, and scrape.
+- **Deleted XVC recovery** — When scraping CDN links, you can now opt to include deleted MFT records. Xbox doesn't zero out .xvs files when you uninstall a game — the MFT record is simply marked as not-in-use, but the data stays on disk until overwritten by a new install. Enabling this option recovers CDN links for games you've previously uninstalled, giving you download URLs for packages that are no longer installed on the drive. The more free space on your drive, the more deleted games you can recover.
+- **Multi-version CDN archive** — CDN.json now preserves every version of a game package across rescans. When a game updates and the buildId changes, the old version is archived into a `versions` array while the latest version stays at the top level. The HTML detail modal shows a full **Version History** section with decoded version numbers, platform, size, scrape date, and direct CDN download links for every archived version.
+- **CDN filter dropdown** — New filter in the Collection tab toolbar: `CDN: All / Has CDN Links / No CDN Links / Multiple Versions`. Quickly find which games in your library have archived CDN packages, and which ones have multiple version snapshots.
+- **CDN version badges** — The XBOX/CDN badge on each game now shows a version count when multiple versions are archived, e.g. `XBOX(3)`.
+- **Fix CDN section alignment in detail modal** — The Xbox/CDN Package section in the game detail popup no longer has misaligned labels and values.
+- **Fix Gamertag field in detail modal** — The Gamertag row was rendering raw JavaScript instead of the actual gamertag list. Fixed.
+
 ## What's New in v1.6.3
 
 - **Fix Xbox 360 platform filter** — Xbox 360 backward-compatible titles from Content Access API were marked as not owned, so the default "Owned" filter hid all 336 Xbox 360 games. Fixed: all library items are now correctly marked as owned.

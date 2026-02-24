@@ -36,6 +36,7 @@ import struct
 import sys
 import time
 import uuid
+import zlib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -58,7 +59,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "1.6.3"
+VERSION = "1.7"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -2000,6 +2001,73 @@ def fetch_entitlements(auth_token, gamertag=None, method=None):
 # Step 2b: Content Access (Xbox 360 / backward-compat discovery)
 # ===========================================================================
 
+# All 62 Original Xbox backward-compatible games with digital Store listings.
+# List frozen since Microsoft ended the BC program on Nov 15, 2021.
+OG_XBOX_BC_PIDS = frozenset({
+    "9NFC6HB55Z2G",  # Advent Rising
+    "BS7SQNNRB28W",  # Armed and Dangerous
+    "C05R27RMJ9SJ",  # Battlefield 2: Modern Combat
+    "BTCS0LP052HL",  # Black
+    "BRG51C5MWFSG",  # Blinx: The Time Sweeper
+    "C3DR0Z8LB53L",  # BloodRayne 2
+    "C3R4Z5101DZ4",  # Breakdown
+    "9PF8WJTVFDFL",  # Disney's Chicken Little
+    "BVFB8CBS75R6",  # Conker: Live and Reloaded
+    "C4B8XR1LCXR5",  # Crimson Skies: High Road to Revenge
+    "9PMVZJS9ZBV0",  # Dead or Alive 3
+    "9MX4QJ415BCV",  # Dead or Alive Ultimate
+    "BT3QT07V2TGC",  # Dead to Rights
+    "C01MSK2X5HPQ",  # Destroy All Humans! (2005)
+    "BXVCFBJBNS17",  # The Elder Scrolls III: Morrowind
+    "BW6GCCJ41VM6",  # Full Spectrum Warrior
+    "C2P985H1H42H",  # Fuzion Frenzy
+    "9N167659F1GG",  # Gladius
+    "BTHC2G28X9H4",  # Grabbed by the Ghoulies
+    "C3B11WF6SWCN",  # Grand Theft Auto: San Andreas
+    "9MZ08F46GC5Z",  # GunValkyrie
+    "C4ZP7QZGKC7D",  # Hunter: The Reckoning
+    "C02H769DRLQX",  # Indiana Jones and the Emperor's Tomb
+    "C40FNR9XDVK5",  # Jade Empire
+    "BX3K6CDNQK97",  # The King of Fighters Neowave
+    "9NN3VX0L45VL",  # Manhunt
+    "9NTGH3ZZ3PX3",  # Max Payne
+    "9P8MQ0X518GC",  # Max Payne 2: The Fall of Max Payne
+    "C0KB8NGFN0TS",  # Mercenaries: Playground of Destruction
+    "C3BGK0R0KP38",  # MX Unleashed
+    "C17KKS83S9GS",  # Ninja Gaiden Black
+    "9N2KKPLP5G0G",  # Oddworld: Munch's Oddysee
+    "9MZ93MFG08SR",  # Otogi: Myth of Demons
+    "9NH8V72VTJ5K",  # Otogi 2: Immortal Warriors
+    "BSC5WP01852T",  # Panzer Dragoon Orta
+    "BPF0679N8FFN",  # Panzer Elite Action: Fields of Glory
+    "BW1PR6CD4S5Z",  # Prince of Persia: The Sands of Time
+    "C5HHPG1TXDNG",  # Psychonauts
+    "9NP7Q2SSS81W",  # Red Dead Revolver
+    "C12N0W3G401J",  # Red Faction II
+    "9P3L7ZQDFJS5",  # Secret Weapons Over Normandy
+    "BXV0G44K5JVM",  # Sid Meier's Pirates!
+    "BPK3L1W8N5GW",  # Sphinx and the Cursed Mummy
+    "BSRKCPSS0QTD",  # SSX 3
+    "BZSWRLXJM182",  # Star Wars: Battlefront
+    "BPV56ZX2B8PJ",  # Star Wars: Battlefront II
+    "9NKMR9BW2G2K",  # Star Wars: Episode III - Revenge of the Sith
+    "BS7CR1KN2W1H",  # Star Wars Jedi Knight: Jedi Academy
+    "9PGJX8S0ZXD9",  # Star Wars Jedi Knight II: Jedi Outcast
+    "C4HZPD19R8B8",  # Star Wars: Jedi Starfighter
+    "9PHCKKLP981Q",  # Star Wars: Starfighter Special Edition
+    "BS8LFD7729CL",  # Star Wars: Knights of the Old Republic
+    "BQ4GD4LDGLTB",  # Star Wars: Knights of the Old Republic II
+    "BRJB0RMH33T2",  # Star Wars: Republic Commando
+    "9NLQMZP1CVTV",  # Thrillville
+    "9NJBX726M8J9",  # TimeSplitters 2
+    "9N51S9QZMSB6",  # TimeSplitters: Future Perfect
+    "C46H5R7GT7X9",  # Tom Clancy's Splinter Cell
+    "BQR5K462GR3M",  # Tom Clancy's Splinter Cell: Chaos Theory
+    "BWV6WF6XMFZX",  # Tom Clancy's Splinter Cell: Double Agent
+    "BX5CP6DSFW55",  # Tom Clancy's Splinter Cell: Pandora Tomorrow
+    "BTFJZ37GDLKK",  # Unreal Championship 2: The Liandri Conflict
+})
+
 def fetch_contentaccess(auth_token, cache_file=None):
     """Fetch all owned product IDs from Content Access API.
 
@@ -3438,6 +3506,12 @@ def build_html_template(gamertag=""):
         '<option value="has">Has DLC</option>'
         '<option value="no">No DLC</option>'
         '</select>\n'
+        '<select id="lib-cdn" onchange="filterLib()">'
+        '<option value="all">CDN: All</option>'
+        '<option value="has">Has CDN Links</option>'
+        '<option value="no">No CDN Links</option>'
+        '<option value="multi">Multiple Versions</option>'
+        '</select>\n'
         '<select id="lib-sort" onchange="libSortCol=null;filterLib()"><option value="name">Sort: Name</option>'
         '<option value="priceDesc">Sort: Price (High-Low)</option>'
         '<option value="priceAsc">Sort: Price (Low-High)</option>'
@@ -3572,6 +3646,7 @@ def build_html_template(gamertag=""):
         "const d=_cc==='JPY'||_cc==='KRW'||_cc==='CLP'||_cc==='COP'||_cc==='HUF'?0:2;"
         "return s+v.toLocaleString('en',{minimumFractionDigits:d,maximumFractionDigits:d})}\n"
         "function _pv(usd){return usd*((_CUR[_cc]||_CUR.USD)[0])}\n"
+        "function _xvd(h){if(!h||h.length<16)return h||'';try{const p=[];for(let i=0;i<16;i+=4)p.push(parseInt(h.substr(i,4),16));return p.join('.')}catch(e){return h}}\n"
         "function _onCur(){_cc=document.getElementById('lib-cur').value;filterLib();filterGP();filterMKT();renderAccounts()}\n"
         "const _kinds=['Game','Durable'];\n"
         "const _kindN=['Games','DLC'];\n"
@@ -4058,7 +4133,7 @@ def build_html_template(gamertag=""):
         "${item.xboxTitleId?'<div><span class=\"lbl\">Xbox Title ID:</span></div><div class=\"val\">'+item.xboxTitleId+'</div>':''}\n"
         '<div><span class="lbl">Type:</span></div><div class="val">${item.productKind||\'\'}</div>\n'
         '<div><span class="lbl">Category:</span></div><div class="val">${item.category||\'\'}</div>\n'
-        "'<div><span class=\"lbl\">Gamertag:</span></div><div class=\"val\">'+[...new Set(LIB.filter(x=>x.productId===item.productId).map(x=>x.gamertag||''))].join(', ')+'</div>'\n"
+        "${'<div><span class=\"lbl\">Gamertag:</span></div><div class=\"val\">'+[...new Set(LIB.filter(x=>x.productId===item.productId).map(x=>x.gamertag||''))].join(', ')+'</div>'}\n"
         '<div><span class="lbl">Release Date:</span></div><div class="val">${(item.releaseDate||\'\').substring(0,10)}</div>\n'
         '<div><span class="lbl">Acquired:</span></div><div class="val">${(item.acquiredDate||\'\').substring(0,10)}</div>\n'
         '<div><span class="lbl">Last Played:</span></div><div class="val">${(item.lastTimePlayed||\'\').substring(0,10)||\'Never\'}</div>\n'
@@ -4072,20 +4147,36 @@ def build_html_template(gamertag=""):
         '<div><span class="lbl">Game Pass:</span></div><div class="val">${item.onGamePass?\'Yes\':\'No\'}</div>\n'
         '<div><span class="lbl">Store:</span></div><div class="val"><a href="https://www.xbox.com/en-GB/games/store/p/${item.productId}" target="_blank">${item.productId}</a></div>\n'
         "</div>`;\n"
-        "const _usbR=typeof USB_DB!=='undefined'&&USB_DB?USB_DB[pid]:null;\n"
-        "if(_usbR){\n"
-        "let uh='<div class=\"modal-info\" style=\"margin-top:12px\"><div style=\"color:#90caf9;font-weight:600;margin-bottom:6px;border-bottom:1px solid #222;padding-bottom:4px\">&#9654; On USB Drive</div>';\n"
-        "if(_usbR.contentId)uh+=`<div><span class=\"lbl\">Content ID:</span></div><div class=\"val\" style=\"font-family:monospace;font-size:11px\">${_usbR.contentId}</div>`;\n"
-        "if(_usbR.buildVersion)uh+=`<div><span class=\"lbl\">Build Version:</span></div><div class=\"val\">${_usbR.buildVersion}</div>`;\n"
-        "if(_usbR.buildId)uh+=`<div><span class=\"lbl\">Build ID:</span></div><div class=\"val\" style=\"font-family:monospace;font-size:11px\">${_usbR.buildId}</div>`;\n"
-        "if(_usbR.platform)uh+=`<div><span class=\"lbl\">Platform:</span></div><div class=\"val\">${_usbR.platform}</div>`;\n"
-        "if(_usbR.sizeBytes)uh+=`<div><span class=\"lbl\">Size:</span></div><div class=\"val\">${(_usbR.sizeBytes/1e9).toFixed(2)} GB</div>`;\n"
-        "if(_usbR.contentTypes)uh+=`<div><span class=\"lbl\">Content Types:</span></div><div class=\"val\">${_usbR.contentTypes}</div>`;\n"
-        "if(_usbR.devices)uh+=`<div><span class=\"lbl\">Devices:</span></div><div class=\"val\">${_usbR.devices}</div>`;\n"
-        "if(_usbR.language)uh+=`<div><span class=\"lbl\">Language:</span></div><div class=\"val\">${_usbR.language}</div>`;\n"
-        "if(_usbR.planId)uh+=`<div><span class=\"lbl\">Plan ID:</span></div><div class=\"val\" style=\"font-family:monospace;font-size:11px\">${_usbR.planId}</div>`;\n"
-        "if(_usbR.cdnUrls&&_usbR.cdnUrls.length){_usbR.cdnUrls.forEach((u,i)=>{uh+=`<div><span class=\"lbl\">CDN ${i+1}:</span></div><div class=\"val\" style=\"word-break:break-all;font-size:10px\"><a href=\"${u}\" target=\"_blank\" style=\"color:#90caf9\">${u}</a></div>`})}\n"
+        "const _cdnR=typeof CDN_DB!=='undefined'&&CDN_DB?CDN_DB[pid]:null;\n"
+        "if(_cdnR){\n"
+        "const _cdnSrc=_cdnR.source==='xbox_xvs'?'Xbox':'CDN';\n"
+        "let uh='<div style=\"margin-top:12px;color:#90caf9;font-weight:600;margin-bottom:6px;border-bottom:1px solid #222;padding-bottom:4px\">&#9654; '+_cdnSrc+' Package</div><div class=\"modal-info\">';\n"
+        "if(_cdnR.contentId)uh+=`<div><span class=\"lbl\">Content ID:</span></div><div class=\"val\" style=\"font-family:monospace;font-size:11px\">${_cdnR.contentId}</div>`;\n"
+        "if(_cdnR.buildVersion)uh+=`<div><span class=\"lbl\">Build Version:</span></div><div class=\"val\">${_cdnR.buildVersion}</div>`;\n"
+        "if(_cdnR.buildId)uh+=`<div><span class=\"lbl\">Build ID:</span></div><div class=\"val\" style=\"font-family:monospace;font-size:11px\">${_cdnR.buildId}</div>`;\n"
+        "if(_cdnR.platform)uh+=`<div><span class=\"lbl\">Platform:</span></div><div class=\"val\">${_cdnR.platform}</div>`;\n"
+        "if(_cdnR.sizeBytes)uh+=`<div><span class=\"lbl\">Size:</span></div><div class=\"val\">${(_cdnR.sizeBytes/1e9).toFixed(2)} GB</div>`;\n"
+        "if(_cdnR.contentTypes)uh+=`<div><span class=\"lbl\">Content Types:</span></div><div class=\"val\">${_cdnR.contentTypes}</div>`;\n"
+        "if(_cdnR.devices)uh+=`<div><span class=\"lbl\">Devices:</span></div><div class=\"val\">${_cdnR.devices}</div>`;\n"
+        "if(_cdnR.language)uh+=`<div><span class=\"lbl\">Language:</span></div><div class=\"val\">${_cdnR.language}</div>`;\n"
+        "if(_cdnR.planId)uh+=`<div><span class=\"lbl\">Plan ID:</span></div><div class=\"val\" style=\"font-family:monospace;font-size:11px\">${_cdnR.planId}</div>`;\n"
+        "if(_cdnR.cdnUrls&&_cdnR.cdnUrls.length){_cdnR.cdnUrls.forEach((u,i)=>{uh+=`<div><span class=\"lbl\">CDN ${i+1}:</span></div><div class=\"val\" style=\"word-break:break-all;font-size:10px\"><a href=\"${u}\" target=\"_blank\" style=\"color:#90caf9\">${u}</a></div>`})}\n"
         "uh+='</div>';\n"
+        "if(_cdnR.versions&&_cdnR.versions.length>1){\n"
+        "uh+='<div style=\"margin-top:12px;color:#90caf9;font-weight:600;margin-bottom:6px;border-bottom:1px solid #222;padding-bottom:4px\">&#128230; Version History ('+_cdnR.versions.length+' versions)</div><div style=\"font-size:12px\">';\n"
+        "_cdnR.versions.forEach((v,idx)=>{\n"
+        "const hr=_xvd(v.buildVersion);\n"
+        "const sz=v.sizeBytes?((v.sizeBytes/1e9).toFixed(2)+' GB'):'';\n"
+        "const dt=v.scrapedAt?(v.scrapedAt.substring(0,10)):'';\n"
+        "const isCur=(v.buildId===_cdnR.buildId)?'<span style=\"color:#4caf50;margin-left:6px;font-size:10px\">(current)</span>':'';\n"
+        "uh+=`<div style=\"margin-top:8px;padding:6px 0;${idx>0?'border-top:1px solid #222;':''}\"><span style=\"color:#e0e0e0;font-weight:600\">${hr}</span>${isCur}`;\n"
+        "if(v.platform)uh+=` <span style=\"color:#888;font-size:11px\">${v.platform}</span>`;\n"
+        "if(sz)uh+=` <span style=\"color:#888;font-size:11px\">(${sz})</span>`;\n"
+        "if(dt)uh+=` <span style=\"color:#666;font-size:10px\">scraped ${dt}</span>`;\n"
+        "uh+='</div>';\n"
+        "if(v.cdnUrls&&v.cdnUrls.length){v.cdnUrls.forEach((u,i)=>{uh+=`<div style=\"margin-left:12px;word-break:break-all;font-size:10px;line-height:1.6\"><a href=\"${u}\" target=\"_blank\" style=\"color:#90caf9\">${u}</a></div>`})}\n"
+        "});\n"
+        "uh+='</div>'}\n"
         "document.getElementById('modal-body').innerHTML+=uh}\n"
         "document.getElementById('modal').classList.add('active')}\n"
         '\n'
@@ -4135,6 +4226,8 @@ def build_html_template(gamertag=""):
         "const skuVals=getCBVals('lib-sku');\n"
         "const dlVals=getCBVals('lib-delist');\n"
         "const dlcF=document.getElementById('lib-dlc').value;\n"
+        "const cdnF=document.getElementById('lib-cdn').value;\n"
+        "const _CDN=typeof CDN_DB!=='undefined'&&CDN_DB?CDN_DB:null;\n"
         "const gpF=document.getElementById('lib-gp').value;\n"
         "const g=document.getElementById('lib-grid');const l=document.getElementById('lib-list');\n"
         # Step 1: apply primary filters (gamertag/status/type)
@@ -4230,6 +4323,9 @@ def build_html_template(gamertag=""):
         "g.dlc.forEach(c=>_dlcChildren.add(c.productId))}});\n"
         "if(dlcF==='has')filtered=filtered.filter(item=>_dlcParents.has(item.productId)||_dlcChildren.has(item.productId));"
         "else if(dlcF==='no')filtered=filtered.filter(item=>!_dlcParents.has(item.productId)&&!_dlcChildren.has(item.productId));\n"
+        "if(cdnF!=='all'&&_CDN){if(cdnF==='has')filtered=filtered.filter(item=>!!_CDN[item.productId]);"
+        "else if(cdnF==='no')filtered=filtered.filter(item=>!_CDN[item.productId]);"
+        "else if(cdnF==='multi')filtered=filtered.filter(item=>{const c=_CDN[item.productId];return c&&c.versions&&c.versions.length>1})}\n"
 
         "const shown=filtered.length;\n"
         "function colArrow(c){return libSortCol===c?(libSortDir==='asc'?' \\u25B2':' \\u25BC'):''}\n"
@@ -4267,7 +4363,9 @@ def build_html_template(gamertag=""):
         ":fl==='indie'?'<span class=\"badge\" style=\"font-size:9px;margin-left:3px;background:#1a2a3a;color:#64b5f6\">INDIE</span>':'';"
         "const iv2=item.catalogInvalid?'<span class=\"badge\" style=\"font-size:9px;margin-left:3px;background:#3a1a1a;color:#f44336\">INVALID</span>':'';"
         "const dlcBadge=dlcCount>0?`<span class=\"dlc-count\">${dlcCount} DLC</span>`:'';"
-        "const usbBadge2=(typeof USB_DB!=='undefined'&&USB_DB&&USB_DB[item.productId])?'<span class=\"badge usb\" style=\"font-size:9px;margin-left:4px\">USB</span>':'';"
+        "const _cdnE2=(typeof CDN_DB!=='undefined'&&CDN_DB)?CDN_DB[item.productId]:null;"
+        "const _cdnVc2=_cdnE2&&_cdnE2.versions&&_cdnE2.versions.length>1?'('+_cdnE2.versions.length+')':'';"
+        "const cdnBadge2=_cdnE2?(_cdnE2.source==='xbox_xvs'?'<span class=\"badge usb\" style=\"font-size:9px;margin-left:4px\">XBOX'+_cdnVc2+'</span>':'<span class=\"badge usb\" style=\"font-size:9px;margin-left:4px\">CDN'+_cdnVc2+'</span>'):'';"\
         "const st=(item.title||'').replace(/'/g,\"\\\\\\'\" ).replace(/\"/g,'&quot;');"
         "const aGTs=item._allGTs||[item.gamertag||''];"
         "const gtE=aGTs.length>1?`<span class=\"gt-plus\" onclick=\"event.stopPropagation();showGTList(this,['`+aGTs.map(g=>g.replace(/'/g,\"\\\\'\")).join(`','`)+`'])\" title=\"${aGTs.length} gamertags\">+${aGTs.length-1}</span>`:'';"
@@ -4277,7 +4375,7 @@ def build_html_template(gamertag=""):
         "const plS=(item.platforms||[]).join(', ')||'';"
         "return `<div class=\"lv-row ${extraCls}\" onclick=\"showLibDetail('${item.productId}')\" oncontextmenu=\"showFlagMenu(event,'${item.productId}','${st}')\">"
         "${imgHtml}<div class=\"lv-title\" title=\"${(item.title||'').replace(/\"/g,'&quot;')}\">"
-        "${item.title||item.productId}${po2}${gp2}${tr2}${fl2}${iv2}${dlcBadge}${usbBadge2}</div>"
+        "${item.title||item.productId}${po2}${gp2}${tr2}${fl2}${iv2}${dlcBadge}${cdnBadge2}</div>"
         "<div class=\"lv-type\" style=\"color:#aaa\">${item.gamertag||''}${gtE}${item._imported?' <span class=\"imp-badge\">imp</span>':''}</div>"
         "<div class=\"lv-pub\">${item.publisher||''}</div>"
         "<div class=\"lv-pub\">${item.developer||''}</div>"
@@ -4311,7 +4409,10 @@ def build_html_template(gamertag=""):
         ":flagged==='hardDelisted'?'<span class=\"badge\" style=\"font-size:9px;margin-left:4px;background:#3a1a1a;color:#f44336\">HARD DELISTED</span>'"
         ":flagged==='indie'?'<span class=\"badge\" style=\"font-size:9px;margin-left:4px;background:#1a2a3a;color:#64b5f6\">INDIE</span>':'';\n"
         "const invBadge=item.catalogInvalid?'<span class=\"badge\" style=\"font-size:9px;margin-left:4px;background:#3a1a1a;color:#f44336\">INVALID</span>':'';\n"
-        "const usbBadge=(typeof USB_DB!=='undefined'&&USB_DB&&USB_DB[item.productId])?'<span class=\"badge usb\" style=\"font-size:9px;margin-left:4px\">USB</span>':'';\n"
+        "const _cdnE=(typeof CDN_DB!=='undefined'&&CDN_DB)?CDN_DB[item.productId]:null;\n"
+        "const _cdnVc=_cdnE&&_cdnE.versions&&_cdnE.versions.length>1?'('+_cdnE.versions.length+')':'';\n"
+        "const cdnBadge=_cdnE?(_cdnE.source==='xbox_xvs'?'<span class=\"badge usb\" style=\"font-size:9px;margin-left:4px\">XBOX'+_cdnVc+'</span>':'<span class=\"badge usb\" style=\"font-size:9px;margin-left:4px\">CDN'+_cdnVc+'</span>'):'';"\
+        "\n"
         "const safeTitle=(item.title||'').replace(/'/g,\"\\\\\\'\" ).replace(/\"/g,'&quot;');\n"
         "const allGTs=item._allGTs||[item.gamertag||''];\n"
         "const gtExtra=allGTs.length>1?`<span class=\"gt-plus\" onclick=\"event.stopPropagation();showGTList(this,['`+allGTs.map(g=>g.replace(/'/g,\"\\\\'\")).join(`','`)+`'])\" title=\"${allGTs.length} gamertags\">+${allGTs.length-1}</span>`:'';\n"
@@ -4319,7 +4420,7 @@ def build_html_template(gamertag=""):
         # Grid view: always flat, render every item
         'gh+=`<div class="lib-card" onclick="showLibDetail(\'${item.productId}\')" oncontextmenu="showFlagMenu(event,\'${item.productId}\',\'${safeTitle}\')">'
         '${img}<div class="info"><div class="ln" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">'
-        '${item.title||item.productId}${poBadge}${gpBadge}${trBadge}${flBadge}${invBadge}${usbBadge}${item._imported?\'<span class="imp-badge">imported</span>\':\'\'}</div>'
+        '${item.title||item.productId}${poBadge}${gpBadge}${trBadge}${flBadge}${invBadge}${cdnBadge}${item._imported?\'<span class="imp-badge">imported</span>\':\'\'}</div>'
         '<div class="lm">${item.publisher||\'\'} | ${item.productKind||\'\'} | ${item.category||\'\'} | '
         '<span class="${sc}">${item.status||\'\'}</span>${gtExtra}</div>${pr}</div></div>`;\n'
 
@@ -4778,12 +4879,12 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
         except Exception:
             pass
 
-    # Load USB drive database if available
-    usb_db = {}
-    usb_db_file = os.path.join(SCRIPT_DIR, "usb_db.json")
-    if os.path.isfile(usb_db_file):
+    # Load CDN package database if available
+    cdn_db = {}
+    cdn_db_file = os.path.join(SCRIPT_DIR, "CDN.json")
+    if os.path.isfile(cdn_db_file):
         try:
-            usb_db = load_json(usb_db_file) or {}
+            cdn_db = load_json(cdn_db_file) or {}
         except Exception:
             pass
 
@@ -4831,7 +4932,7 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
         "const ACCOUNTS=" + json.dumps(accounts_meta, ensure_ascii=False) + ";\n"
         "const RATES=" + json.dumps(rates, ensure_ascii=False) + ";\n"
         "const GC_FACTOR=" + str(GC_FACTOR) + ";\n"
-        "const USB_DB=" + json.dumps(usb_db, ensure_ascii=False) + ";\n"
+        "const CDN_DB=" + json.dumps(cdn_db, ensure_ascii=False) + ";\n"
         "const GFWL=" + json.dumps(gfwl_data, ensure_ascii=False) + ";\n"
     )
     with open(data_js_path, "w", encoding="utf-8") as f:
@@ -5065,17 +5166,17 @@ def prompt_data_source(gamertag):
     print()
     print("  Data source:")
     print(f"    [Enter] Both (recommended)  - full collection + game metadata")
-    print(f"    [C] Collections API only    - {col_status} — all entitlements (~5000)")
-    print(f"    [T] TitleHub only           - {th_status} — games with metadata (~1000)")
-    print(f"    [F] Import HAR file         - extract token from .har then process")
-    print(f"    [B] Back")
+    print(f"    [1] Collections API only    - {col_status} — all entitlements (~5000)")
+    print(f"    [2] TitleHub only           - {th_status} — games with metadata (~1000)")
+    print(f"    [3] Import HAR file         - extract token from .har then process")
+    print(f"    [0] Back")
     print()
 
-    pick = input("  Pick [Enter=Both / C/T/F / B=back]: ").strip().upper()
-    if pick == "B":
+    pick = input("  Pick [Enter=Both / 1/2/3 / 0=back]: ").strip().upper()
+    if pick == "0":
         return None
 
-    if pick == "F":
+    if pick == "3":
         # Import fresh token from HAR file, then use Collections API
         print()
         har_files = sorted(glob.glob(os.path.join(SCRIPT_DIR, "*.har")),
@@ -5107,7 +5208,7 @@ def prompt_data_source(gamertag):
             print("  Token was saved to a different gamertag. Falling back to Both.")
             return "both"
         return "collection"
-    elif pick == "C":
+    elif pick == "1":
         if not has_collection:
             print()
             print("  No Collections API token found.")
@@ -5119,7 +5220,7 @@ def prompt_data_source(gamertag):
                 print("  Still no token — falling back to Both.")
                 return "both"
         return "collection"
-    elif pick == "T":
+    elif pick == "2":
         if not has_titlehub:
             print("  No TitleHub tokens found. Use device code auth first.")
             print("  Falling back to Both.")
@@ -5259,12 +5360,29 @@ def process_account(gamertag, method=None):
                     v3_data.update(ca_catalog)
                     save_json(CATALOG_V3_US_FILE, v3_data)
 
-        # Find items with XBOXTITLEID that don't already have "Xbox 360" platform
+        # Find items with XBOXTITLEID that don't already have Xbox 360 / Original Xbox platform
         if catalog_us:
+            # Fix OG Xbox games previously tagged as Xbox 360
+            _og_fixed = 0
+            for pid in ca_all_pids:
+                plats = catalog_us.get(pid, {}).get("platforms", [])
+                if "Xbox 360" in plats and pid in OG_XBOX_BC_PIDS:
+                    plats[plats.index("Xbox 360")] = "Original Xbox"
+                    _og_fixed += 1
+            if _og_fixed:
+                print(f"  Corrected {_og_fixed} Original Xbox games (were tagged Xbox 360)")
+                if CATALOG_V3_US_FILE:
+                    v3_data = load_json(CATALOG_V3_US_FILE) if os.path.isfile(CATALOG_V3_US_FILE) else {}
+                    for pid in ca_all_pids:
+                        if pid in catalog_us:
+                            v3_data[pid] = catalog_us[pid]
+                    save_json(CATALOG_V3_US_FILE, v3_data)
+
             pid_to_titleid = {}
             for pid in ca_all_pids:
                 cat_entry = catalog_us.get(pid, {})
-                if "Xbox 360" in cat_entry.get("platforms", []):
+                plats = cat_entry.get("platforms", [])
+                if "Xbox 360" in plats or "Original Xbox" in plats:
                     continue  # already tagged
                 for alt in cat_entry.get("alternateIds", []):
                     if alt.get("idType") == "XBOXTITLEID":
@@ -5277,21 +5395,32 @@ def process_account(gamertag, method=None):
                 th_results = fetch_titlehub_batch(title_ids, auth_token_xl)
 
                 xbox360_count = 0
+                ogxbox_count = 0
                 for pid, title_data in th_results.items():
                     devices = title_data.get("devices", [])
                     if "Xbox360" in devices:
+                        if pid in OG_XBOX_BC_PIDS:
+                            primary_plat = "Original Xbox"
+                            ogxbox_count += 1
+                        else:
+                            primary_plat = "Xbox 360"
+                            xbox360_count += 1
                         if pid in catalog_us:
-                            catalog_us[pid]["platforms"] = ["Xbox 360"]
+                            catalog_us[pid]["platforms"] = [primary_plat]
                             for dev in devices:
                                 mapped = {"XboxOne": "Xbox One",
                                           "XboxSeries": "Xbox Series X|S",
                                           "PC": "PC"}.get(dev)
                                 if mapped and mapped not in catalog_us[pid]["platforms"]:
                                     catalog_us[pid]["platforms"].append(mapped)
-                        xbox360_count += 1
 
-                if xbox360_count:
-                    print(f"  Tagged {xbox360_count} Xbox 360 games")
+                if xbox360_count or ogxbox_count:
+                    parts = []
+                    if xbox360_count:
+                        parts.append(f"{xbox360_count} Xbox 360")
+                    if ogxbox_count:
+                        parts.append(f"{ogxbox_count} Original Xbox")
+                    print(f"  Tagged {' + '.join(parts)} games")
                     if CATALOG_V3_US_FILE:
                         v3_data = load_json(CATALOG_V3_US_FILE) if os.path.isfile(CATALOG_V3_US_FILE) else {}
                         for pid in th_results:
@@ -5300,10 +5429,21 @@ def process_account(gamertag, method=None):
                         save_json(CATALOG_V3_US_FILE, v3_data)
             else:
                 # Check if already tagged from a previous run
-                already_360 = sum(1 for pid in ca_all_pids
-                                  if "Xbox 360" in catalog_us.get(pid, {}).get("platforms", []))
+                already_360 = 0
+                already_og = 0
+                for pid in ca_all_pids:
+                    plats = catalog_us.get(pid, {}).get("platforms", [])
+                    if "Xbox 360" in plats:
+                        already_360 += 1
+                    if "Original Xbox" in plats:
+                        already_og += 1
+                parts = []
                 if already_360:
-                    print(f"  Xbox 360: {already_360} items already tagged")
+                    parts.append(f"{already_360} Xbox 360")
+                if already_og:
+                    parts.append(f"{already_og} Original Xbox")
+                if parts:
+                    print(f"  Already tagged: {' + '.join(parts)} items")
 
     # -- Step 3c: Merge into library --
     library, play_history = merge_library(entitlements, catalog_us, gamertag=gamertag)
@@ -6847,16 +6987,16 @@ def process_all_accounts():
     print()
     print("  Data source for all gamertags:")
     print("    [Enter] Both (recommended)  - full collection + game metadata")
-    print("    [C] Collections API only    - all entitlements (~5000)")
-    print("    [T] TitleHub only           - games with metadata (~1000)")
-    print("    [B] Back")
+    print("    [1] Collections API only    - all entitlements (~5000)")
+    print("    [2] TitleHub only           - games with metadata (~1000)")
+    print("    [0] Back")
     print()
-    pick = input("  Pick [Enter=Both / C/T / B=back]: ").strip().upper()
-    if pick == "B":
+    pick = input("  Pick [Enter=Both / 1/2 / 0=back]: ").strip()
+    if pick == "0":
         return
-    elif pick == "C":
+    elif pick == "1":
         method = "collection"
-    elif pick == "T":
+    elif pick == "2":
         method = "titlehub"
     else:
         method = "both"
@@ -7009,13 +7149,26 @@ def process_contentaccess_only(gamertag):
     # Load full catalog for merge
     catalog_us = load_json(CATALOG_V3_US_FILE) if os.path.isfile(CATALOG_V3_US_FILE) else {}
 
-    # Identify Xbox 360 games via TitleHub batch
+    # Identify Xbox 360 / Original Xbox games via TitleHub batch
     # Check ALL contentaccess-only items, not just newly added ones
     ca_all_pids = [e["productId"] for e in entitlements if e.get("_contentaccess_only")]
+
+    # Fix OG Xbox games previously tagged as Xbox 360
+    _og_fixed = 0
+    for pid in ca_all_pids:
+        plats = catalog_us.get(pid, {}).get("platforms", [])
+        if "Xbox 360" in plats and pid in OG_XBOX_BC_PIDS:
+            plats[plats.index("Xbox 360")] = "Original Xbox"
+            _og_fixed += 1
+    if _og_fixed:
+        print(f"  Corrected {_og_fixed} Original Xbox games (were tagged Xbox 360)")
+        save_json(CATALOG_V3_US_FILE, catalog_us)
+
     pid_to_titleid = {}
     for pid in ca_all_pids:
         cat_entry = catalog_us.get(pid, {})
-        if "Xbox 360" in cat_entry.get("platforms", []):
+        plats = cat_entry.get("platforms", [])
+        if "Xbox 360" in plats or "Original Xbox" in plats:
             continue  # already tagged
         for alt in cat_entry.get("alternateIds", []):
             if alt.get("idType") == "XBOXTITLEID":
@@ -7024,31 +7177,53 @@ def process_contentaccess_only(gamertag):
 
     if pid_to_titleid:
         title_ids = list(pid_to_titleid.values())
-        print(f"  Checking {len(title_ids)} items via TitleHub batch for Xbox 360...")
+        print(f"  Checking {len(title_ids)} items via TitleHub batch for Xbox 360 / OG Xbox...")
         th_results = fetch_titlehub_batch(title_ids, auth_token_xl)
 
         xbox360_count = 0
+        ogxbox_count = 0
         for pid, title_data in th_results.items():
             devices = title_data.get("devices", [])
             if "Xbox360" in devices:
+                if pid in OG_XBOX_BC_PIDS:
+                    primary_plat = "Original Xbox"
+                    ogxbox_count += 1
+                else:
+                    primary_plat = "Xbox 360"
+                    xbox360_count += 1
                 if pid in catalog_us:
-                    catalog_us[pid]["platforms"] = ["Xbox 360"]
+                    catalog_us[pid]["platforms"] = [primary_plat]
                     for dev in devices:
                         mapped = {"XboxOne": "Xbox One",
                                   "XboxSeries": "Xbox Series X|S",
                                   "PC": "PC"}.get(dev)
                         if mapped and mapped not in catalog_us[pid]["platforms"]:
                             catalog_us[pid]["platforms"].append(mapped)
-                xbox360_count += 1
 
-        if xbox360_count:
-            print(f"  Tagged {xbox360_count} Xbox 360 games")
+        if xbox360_count or ogxbox_count:
+            parts = []
+            if xbox360_count:
+                parts.append(f"{xbox360_count} Xbox 360")
+            if ogxbox_count:
+                parts.append(f"{ogxbox_count} Original Xbox")
+            print(f"  Tagged {' + '.join(parts)} games")
             save_json(CATALOG_V3_US_FILE, catalog_us)
     else:
-        already_360 = sum(1 for pid in ca_all_pids
-                          if "Xbox 360" in catalog_us.get(pid, {}).get("platforms", []))
+        already_360 = 0
+        already_og = 0
+        for pid in ca_all_pids:
+            plats = catalog_us.get(pid, {}).get("platforms", [])
+            if "Xbox 360" in plats:
+                already_360 += 1
+            if "Original Xbox" in plats:
+                already_og += 1
+        parts = []
         if already_360:
-            print(f"  Xbox 360: {already_360} items already tagged")
+            parts.append(f"{already_360} Xbox 360")
+        if already_og:
+            parts.append(f"{already_og} Original Xbox")
+        if parts:
+            print(f"  Already tagged: {' + '.join(parts)} items")
 
     # Merge and rebuild
     library, play_history = merge_library(entitlements, catalog_us, gamertag=gamertag)
@@ -7074,127 +7249,223 @@ def process_contentaccess_only(gamertag):
 
 
 # ===========================================================================
-# Xbox Drive Converter
-# Ports the logic from XboxOneStorageConverter (C#) to Python.
+# Xbox Hard Drive Tool
+# Full-featured tool for Xbox external storage management:
+#   [A] Analyze — raw sector dump with MBR/GPT/partition breakdown
+#   [P] Convert to PC Mode — swap MBR signature 99 CC → 55 AA
+#   [X] Convert to Xbox Mode — swap MBR signature 55 AA → 99 CC
+#   [F] Format Drive for Xbox — create GPT + NTFS partitions from scratch
+#   [I] Install XVC from CDN — download and place game packages on drive
+#
+# All write operations enforce safety: never PhysicalDrive0, show exact
+# bytes before/after, require "YES" confirmation, read-back verify.
+# Every Win32 API call is printed as it happens.
+#
 # Xbox external drives use a custom MBR signature at offset 0x1FE:
 #   Xbox mode: 0x99 0xCC  — unreadable by Windows, usable by Xbox
-#   PC mode:   0x55 0xAA  — with first 0x1B8 bytes zeroed (no partition table)
-# Changing mode requires writing those two bytes; needs Administrator on Windows.
-# Refresh Disks = diskpart rescan (same as Disk Management > Action > Rescan Disks).
+#   PC mode:   0x55 0xAA  — standard PC MBR boot signature
+# The NT Disk Signature at 0x1B8 is 12 34 56 78 on Xbox drives.
 # ===========================================================================
 
-_XDC_MBR_SIZE       = 512
-_XDC_SIG_OFFSET     = 0x1FE
-_XDC_XBOX_SIG       = bytes([0x99, 0xCC])
-_XDC_PC_SIG         = bytes([0x55, 0xAA])
+if sys.platform == "win32":
+    import ctypes as _ct
+    import ctypes.wintypes as _wt
+
+# --- Win32 constants ---
+_HD_GENERIC_READ       = 0x80000000
+_HD_GENERIC_WRITE      = 0x40000000
+_HD_FILE_SHARE_READ    = 0x00000001
+_HD_FILE_SHARE_WRITE   = 0x00000002
+_HD_OPEN_EXISTING      = 3
+_HD_INVALID_HANDLE     = -1
+_HD_SECTOR             = 512
+
+# --- MBR constants ---
+_HD_SIG_OFFSET         = 0x1FE
+_HD_XBOX_SIG           = bytes([0x99, 0xCC])
+_HD_PC_SIG             = bytes([0x55, 0xAA])
+_HD_NT_DISK_SIG        = bytes([0x12, 0x34, 0x56, 0x78])
+_HD_NT_DISK_SIG_OFFSET = 0x1B8
+
+# --- Xbox partition GUIDs ---
+_HD_TEMP_CONTENT_GUID  = "B3727DA5-A3AC-4B3D-9FD6-2EA54441011B"
+_HD_USER_CONTENT_GUID  = "869BB5E0-3356-4BE6-85F7-29323A675CC7"
+
+# --- Partition type GUIDs for hide/unhide ---
+_HD_MSDATA_TYPE_GUID   = "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7"
+_HD_HIDDEN_TYPE_GUID   = "0FC63DAF-8483-4772-8E79-3D69D8477DE4"  # Linux filesystem — Windows ignores
+
+# --- Known GPT partition type GUIDs ---
+_HD_GPT_TYPE_NAMES = {
+    "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7": "Microsoft basic data",
+    "E3C9E316-0B5C-4DB8-817D-F92DF00215AE": "Microsoft reserved (MSR)",
+    "DE94BBA4-06D1-4D40-A16A-BFD50179D6AC": "Microsoft recovery",
+    "C12A7328-F81F-11D2-BA4B-00A0C93EC93B": "EFI System Partition",
+    "21686148-6449-6E6F-744E-656564454649": "BIOS boot partition",
+    "5808C8AA-7E8F-42E0-85D2-E1E90434CFB3": "LDM metadata",
+    "AF9B60A0-1431-4F62-BC68-3311714A69AD": "LDM data",
+    "E75CAF8F-F680-4CEF-AA6E-40C6358770C2": "Microsoft Storage Spaces",
+}
 
 
-def _xdc_list_physical_drives():
-    """List physical drives via PowerShell WMI. Returns list of (deviceId, caption)."""
+def _hd_open_read(device_id):
+    """Open a physical drive for reading. Returns handle or None."""
+    share = _HD_FILE_SHARE_READ | _HD_FILE_SHARE_WRITE
+    print(f"  CreateFileW({device_id}, GENERIC_READ, FILE_SHARE_READ|WRITE)", end="")
+    handle = _ct.windll.kernel32.CreateFileW(
+        device_id, _HD_GENERIC_READ, share, None, _HD_OPEN_EXISTING, 0, None)
+    if handle in (_HD_INVALID_HANDLE, 0):
+        err = _ct.windll.kernel32.GetLastError()
+        print(f" → FAILED (error {err})")
+        if err == 5:
+            print("  [!] Access denied — run XCT as Administrator.")
+        return None
+    print(f" → handle 0x{handle:X}")
+    return handle
+
+
+def _hd_open_write(device_id):
+    """Open a physical drive for read/write (exclusive). Returns handle or None."""
+    print(f"  CreateFileW({device_id}, GENERIC_READ|WRITE, exclusive)", end="")
+    handle = _ct.windll.kernel32.CreateFileW(
+        device_id, _HD_GENERIC_READ | _HD_GENERIC_WRITE, 0, None, _HD_OPEN_EXISTING, 0, None)
+    if handle in (_HD_INVALID_HANDLE, 0):
+        err = _ct.windll.kernel32.GetLastError()
+        print(f" → FAILED (error {err})")
+        if err == 5:
+            print("  [!] Access denied — run XCT as Administrator.")
+        elif err == 32:
+            print("  [!] Drive is in use by another process. Close Explorer or Disk Management.")
+        return None
+    print(f" → handle 0x{handle:X}")
+    return handle
+
+
+def _hd_read_sectors(handle, lba, count=1):
+    """Read `count` sectors starting at `lba`. Returns bytes or None."""
+    offset = lba * _HD_SECTOR
+    size = count * _HD_SECTOR
+    # SetFilePointer with 64-bit offset
+    lo = offset & 0xFFFFFFFF
+    hi = _ct.c_long((offset >> 32) & 0xFFFFFFFF)
+    _ct.windll.kernel32.SetFilePointer(handle, lo, _ct.byref(hi), 0)
+    buf = _ct.create_string_buffer(size)
+    n = _ct.c_ulong(0)
+    ok = _ct.windll.kernel32.ReadFile(handle, buf, size, _ct.byref(n), None)
+    print(f"  ReadFile(handle=0x{handle:X}, LBA={lba}, offset=0x{offset:X}, size={size}) → {n.value} bytes {'OK' if ok else 'FAIL'}")
+    if not ok or n.value != size:
+        return None
+    return bytes(buf.raw)
+
+
+def _hd_write_sectors(handle, lba, data):
+    """Write `data` at sector `lba`. Returns True on success."""
+    offset = lba * _HD_SECTOR
+    lo = offset & 0xFFFFFFFF
+    hi = _ct.c_long((offset >> 32) & 0xFFFFFFFF)
+    _ct.windll.kernel32.SetFilePointer(handle, lo, _ct.byref(hi), 0)
+    n = _ct.c_ulong(0)
+    ok = _ct.windll.kernel32.WriteFile(handle, bytes(data), len(data), _ct.byref(n), None)
+    print(f"  WriteFile(handle=0x{handle:X}, LBA={lba}, offset=0x{offset:X}, size={len(data)}) → {n.value} bytes {'OK' if ok else 'FAIL'}")
+    if not ok:
+        err = _ct.windll.kernel32.GetLastError()
+        print(f"  [!] WriteFile error: {err}")
+        return False
+    return n.value == len(data)
+
+
+def _hd_close(handle):
+    """Close a handle."""
+    _ct.windll.kernel32.CloseHandle(handle)
+    print(f"  CloseHandle(0x{handle:X})")
+
+
+def _hd_list_drives():
+    """List physical drives via PowerShell Get-PhysicalDisk. Returns list of dicts."""
     try:
+        cmd = (
+            "Get-PhysicalDisk | Select-Object DeviceId, FriendlyName, MediaType, "
+            "BusType, @{N='SizeGB';E={[math]::Round($_.Size/1GB,2)}}, SerialNumber, "
+            "HealthStatus | ConvertTo-Json -Compress"
+        )
         r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-WmiObject Win32_DiskDrive | ForEach-Object { $_.DeviceID + '|' + $_.Caption }"],
+            ["powershell", "-NoProfile", "-Command", cmd],
             capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            print(f"  [!] Get-PhysicalDisk failed: {r.stderr.strip()}")
+            return []
+        data = json.loads(r.stdout)
+        if isinstance(data, dict):
+            data = [data]
         drives = []
-        for line in r.stdout.strip().splitlines():
-            line = line.strip()
-            if '|' in line:
-                dev, _, cap = line.partition('|')
-                drives.append((dev.strip(), cap.strip()))
+        for d in data:
+            dev_num = str(d.get("DeviceId", "")).strip()
+            drives.append({
+                "deviceId":    f"\\\\.\\PHYSICALDRIVE{dev_num}",
+                "deviceNum":   int(dev_num) if dev_num.isdigit() else -1,
+                "friendlyName": d.get("FriendlyName", "Unknown"),
+                "mediaType":   d.get("MediaType", "?"),
+                "busType":     d.get("BusType", "?"),
+                "sizeGB":      d.get("SizeGB", 0),
+                "serial":      (d.get("SerialNumber") or "").strip(),
+                "health":      d.get("HealthStatus", "?"),
+            })
         return drives
     except Exception as e:
-        print(f"[!] Drive enumeration failed: {e}")
+        print(f"  [!] Drive enumeration failed: {e}")
         return []
 
 
-def _xdc_read_mbr(device_id):
-    """Open a physical drive and read its 512-byte MBR. Returns bytes or None."""
-    import ctypes
-    handle = ctypes.windll.kernel32.CreateFileW(
-        device_id,
-        0x80000000,        # GENERIC_READ
-        0x00000001,        # FILE_SHARE_READ
-        None, 3, 0, None)  # OPEN_EXISTING
-    if handle in (-1, 0):
-        return None
+def _hd_is_admin():
+    """Check if running as Administrator."""
     try:
-        buf = ctypes.create_string_buffer(_XDC_MBR_SIZE)
-        n   = ctypes.c_ulong(0)
-        ctypes.windll.kernel32.ReadFile(handle, buf, _XDC_MBR_SIZE, ctypes.byref(n), None)
-        return bytes(buf.raw)
-    finally:
-        ctypes.windll.kernel32.CloseHandle(handle)
+        return bool(_ct.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
 
 
-def _xdc_write_mbr(device_id, mbr_data):
-    """Open a physical drive exclusively and write 512-byte MBR. Returns (ok, errmsg)."""
-    import ctypes
-    handle = ctypes.windll.kernel32.CreateFileW(
-        device_id,
-        0x80000000 | 0x40000000,  # GENERIC_READ | GENERIC_WRITE
-        0,                         # exclusive (no sharing)
-        None, 3, 0, None)
-    if handle in (-1, 0):
-        err = ctypes.windll.kernel32.GetLastError()
-        if err == 5:
-            return False, "Access denied — run XCT as Administrator."
-        return False, f"Could not open drive (Windows error {err})."
-    try:
-        ctypes.windll.kernel32.SetFilePointer(handle, 0, None, 0)
-        n = ctypes.c_ulong(0)
-        ok = ctypes.windll.kernel32.WriteFile(handle, bytes(mbr_data), _XDC_MBR_SIZE, ctypes.byref(n), None)
-        if not ok:
-            err = ctypes.windll.kernel32.GetLastError()
-            return False, f"Write failed (Windows error {err})."
-        return True, "OK"
-    finally:
-        ctypes.windll.kernel32.CloseHandle(handle)
+def _hd_refuse_system_drive(device_id):
+    """Return True (and print warning) if this is PhysicalDrive0."""
+    if device_id.upper().endswith("PHYSICALDRIVE0"):
+        print("  [!] REFUSED: PhysicalDrive0 is the system drive. This operation is blocked")
+        print("      to prevent accidental destruction of your Windows installation.")
+        return True
+    return False
 
 
-def _xdc_scan_xbox_drives():
-    """
-    Enumerate all physical drives and identify Xbox external storage by MBR signature.
-    Returns list of dicts: {deviceId, caption, mode}  (mode: 'Xbox Mode' | 'PC Mode').
-    """
-    found = []
-    for device_id, caption in _xdc_list_physical_drives():
-        mbr = _xdc_read_mbr(device_id)
-        if mbr is None:
-            continue
-        sig = mbr[_XDC_SIG_OFFSET:_XDC_SIG_OFFSET + 2]
-        if sig == _XDC_XBOX_SIG:
-            found.append({"deviceId": device_id, "caption": caption, "mode": "Xbox Mode"})
-        elif sig == _XDC_PC_SIG and all(b == 0 for b in mbr[:0x1B8]):
-            # PC signature but zeroed partition table = Xbox drive switched to PC mode
-            found.append({"deviceId": device_id, "caption": caption, "mode": "PC Mode"})
-    return found
+def _hd_hex_dump(data, base_offset=0, prefix="  "):
+    """Format a hex dump with ASCII sidebar. Returns list of lines."""
+    lines = []
+    for i in range(0, len(data), 16):
+        row = data[i:i+16]
+        hex_part = " ".join(f"{b:02X}" for b in row)
+        hex_part = hex_part.ljust(47)
+        ascii_part = "".join(chr(b) if 32 <= b < 127 else "." for b in row)
+        lines.append(f"{prefix}{base_offset + i:06X}  {hex_part}  |{ascii_part}|")
+    return lines
 
 
-def _xdc_change_mode(device_id, to_xbox):
-    """
-    Rewrite the MBR signature to Xbox (0x99,0xCC) or PC (0x55,0xAA).
-    Returns (success, message).  Requires Administrator.
-    """
-    mbr = _xdc_read_mbr(device_id)
-    if mbr is None:
-        return False, "Could not read MBR — check permissions."
-    mbr = bytearray(mbr)
-    target_sig = _XDC_XBOX_SIG if to_xbox else _XDC_PC_SIG
-    current_sig = bytes(mbr[_XDC_SIG_OFFSET:_XDC_SIG_OFFSET + 2])
-    if current_sig == target_sig:
-        return True, f"Drive is already in {'Xbox' if to_xbox else 'PC'} mode."
-    mbr[_XDC_SIG_OFFSET]     = target_sig[0]
-    mbr[_XDC_SIG_OFFSET + 1] = target_sig[1]
-    return _xdc_write_mbr(device_id, mbr)
+def _hd_format_guid(raw_bytes):
+    """Format a mixed-endian GPT GUID from 16 raw bytes."""
+    if len(raw_bytes) != 16:
+        return "?" * 36
+    # GPT GUIDs are mixed-endian: first 3 fields are little-endian, last 2 are big-endian
+    p1 = struct.unpack_from("<IHH", raw_bytes, 0)
+    p2 = raw_bytes[8:16]
+    return (f"{p1[0]:08X}-{p1[1]:04X}-{p1[2]:04X}-"
+            f"{p2[0]:02X}{p2[1]:02X}-"
+            f"{p2[2]:02X}{p2[3]:02X}{p2[4]:02X}{p2[5]:02X}{p2[6]:02X}{p2[7]:02X}")
 
 
-def _xdc_rescan():
-    """
-    Run 'diskpart rescan' — equivalent of Disk Management > Action > Rescan Disks.
-    Forces Windows to re-detect all storage devices. Returns (ok, output).
-    """
+def _hd_lookup_gpt_type(guid_str):
+    """Look up a GPT partition type GUID. Returns name or 'Unknown'."""
+    return _HD_GPT_TYPE_NAMES.get(guid_str.upper(), "Unknown")
+
+
+def _hd_diskpart_rescan():
+    """Run diskpart rescan. Returns (ok, output)."""
     import tempfile
+    print("  [*] Running diskpart rescan...")
     try:
         tf = tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False)
         tf.write("rescan\nexit\n")
@@ -7203,100 +7474,2769 @@ def _xdc_rescan():
         r = subprocess.run(["diskpart", "/s", tf_name],
                            capture_output=True, text=True, timeout=30)
         os.unlink(tf_name)
-        return r.returncode == 0, r.stdout.strip()
+        ok = r.returncode == 0
+        print(f"  diskpart rescan → {'OK' if ok else 'FAILED'}")
+        return ok, r.stdout.strip()
     except Exception as e:
+        print(f"  diskpart rescan → FAILED: {e}")
         return False, str(e)
 
 
-def _xdc_pick_drive(drives, prompt):
-    """Show drive list and return chosen drive dict, or None on cancel."""
-    print()
-    print(f"  {'#':>2}  {'Caption':<38}  {'Mode':<12}  Device")
-    print("  " + "─" * 75)
-    for i, d in enumerate(drives, 1):
-        print(f"  {i:>2}  {d['caption']:<38}  {d['mode']:<12}  {d['deviceId']}")
-    print()
-    if len(drives) == 1:
-        return drives[0]
-    sel = input(f"  {prompt} [1-{len(drives)}]: ").strip()
+def _hd_diskpart_script(commands):
+    """Run a list of diskpart commands. Returns (ok, stdout, stderr)."""
+    import tempfile
+    script = "\n".join(commands) + "\nexit\n"
+    print(f"  [*] diskpart script:")
+    for c in commands:
+        print(f"      > {c}")
     try:
-        idx = int(sel) - 1
-        if 0 <= idx < len(drives):
-            return drives[idx]
-    except ValueError:
-        pass
-    print("  Invalid selection.")
-    return None
+        tf = tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False)
+        tf.write(script)
+        tf_name = tf.name
+        tf.close()
+        r = subprocess.run(["diskpart", "/s", tf_name],
+                           capture_output=True, text=True, timeout=120)
+        os.unlink(tf_name)
+        ok = r.returncode == 0
+        print(f"  diskpart → {'OK' if ok else 'FAILED (rc=' + str(r.returncode) + ')'}")
+        if r.stdout.strip():
+            for line in r.stdout.strip().splitlines():
+                print(f"      {line}")
+        if not ok and r.stderr.strip():
+            for line in r.stderr.strip().splitlines():
+                print(f"      [!] {line}")
+        return ok, r.stdout.strip(), r.stderr.strip()
+    except Exception as e:
+        print(f"  diskpart → FAILED: {e}")
+        return False, "", str(e)
 
 
-def process_drive_converter():
-    """Interactive Xbox drive mode converter (PC ↔ Xbox MBR signature)."""
-    import ctypes as _ct
+# ---------------------------------------------------------------------------
+# Analyze Drive
+# ---------------------------------------------------------------------------
+
+def _hd_analyze_drive(device_id):
+    """
+    Read MBR, GPT header, and GPT partition entries from a physical drive.
+    Prints full technical breakdown and returns the report as a string.
+    """
+    report = []
+
+    def out(line=""):
+        print(line)
+        report.append(line)
+
+    def out_lines(lines):
+        for l in lines:
+            out(l)
+
+    handle = _hd_open_read(device_id)
+    if handle is None:
+        return None
+
     try:
-        is_admin = bool(_ct.windll.shell32.IsUserAnAdmin())
-    except Exception:
-        is_admin = False
+        # --- MBR (Sector 0) ---
+        mbr = _hd_read_sectors(handle, 0, 1)
+        if mbr is None:
+            out("[!] Failed to read MBR (sector 0)")
+            return None
 
-    print("\n[Xbox Drive Converter]")
-    if not is_admin:
-        print("  [!] Not running as Administrator — convert operations will fail.")
-        print("      Right-click Command Prompt > Run as Administrator, then relaunch XCT.")
+        out()
+        out("=" * 78)
+        out(f"  DRIVE ANALYSIS: {device_id}")
+        out("=" * 78)
+
+        out()
+        out("─── MBR (Sector 0, 512 bytes) ─────────────────────────────────────────────")
+        out()
+        out_lines(_hd_hex_dump(mbr, 0, "  "))
+        out()
+
+        # Annotate MBR fields
+        bootstrap = mbr[0x000:0x1B8]
+        bootstrap_zeroed = all(b == 0 for b in bootstrap)
+        nt_sig = mbr[0x1B8:0x1BC]
+        reserved = mbr[0x1BC:0x1BE]
+        part_table = mbr[0x1BE:0x1FE]
+        boot_sig = mbr[0x1FE:0x200]
+
+        out("  MBR Field Annotations:")
+        out(f"    0x000-0x1B7  Bootstrap code     {'ZEROED (440 bytes all 0x00)' if bootstrap_zeroed else 'HAS DATA (440 bytes)'}")
+        out(f"    0x1B8-0x1BB  NT Disk Signature  {' '.join(f'{b:02X}' for b in nt_sig)}" +
+            (f"  (Xbox standard)" if nt_sig == _HD_NT_DISK_SIG else ""))
+        out(f"    0x1BC-0x1BD  Reserved           {' '.join(f'{b:02X}' for b in reserved)}")
+
+        # Parse 4 partition entries
+        for i in range(4):
+            entry = part_table[i*16:(i+1)*16]
+            if all(b == 0 for b in entry):
+                out(f"    0x{0x1BE + i*16:03X}-0x{0x1BD + (i+1)*16:03X}  Partition {i+1}         (empty)")
+            else:
+                status = entry[0]
+                ptype = entry[4]
+                lba_start = struct.unpack_from("<I", entry, 8)[0]
+                lba_size = struct.unpack_from("<I", entry, 12)[0]
+                type_name = {0xEE: "GPT protective", 0x07: "NTFS/HPFS", 0x0C: "FAT32 LBA"}.get(ptype, f"type 0x{ptype:02X}")
+                out(f"    0x{0x1BE + i*16:03X}-0x{0x1BD + (i+1)*16:03X}  Partition {i+1}         "
+                    f"status=0x{status:02X}  type=0x{ptype:02X} ({type_name})  "
+                    f"LBA={lba_start}  sectors={lba_size}")
+
+        sig_label = "XBOX (99 CC)" if boot_sig == _HD_XBOX_SIG else "PC (55 AA)" if boot_sig == _HD_PC_SIG else f"UNKNOWN ({boot_sig[0]:02X} {boot_sig[1]:02X})"
+        out(f"    0x1FE-0x1FF  Boot signature     {boot_sig[0]:02X} {boot_sig[1]:02X}  ← {sig_label}")
+
+        # Check for GPT
+        is_gpt = False
+        for i in range(4):
+            if part_table[i*16 + 4] == 0xEE:
+                is_gpt = True
+                break
+
+        if not is_gpt:
+            out()
+            out("  [!] No GPT protective MBR entry (type 0xEE) found.")
+            out("      This drive does not appear to have a GPT partition table.")
+            _hd_close(handle)
+            return "\n".join(report)
+
+        # --- GPT Header (Sector 1) ---
+        gpt_hdr = _hd_read_sectors(handle, 1, 1)
+        if gpt_hdr is None:
+            out("[!] Failed to read GPT header (sector 1)")
+            _hd_close(handle)
+            return "\n".join(report)
+
+        out()
+        out("─── GPT Header (Sector 1, 512 bytes) ──────────────────────────────────────")
+        out()
+        out_lines(_hd_hex_dump(gpt_hdr, _HD_SECTOR, "  "))
+        out()
+
+        # Parse GPT header
+        gpt_sig = gpt_hdr[0:8]
+        gpt_rev = struct.unpack_from("<I", gpt_hdr, 8)[0]
+        gpt_hdr_size = struct.unpack_from("<I", gpt_hdr, 12)[0]
+        gpt_hdr_crc = struct.unpack_from("<I", gpt_hdr, 16)[0]
+        gpt_my_lba = struct.unpack_from("<Q", gpt_hdr, 24)[0]
+        gpt_alt_lba = struct.unpack_from("<Q", gpt_hdr, 32)[0]
+        gpt_first_usable = struct.unpack_from("<Q", gpt_hdr, 40)[0]
+        gpt_last_usable = struct.unpack_from("<Q", gpt_hdr, 48)[0]
+        gpt_disk_guid = _hd_format_guid(gpt_hdr[56:72])
+        gpt_part_start = struct.unpack_from("<Q", gpt_hdr, 72)[0]
+        gpt_num_parts = struct.unpack_from("<I", gpt_hdr, 80)[0]
+        gpt_part_size = struct.unpack_from("<I", gpt_hdr, 84)[0]
+        gpt_part_crc = struct.unpack_from("<I", gpt_hdr, 88)[0]
+
+        sig_ok = (gpt_sig == b"EFI PART")
+        out("  GPT Header Fields:")
+        out(f"    Signature            {gpt_sig!r}  {'✓' if sig_ok else '✗ INVALID'}")
+        out(f"    Revision             0x{gpt_rev:08X}  ({gpt_rev >> 16}.{gpt_rev & 0xFFFF})")
+        out(f"    Header Size          {gpt_hdr_size} bytes")
+        out(f"    Header CRC32         0x{gpt_hdr_crc:08X}")
+        out(f"    MyLBA                {gpt_my_lba}")
+        out(f"    AlternateLBA         {gpt_alt_lba}")
+        out(f"    FirstUsableLBA       {gpt_first_usable}")
+        out(f"    LastUsableLBA        {gpt_last_usable}")
+        out(f"    Disk GUID            {gpt_disk_guid}")
+        out(f"    PartitionEntryStart  {gpt_part_start}")
+        out(f"    NumberOfPartEntries  {gpt_num_parts}")
+        out(f"    SizeOfPartEntry      {gpt_part_size} bytes")
+        out(f"    PartitionEntryCRC32  0x{gpt_part_crc:08X}")
+
+        # --- GPT Partition Entries ---
+        if gpt_part_size == 0 or gpt_num_parts == 0:
+            out()
+            out("  [!] No partition entries defined.")
+            _hd_close(handle)
+            return "\n".join(report)
+
+        entries_bytes = gpt_num_parts * gpt_part_size
+        entries_sectors = (entries_bytes + _HD_SECTOR - 1) // _HD_SECTOR
+        part_data = _hd_read_sectors(handle, gpt_part_start, entries_sectors)
+        if part_data is None:
+            out("[!] Failed to read GPT partition entries")
+            _hd_close(handle)
+            return "\n".join(report)
+
+        out()
+        out("─── GPT Partition Entries ──────────────────────────────────────────────────")
+
+        partitions = []
+        for i in range(gpt_num_parts):
+            off = i * gpt_part_size
+            entry = part_data[off:off + gpt_part_size]
+            type_guid_raw = entry[0:16]
+            if all(b == 0 for b in type_guid_raw):
+                continue  # empty entry
+            type_guid = _hd_format_guid(type_guid_raw)
+            unique_guid = _hd_format_guid(entry[16:32])
+            start_lba = struct.unpack_from("<Q", entry, 32)[0]
+            end_lba = struct.unpack_from("<Q", entry, 40)[0]
+            attributes = struct.unpack_from("<Q", entry, 48)[0]
+            # Name: UTF-16LE, up to 72 bytes (36 chars) starting at offset 56
+            name_raw = entry[56:56+72]
+            try:
+                name = name_raw.decode("utf-16-le").rstrip("\x00")
+            except Exception:
+                name = "(decode error)"
+            size_bytes = (end_lba - start_lba + 1) * _HD_SECTOR
+            size_gb = size_bytes / (1024 ** 3)
+            type_name = _hd_lookup_gpt_type(type_guid)
+
+            partitions.append({
+                "index": i + 1,
+                "type_guid": type_guid,
+                "type_name": type_name,
+                "unique_guid": unique_guid,
+                "start_lba": start_lba,
+                "end_lba": end_lba,
+                "size_gb": size_gb,
+                "attributes": attributes,
+                "name": name,
+            })
+
+        for p in partitions:
+            out()
+            out(f"  Partition {p['index']}: {p['name']}")
+            out(f"    Type GUID      {p['type_guid']}  ({p['type_name']})")
+            out(f"    Unique GUID    {p['unique_guid']}")
+            out(f"    Start LBA      {p['start_lba']}")
+            out(f"    End LBA        {p['end_lba']}")
+            out(f"    Size           {p['size_gb']:.2f} GB  ({(p['end_lba'] - p['start_lba'] + 1):,} sectors)")
+            out(f"    Attributes     0x{p['attributes']:016X}")
+
+        # --- Summary Table ---
+        out()
+        out("─── Partition Summary ──────────────────────────────────────────────────────")
+        out()
+        out(f"  {'#':>2}  {'Name':<24}  {'Size':>10}  {'Type':<26}  Type GUID")
+        out("  " + "─" * 100)
+        for p in partitions:
+            sz = f"{p['size_gb']:.2f} GB"
+            out(f"  {p['index']:>2}  {p['name']:<24}  {sz:>10}  {p['type_name']:<26}  {p['type_guid']}")
+
+        out()
+        out(f"  Boot signature: {sig_label}")
+        out(f"  Disk GUID:      {gpt_disk_guid}")
+        out(f"  Total partitions: {len(partitions)}")
+        out()
+        out("=" * 78)
+
+    finally:
+        _hd_close(handle)
+
+    return "\n".join(report)
+
+
+def _hd_analyze_interactive(device_id=None, drv_info=None):
+    """Interactive: pick a drive and run analyzer. Saves report to file."""
+    if device_id is None:
+        drives = _hd_list_drives()
+        if not drives:
+            print("  [!] No physical drives found.")
+            return
+
+        print()
+        print(f"  {'#':>2}  {'Name':<28}  {'Size':>8}  {'Bus':<6}  {'Mode':<18}  Device")
+        print("  " + "-" * 82)
+        for i, d in enumerate(drives, 1):
+            sz = f"{d['sizeGB']:.0f} GB" if d['sizeGB'] else "?"
+            probe = _hd_probe_drive_mode(d["deviceId"])
+            mode = probe["mode"]
+            if mode == "PC" and probe["hidden"]:
+                mode = "PC (hidden)"
+            elif mode == "PC":
+                mode = "PC (mounted)"
+            if probe["snapshot"]:
+                mode += " [snap]"
+            print(f"  {i:>2}  {d['friendlyName']:<28}  {sz:>8}  {d['busType']:<6}  {mode:<18}  {d['deviceId']}")
+        print()
+        sel = input(f"  Analyze which drive? [1-{len(drives)} / 0=back]: ").strip()
+        if sel == "0" or not sel:
+            return
+        try:
+            idx = int(sel) - 1
+            if not (0 <= idx < len(drives)):
+                print("  Invalid selection.")
+                return
+        except ValueError:
+            print("  Invalid selection.")
+            return
+
+        drv_info = drives[idx]
+        device_id = drv_info["deviceId"]
+
+    drv = drv_info or {}
+    print(f"\n  Target: {drv.get('friendlyName', '?')}  ({device_id})")
+    print(f"  Size: {drv.get('sizeGB', '?')} GB    Bus: {drv.get('busType', '?')}    Serial: {drv.get('serial') or '(none)'}")
     print()
-    print("    [1] Convert to PC mode   (makes drive visible to Windows/Explorer)")
-    print("    [2] Refresh Disks        (rescan hardware — like Disk Management > Rescan Disks)")
-    print("    [3] Convert to Xbox mode (makes drive usable by Xbox)")
-    print("    [B] Back")
-    print()
-    choice = input("  Choice: ").strip().upper()
 
-    if choice == "2":
-        print("[*] Rescanning disks...")
-        ok, out = _xdc_rescan()
-        if ok:
-            print("[+] Rescan complete. Windows has re-detected all storage devices.")
-        else:
-            print(f"[!] Rescan failed: {out}")
+    report = _hd_analyze_drive(device_id)
+    if report is None:
+        print("  [!] Analysis failed — could not read drive.")
         return
 
-    if choice not in ("1", "3"):  # B or anything else → back
-        return
+    # Save report to file
+    ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = re.sub(r'[^\w\-]', '_', drv.get('friendlyName', 'unknown'))[:30]
+    filename = f"drive_analysis_{safe_name}_{ts}.txt"
+    filepath = os.path.join(SCRIPT_DIR, filename)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(f"Drive: {drv.get('friendlyName', '?')} ({device_id})\n")
+        f.write(f"Size: {drv.get('sizeGB', '?')} GB  Bus: {drv.get('busType', '?')}  Serial: {drv.get('serial', '')}\n")
+        f.write(f"Date: {_dt.datetime.now().isoformat()}\n\n")
+        f.write(report)
+    print(f"\n  [+] Report saved: {filename}")
 
-    to_xbox      = (choice == "3")
-    action_label = "Xbox mode" if to_xbox else "PC mode"
 
-    print(f"[*] Scanning for Xbox external storage devices...")
-    drives = _xdc_scan_xbox_drives()
-    if not drives:
-        print("[!] No Xbox external storage devices detected.")
-        print("    Plug in the drive, then use [2] Refresh Disks and try again.")
-        return
+# ---------------------------------------------------------------------------
+# MBR Conversion (PC ↔ Xbox) with safety
+# ---------------------------------------------------------------------------
 
-    drv = _xdc_pick_drive(drives, "Which drive?")
-    if drv is None:
-        return
-
-    if (to_xbox and drv["mode"] == "Xbox Mode") or (not to_xbox and drv["mode"] == "PC Mode"):
-        print(f"  Drive is already in {action_label}.")
-        return
-
-    print(f"\n  {drv['caption']}  ({drv['deviceId']})  →  {action_label}")
-    if to_xbox:
-        print("  WARNING: Drive will be inaccessible to Windows until converted back to PC mode.")
+def _hd_set_disk_readonly(disk_num, readonly):
+    """Set or clear disk read-only attribute via diskpart."""
+    attr_cmd = "set readonly" if readonly else "clear readonly"
+    label = "READ-ONLY" if readonly else "READ-WRITE"
+    ok, stdout, stderr = _hd_diskpart_script([
+        f"select disk {disk_num}",
+        f"attributes disk {attr_cmd}",
+    ])
+    if ok:
+        print(f"  [+] Disk {disk_num} is now {label}")
     else:
-        print("  WARNING: You may need to assign a drive letter in Disk Management afterwards.")
+        print(f"  [!] Failed to set disk {label}")
+    return ok
+
+
+def _hd_encode_guid(guid_str):
+    """Convert a GUID string (e.g. 'EBD0A0A2-B9E5-4433-87C0-68B6B72699C7') to 16 raw
+    bytes in GPT mixed-endian format (first 3 fields LE, last 2 BE)."""
+    parts = guid_str.split("-")
+    raw = struct.pack("<IHH", int(parts[0], 16), int(parts[1], 16), int(parts[2], 16))
+    raw += bytes.fromhex(parts[3] + parts[4])
+    return raw
+
+
+def _hd_rewrite_gpt_type(device_id, new_type_guid_str):
+    """
+    Change the GPT partition type GUID for partition 1 and recalculate all CRCs.
+    Updates both primary and backup GPT structures.
+    Returns True on success.
+    """
+    new_type_bytes = _hd_encode_guid(new_type_guid_str)
+    old_name = _hd_lookup_gpt_type(new_type_guid_str)
+    print(f"  [*] Changing partition type to: {new_type_guid_str} ({old_name})")
+
+    # --- Read primary GPT ---
+    handle = _hd_open_read(device_id)
+    if handle is None:
+        return False
+
+    gpt_hdr = _hd_read_sectors(handle, 1, 1)
+    if gpt_hdr is None or gpt_hdr[:8] != b"EFI PART":
+        print("  [!] No valid GPT header at LBA 1.")
+        _hd_close(handle)
+        return False
+
+    hdr_size = struct.unpack_from("<I", gpt_hdr, 12)[0]
+    alt_lba = struct.unpack_from("<Q", gpt_hdr, 32)[0]
+    entry_start = struct.unpack_from("<Q", gpt_hdr, 72)[0]
+    num_entries = struct.unpack_from("<I", gpt_hdr, 80)[0]
+    entry_size = struct.unpack_from("<I", gpt_hdr, 84)[0]
+    entry_total = num_entries * entry_size
+    entry_sectors = (entry_total + _HD_SECTOR - 1) // _HD_SECTOR
+
+    # Read primary partition entries
+    pri_entries = _hd_read_sectors(handle, entry_start, entry_sectors)
+    if pri_entries is None:
+        _hd_close(handle)
+        return False
+
+    # Read backup GPT header
+    bak_hdr = _hd_read_sectors(handle, alt_lba, 1)
+
+    # Read backup partition entries (location from backup header)
+    bak_entry_start = None
+    bak_entries = None
+    if bak_hdr and bak_hdr[:8] == b"EFI PART":
+        bak_entry_start = struct.unpack_from("<Q", bak_hdr, 72)[0]
+        bak_entries = _hd_read_sectors(handle, bak_entry_start, entry_sectors)
+
+    _hd_close(handle)
+
+    # --- Modify partition entries ---
+    pri_mod = bytearray(pri_entries)
+    pri_mod[0:16] = new_type_bytes
+    new_part_crc = zlib.crc32(bytes(pri_mod[:entry_total])) & 0xFFFFFFFF
+    print(f"    New PartitionEntryCRC32: 0x{new_part_crc:08X}")
+
+    # --- Update primary GPT header ---
+    hdr_mod = bytearray(gpt_hdr)
+    struct.pack_into("<I", hdr_mod, 88, new_part_crc)
+    struct.pack_into("<I", hdr_mod, 16, 0)  # zero header CRC for calculation
+    new_hdr_crc = zlib.crc32(bytes(hdr_mod[:hdr_size])) & 0xFFFFFFFF
+    struct.pack_into("<I", hdr_mod, 16, new_hdr_crc)
+    print(f"    New primary HeaderCRC32:  0x{new_hdr_crc:08X}")
+
+    # --- Update backup GPT ---
+    bak_hdr_mod = None
+    bak_entries_mod = None
+    if bak_hdr and bak_entries:
+        bak_entries_mod = bytearray(bak_entries)
+        bak_entries_mod[0:16] = new_type_bytes
+
+        bak_hdr_mod = bytearray(bak_hdr)
+        struct.pack_into("<I", bak_hdr_mod, 88, new_part_crc)
+        struct.pack_into("<I", bak_hdr_mod, 16, 0)
+        bak_hdr_crc = zlib.crc32(bytes(bak_hdr_mod[:hdr_size])) & 0xFFFFFFFF
+        struct.pack_into("<I", bak_hdr_mod, 16, bak_hdr_crc)
+        print(f"    New backup HeaderCRC32:   0x{bak_hdr_crc:08X}")
+
+    # --- Write all modified sectors ---
+    handle = _hd_open_write(device_id)
+    if handle is None:
+        return False
+
+    ok = True
+    ok = ok and _hd_write_sectors(handle, 1, bytes(hdr_mod))
+    ok = ok and _hd_write_sectors(handle, entry_start, bytes(pri_mod))
+    if bak_entries_mod is not None:
+        ok = ok and _hd_write_sectors(handle, bak_entry_start, bytes(bak_entries_mod))
+    if bak_hdr_mod is not None:
+        ok = ok and _hd_write_sectors(handle, alt_lba, bytes(bak_hdr_mod))
+
+    _hd_close(handle)
+
+    if ok:
+        print(f"  [+] Partition type GUID updated successfully.")
+    else:
+        print(f"  [!] Some writes failed — GPT may be inconsistent!")
+    return ok
+
+
+def _hd_snapshot_path(device_id):
+    """Return the path to the GPT snapshot file for a given device."""
+    safe = re.sub(r'[^\w]', '_', device_id)
+    return os.path.join(SCRIPT_DIR, f".hd_gpt_snapshot_{safe}.bin")
+
+
+def _hd_snapshot_gpt(device_id):
+    """
+    Snapshot GPT metadata sectors from an Xbox drive before conversion to PC mode.
+    Saves only the GPT structural sectors (no NTFS data — we prevent NTFS mount
+    by hiding the partition type GUID, so NTFS stays untouched).
+    Saves:
+      - Sectors 0-3: MBR, GPT header, GPT partition entries
+      - Backup GPT: backup entries + backup header at end of disk
+    Returns True on success.
+    """
+    handle = _hd_open_read(device_id)
+    if handle is None:
+        return False
+
+    # Read GPT header to find backup location
+    gpt_hdr = _hd_read_sectors(handle, 1, 1)
+    if gpt_hdr is None or gpt_hdr[:8] != b"EFI PART":
+        print("  [!] No valid GPT header found.")
+        _hd_close(handle)
+        return False
+
+    alt_lba = struct.unpack_from("<Q", gpt_hdr, 32)[0]
+
+    # Read backup header to find backup entry location
+    bak_hdr = _hd_read_sectors(handle, alt_lba, 1)
+    bak_entry_lba = alt_lba - 1  # default fallback
+    if bak_hdr and bak_hdr[:8] == b"EFI PART":
+        bak_entry_lba = struct.unpack_from("<Q", bak_hdr, 72)[0]
+
+    snapshot = {}
+
+    # Primary GPT: sectors 0-3
+    print(f"    Snapshotting primary GPT (sectors 0-3)...")
+    for lba in range(4):
+        data = _hd_read_sectors(handle, lba, 1)
+        if data is None:
+            _hd_close(handle)
+            return False
+        snapshot[lba] = data
+
+    # Backup GPT: entries + header at end of disk
+    backup_lbas = sorted(set([bak_entry_lba, alt_lba]))
+    print(f"    Snapshotting backup GPT (LBA {backup_lbas})...")
+    for lba in backup_lbas:
+        data = _hd_read_sectors(handle, lba, 1)
+        if data is None:
+            _hd_close(handle)
+            return False
+        snapshot[lba] = data
+
+    _hd_close(handle)
+
+    # Save to file
+    snap_path = _hd_snapshot_path(device_id)
+    snap_data = {"_meta": {"sectors": len(snapshot), "alt_lba": alt_lba}}
+    for lba, data in snapshot.items():
+        snap_data[str(lba)] = base64.b64encode(data).decode()
+
+    with open(snap_path, "w", encoding="utf-8") as f:
+        json.dump(snap_data, f)
+
+    size_kb = os.path.getsize(snap_path) / 1024
+    print(f"  [+] Snapshot saved ({len(snapshot)} sectors, {size_kb:.1f} KB): {os.path.basename(snap_path)}")
+    return True
+
+
+def _hd_restore_gpt(device_id):
+    """
+    Restore all GPT sectors from the snapshot taken before PC conversion.
+    This returns MBR + GPT + backup GPT to their exact original state.
+
+    Takes the disk OFFLINE before writing to prevent Windows GPT driver from
+    locking sectors (especially backup partition entries near end of disk).
+    Brings disk back ONLINE after writes complete.
+
+    Returns True on success.
+    """
+    snap_path = _hd_snapshot_path(device_id)
+    if not os.path.isfile(snap_path):
+        print(f"  [!] No snapshot found: {os.path.basename(snap_path)}")
+        return False
+
+    with open(snap_path, "r", encoding="utf-8") as f:
+        snap_data = json.load(f)
+
+    # Rebuild sector map
+    snapshot = {}
+    for key, val in snap_data.items():
+        if key.startswith("_"):
+            continue
+        snapshot[int(key)] = base64.b64decode(val)
+
+    total_sectors = len(snapshot)
+    print(f"  [*] Restoring {total_sectors} GPT sectors from snapshot...")
+
+    # Take disk offline so Windows GPT driver releases all sector locks
+    disk_num = int(device_id.replace("\\\\.\\PHYSICALDRIVE", ""))
+    print(f"  [*] Taking disk {disk_num} offline...")
+    ok_off, _, _ = _hd_diskpart_script([
+        f"select disk {disk_num}",
+        "offline disk",
+    ])
+    if not ok_off:
+        print("  [!] Could not take disk offline — trying writes anyway...")
+
+    handle = _hd_open_write(device_id)
+    if handle is None:
+        # Bring back online before returning
+        if ok_off:
+            _hd_diskpart_script([f"select disk {disk_num}", "online disk"])
+        return False
+
+    # Write all sectors (reverse order: high LBAs first)
+    all_ok = True
+    for lba in sorted(snapshot.keys(), reverse=True):
+        ok = _hd_write_sectors(handle, lba, snapshot[lba])
+        if not ok:
+            print(f"  [!] Failed to restore sector at LBA {lba}")
+            all_ok = False
+
+    _hd_close(handle)
+
+    # Bring disk back online
+    if ok_off:
+        print(f"  [*] Bringing disk {disk_num} back online...")
+        _hd_diskpart_script([f"select disk {disk_num}", "online disk"])
+
+    if all_ok:
+        # Verify all sectors
+        handle = _hd_open_read(device_id)
+        if handle:
+            mismatch = False
+            for lba in sorted(snapshot.keys()):
+                readback = _hd_read_sectors(handle, lba, 1)
+                if readback != snapshot[lba]:
+                    print(f"  [!] Verify FAILED at LBA {lba}")
+                    mismatch = True
+            _hd_close(handle)
+            if not mismatch:
+                print(f"  [+] Verification PASSED (all {total_sectors} sectors match).")
+            else:
+                all_ok = False
+
+    if all_ok:
+        os.unlink(snap_path)
+        print(f"  [+] Snapshot file removed.")
+
+    return all_ok
+
+
+def _hd_convert_mode(device_id, drv_info, to_xbox):
+    """
+    Convert MBR signature between PC (55 AA) and Xbox (99 CC) mode.
+    Shows hex before/after, requires YES confirmation, verifies read-back.
+
+    Xbox → PC conversion:
+      1. Snapshots all GPT sectors (MBR, GPT header, partition entries, backup)
+      2. Swaps MBR signature 99 CC → 55 AA
+      3. Hides partition type (changes GPT type GUID to Linux filesystem)
+         so Windows sees the disk but CANNOT mount the NTFS partition.
+         This prevents Windows from corrupting NTFS metadata.
+      4. Rescans — disk visible, partition not mounted
+
+    PC → Xbox conversion:
+      1. Restores ALL original GPT sectors from snapshot (MBR, GPT, backup GPT)
+         — byte-for-byte identical to the original Xbox state
+      2. Rescans
+
+    The partition is hidden during PC mode to prevent Windows from touching
+    NTFS metadata ($LogFile, $Bitmap, $MFT). Use [c] Mount to explicitly
+    enable file access if needed (with a corruption warning).
+    """
+    target_label = "Xbox" if to_xbox else "PC"
+    target_sig = _HD_XBOX_SIG if to_xbox else _HD_PC_SIG
+    disk_num = drv_info.get("deviceNum", -1)
+
+    if _hd_refuse_system_drive(device_id):
+        return
+
+    # Step 1: Read current MBR
+    print(f"\n  Step 1: Read current MBR")
+    handle = _hd_open_read(device_id)
+    if handle is None:
+        return
+    mbr = _hd_read_sectors(handle, 0, 1)
+    _hd_close(handle)
+    if mbr is None:
+        print("  [!] Could not read MBR.")
+        return
+
+    # Step 2: Display current state
+    current_sig = mbr[0x1FE:0x200]
+    cur_label = "Xbox (99 CC)" if current_sig == _HD_XBOX_SIG else "PC (55 AA)" if current_sig == _HD_PC_SIG else f"Unknown ({current_sig[0]:02X} {current_sig[1]:02X})"
+    print(f"\n  Step 2: Current state")
+    print(f"    Boot signature: {cur_label}")
+    print(f"    NT Disk Sig:    {' '.join(f'{b:02X}' for b in mbr[0x1B8:0x1BC])}")
+
+    if current_sig == target_sig:
+        print(f"\n  Drive is already in {target_label} mode. Nothing to do.")
+        return
+
+    # Step 3: Show proposed changes
+    print(f"\n  Step 3: Proposed changes")
+    print(f"    Last 16 bytes of MBR (0x1F0-0x1FF):")
+    for line in _hd_hex_dump(mbr[0x1F0:0x200], 0x1F0, "      "):
+        print(line)
+
     print()
-    confirm = input("  Confirm? [y/N]: ").strip().lower()
-    if confirm != "y":
+    if not to_xbox:
+        print("    Xbox → PC conversion will:")
+        print("      1. Snapshot all GPT sectors (saved to disk for safe restore)")
+        print("      2. Swap MBR: 99 CC → 55 AA")
+        print("      3. Hide partition type (prevent Windows from mounting NTFS)")
+        print("      4. Rescan — disk visible but partition NOT mounted")
+        print()
+        print("    The partition is hidden so Windows cannot corrupt NTFS metadata.")
+        print("    Use [c] Mount Partition if you need to access files (with warning).")
+    else:
+        print("    PC → Xbox conversion will:")
+        print("      1. Restore ALL original GPT sectors from snapshot")
+        print("         (MBR + GPT + backup GPT, byte-for-byte original)")
+        print("      2. Rescan")
+
+    print()
+
+    # Step 4: Confirmation
+    print(f"  Step 4: Confirm")
+    print(f"    Device:    {device_id}")
+    print(f"    Drive:     {drv_info.get('friendlyName', '?')}")
+    print(f"    Size:      {drv_info.get('sizeGB', '?')} GB")
+    print(f"    Serial:    {drv_info.get('serial', '(none)')}")
+    print(f"    Operation: Convert to {target_label} mode")
+    print()
+    confirm = input('    Type "YES" to proceed: ').strip()
+    if confirm != "YES":
         print("  Cancelled.")
         return
 
-    ok, msg = _xdc_change_mode(drv["deviceId"], to_xbox)
-    if ok:
-        print(f"[+] Conversion successful — drive is now in {action_label}.")
-        if not to_xbox:
-            print("[*] Use Disk Management (diskmgmt.msc) to assign a drive letter if needed.")
+    if not to_xbox:
+        # ===== Xbox → PC conversion =====
+
+        # Step 5: Snapshot GPT sectors BEFORE any changes
+        print(f"\n  Step 5: Snapshot GPT sectors")
+        if not _hd_snapshot_gpt(device_id):
+            print("  [!] GPT snapshot failed. Aborting to avoid data loss.")
+            return
+
+        # Step 6: Write PC MBR signature
+        mbr_new = bytearray(mbr)
+        mbr_new[0x1FE] = _HD_PC_SIG[0]
+        mbr_new[0x1FF] = _HD_PC_SIG[1]
+
+        print(f"\n  Step 6: Write PC MBR signature")
+        print(f"    Byte 0x1FE: {mbr[0x1FE]:02X} → {_HD_PC_SIG[0]:02X}")
+        print(f"    Byte 0x1FF: {mbr[0x1FF]:02X} → {_HD_PC_SIG[1]:02X}")
+        handle = _hd_open_write(device_id)
+        if handle is None:
+            return
+        ok = _hd_write_sectors(handle, 0, bytes(mbr_new))
+        _hd_close(handle)
+        if not ok:
+            print("  [!] Write FAILED.")
+            return
+
+        # Step 7: Verify MBR
+        print(f"\n  Step 7: Verify MBR write")
+        handle = _hd_open_read(device_id)
+        if handle is None:
+            return
+        verify = _hd_read_sectors(handle, 0, 1)
+        _hd_close(handle)
+        if verify and verify == bytes(mbr_new):
+            print("  [+] Verification PASSED.")
+        else:
+            print("  [!] Verification FAILED!")
+            return
+
+        # Step 8: Hide partition type to prevent NTFS mount
+        print(f"\n  Step 8: Hide partition type (prevent NTFS mount)")
+        if not _hd_rewrite_gpt_type(device_id, _HD_HIDDEN_TYPE_GUID):
+            print("  [!] Failed to hide partition type. Windows may mount NTFS.")
+            print("      Proceeding anyway — use [3] to convert back safely.")
+
+        # Step 9: Rescan
+        print(f"\n  Step 9: Rescan disks")
+        _hd_diskpart_rescan()
+
+        print(f"\n  [+] Conversion complete — drive is now in PC mode (safe).")
+        print(f"      Boot signature: 55 AA")
+        print(f"      Partition type: HIDDEN (Windows will not mount NTFS)")
+        print()
+        print("  [*] Partition is hidden — Windows will not auto-mount NTFS.")
+        print("  [*] GPT snapshot saved — use [3] to convert back to Xbox mode.")
+        print("  [*] Use [c] Mount Partition to enable file access (may modify NTFS).")
+        print("  [*] Use [l] Analyze Drive to inspect raw sectors.")
+
     else:
-        print(f"[!] Failed: {msg}")
+        # ===== PC → Xbox conversion =====
+
+        # Step 5: If partition is mounted (not hidden), unmount first to release locks
+        probe = _hd_probe_drive_mode(device_id)
+        if not probe["hidden"] and probe["partType"]:
+            print(f"\n  Step 5b: Unmount partition (hide type to release NTFS lock)")
+            _hd_rewrite_gpt_type(device_id, _HD_HIDDEN_TYPE_GUID)
+            _hd_diskpart_rescan()
+            time.sleep(2)  # Give Windows time to release locks
+
+        # Step 6: Restore GPT snapshot (all original sectors)
+        snap_path = _hd_snapshot_path(device_id)
+        if os.path.isfile(snap_path):
+            print(f"\n  Step 6: Restore original GPT sectors from snapshot")
+            if not _hd_restore_gpt(device_id):
+                print("  [!] GPT restore failed. Drive may be in an inconsistent state.")
+                print("      You may need to reformat on the Xbox.")
+                return
+            print(f"\n  [+] GPT fully restored — drive is byte-for-byte original.")
+        else:
+            # No snapshot — just do a simple MBR swap (legacy behavior)
+            print(f"\n  Step 6: No GPT snapshot found — writing MBR only")
+            mbr_new = bytearray(mbr)
+            if not all(b == 0 for b in mbr_new[0:0x1B8]):
+                mbr_new[0:0x1B8] = b'\x00' * 0x1B8
+            if mbr_new[0x1B8:0x1BC] != _HD_NT_DISK_SIG:
+                mbr_new[0x1B8:0x1BC] = _HD_NT_DISK_SIG
+            mbr_new[0x1FE] = _HD_XBOX_SIG[0]
+            mbr_new[0x1FF] = _HD_XBOX_SIG[1]
+
+            handle = _hd_open_write(device_id)
+            if handle is None:
+                print("  [!] Cannot open drive for writing.")
+                return
+            ok = _hd_write_sectors(handle, 0, bytes(mbr_new))
+            _hd_close(handle)
+            if not ok:
+                print("  [!] Write FAILED.")
+                return
+
+            # Verify
+            handle = _hd_open_read(device_id)
+            if handle:
+                verify = _hd_read_sectors(handle, 0, 1)
+                _hd_close(handle)
+                if verify and verify == bytes(mbr_new):
+                    print("  [+] MBR verification PASSED.")
+                else:
+                    print("  [!] MBR verification FAILED!")
+                    return
+
+        # Step 7: Rescan
+        print(f"\n  Step 7: Rescan disks")
+        _hd_diskpart_rescan()
+
+        print(f"\n  [+] Conversion complete — drive is now in Xbox mode.")
+        print(f"      Boot signature: 99 CC")
+        print("  [*] Drive is ready for Xbox.")
+
+
+def _hd_convert_interactive(to_xbox, device_id=None, drv_info=None):
+    """Interactive: pick a drive and convert to PC or Xbox mode."""
+    target = "Xbox" if to_xbox else "PC"
+
+    if not _hd_is_admin():
+        print(f"  [!] Not running as Administrator — conversion will fail.")
+        print(f"      Right-click Command Prompt > Run as Administrator, then relaunch XCT.")
+        return
+
+    if device_id is None:
+        print(f"\n  Scanning for physical drives...")
+        drives = _hd_list_drives()
+        if not drives:
+            print("  [!] No physical drives found.")
+            return
+
+        # Filter out system drive from selection
+        ext_drives = [d for d in drives if d["deviceNum"] != 0]
+        if not ext_drives:
+            print("  [!] No external drives found (only system drive detected).")
+            return
+
+        print()
+        print(f"  {'#':>2}  {'Name':<28}  {'Size':>8}  {'Bus':<6}  {'Mode':<18}  Device")
+        print("  " + "-" * 82)
+        for i, d in enumerate(ext_drives, 1):
+            sz = f"{d['sizeGB']:.0f} GB" if d['sizeGB'] else "?"
+            probe = _hd_probe_drive_mode(d["deviceId"])
+            mode = probe["mode"]
+            if mode == "PC" and probe["hidden"]:
+                mode = "PC (hidden)"
+            elif mode == "PC":
+                mode = "PC (mounted)"
+            if probe["snapshot"]:
+                mode += " [snap]"
+            print(f"  {i:>2}  {d['friendlyName']:<28}  {sz:>8}  {d['busType']:<6}  {mode:<18}  {d['deviceId']}")
+        print()
+        sel = input(f"  Convert which drive to {target} mode? [1-{len(ext_drives)} / 0=back]: ").strip()
+        if sel == "0" or not sel:
+            return
+        try:
+            idx = int(sel) - 1
+            if not (0 <= idx < len(ext_drives)):
+                print("  Invalid selection.")
+                return
+        except ValueError:
+            print("  Invalid selection.")
+            return
+
+        drv_info = ext_drives[idx]
+        device_id = drv_info["deviceId"]
+
+    _hd_convert_mode(device_id, drv_info or {}, to_xbox)
+
+
+# ---------------------------------------------------------------------------
+# Mount / Unmount Partition
+# ---------------------------------------------------------------------------
+
+def _hd_mount_interactive(device_id=None, drv_info=None):
+    """
+    Mount the Xbox partition by changing its GPT type back to Microsoft basic data.
+    This allows Windows to mount the NTFS filesystem so the user can browse files.
+    WARNING: Windows will modify NTFS metadata ($LogFile, $Bitmap, etc.) which may
+    cause the Xbox to report incorrect free space when converted back.
+    """
+    if not _hd_is_admin():
+        print("  [!] Not running as Administrator.")
+        return
+
+    if device_id is None:
+        print("\n  Scanning for physical drives...")
+        drives = _hd_list_drives()
+        if not drives:
+            print("  [!] No physical drives found.")
+            return
+
+        ext_drives = [d for d in drives if d["deviceNum"] != 0]
+        if not ext_drives:
+            print("  [!] No external drives found.")
+            return
+
+        print()
+        print(f"  {'#':>2}  {'Name':<28}  {'Size':>8}  {'Bus':<6}  {'Mode':<18}  Device")
+        print("  " + "-" * 82)
+        for i, d in enumerate(ext_drives, 1):
+            sz = f"{d['sizeGB']:.0f} GB" if d['sizeGB'] else "?"
+            probe = _hd_probe_drive_mode(d["deviceId"])
+            mode = probe["mode"]
+            if mode == "PC" and probe["hidden"]:
+                mode = "PC (hidden)"
+            elif mode == "PC":
+                mode = "PC (mounted)"
+            if probe["snapshot"]:
+                mode += " [snap]"
+            print(f"  {i:>2}  {d['friendlyName']:<28}  {sz:>8}  {d['busType']:<6}  {mode:<18}  {d['deviceId']}")
+        print()
+        sel = input(f"  Mount partition on which drive? [1-{len(ext_drives)} / 0=back]: ").strip()
+        if sel == "0" or not sel:
+            return
+        try:
+            idx = int(sel) - 1
+            if not (0 <= idx < len(ext_drives)):
+                print("  Invalid selection.")
+                return
+        except ValueError:
+            print("  Invalid selection.")
+            return
+
+        drv_info = ext_drives[idx]
+        device_id = drv_info["deviceId"]
+
+    drv = drv_info or {}
+
+    if _hd_refuse_system_drive(device_id):
+        return
+
+    # Verify drive is in PC mode with hidden partition
+    handle = _hd_open_read(device_id)
+    if handle is None:
+        return
+    mbr = _hd_read_sectors(handle, 0, 1)
+    _hd_close(handle)
+    if mbr is None:
+        print("  [!] Could not read MBR.")
+        return
+
+    if mbr[0x1FE:0x200] != _HD_PC_SIG:
+        print("  [!] Drive is not in PC mode (MBR signature is not 55 AA).")
+        print("      Convert to PC mode first with [a].")
+        return
+
+    # Warning
+    print()
+    print("  ┌─────────────────────────────────────────────────────────────────┐")
+    print("  │  WARNING: Mounting will allow Windows to modify NTFS metadata   │")
+    print("  │                                                                 │")
+    print("  │  Windows writes to $LogFile, $Bitmap, $Volume and other NTFS    │")
+    print("  │  structures during mount — even on a read-only disk. This may   │")
+    print("  │  cause the Xbox to show incorrect free space (e.g. 0.0 GB)      │")
+    print("  │  when the drive is converted back to Xbox mode.                 │")
+    print("  │                                                                 │")
+    print("  │  If the Xbox reports 0.0 GB free, reformat the drive on Xbox.   │")
+    print("  └─────────────────────────────────────────────────────────────────┘")
+    print()
+    print(f"    Device: {device_id}")
+    print(f"    Drive:  {drv.get('friendlyName') if drv else '?'}")
+    print()
+    confirm = input('    Type "YES" to mount (accepting NTFS modification risk): ').strip()
+    if confirm != "YES":
+        print("  Cancelled.")
+        return
+
+    # Clear read-only attribute if set (may persist from a prior session or external tool)
+    disk_num = drv.get("deviceNum") or int(device_id.replace("\\\\.\\PHYSICALDRIVE", ""))
+    _hd_set_disk_readonly(disk_num, False)
+
+    # Change partition type to Microsoft basic data
+    print()
+    print("  [*] Changing partition type to Microsoft basic data...")
+    if not _hd_rewrite_gpt_type(device_id, _HD_MSDATA_TYPE_GUID):
+        print("  [!] Failed to change partition type.")
+        return
+
+    # Rescan so Windows discovers and mounts the partition
+    print()
+    _hd_diskpart_rescan()
+
+    print()
+    print("  [+] Partition mounted — Windows should now assign a drive letter.")
+    print("      If no drive letter appears, use Disk Management (diskmgmt.msc).")
+    print("      Use [d] Unmount when done to hide the partition again.")
+    print("      Use [b] Convert to Xbox Mode when ready to return to Xbox.")
+
+
+def _hd_unmount_interactive(device_id=None):
+    """
+    Unmount the Xbox partition by changing its GPT type back to the hidden GUID.
+    This makes Windows release the NTFS mount.
+    """
+    if not _hd_is_admin():
+        print("  [!] Not running as Administrator.")
+        return
+
+    if device_id is None:
+        print("\n  Scanning for physical drives...")
+        drives = _hd_list_drives()
+        if not drives:
+            print("  [!] No physical drives found.")
+            return
+
+        ext_drives = [d for d in drives if d["deviceNum"] != 0]
+        if not ext_drives:
+            print("  [!] No external drives found.")
+            return
+
+        print()
+        print(f"  {'#':>2}  {'Name':<28}  {'Size':>8}  {'Bus':<6}  {'Mode':<18}  Device")
+        print("  " + "-" * 82)
+        for i, d in enumerate(ext_drives, 1):
+            sz = f"{d['sizeGB']:.0f} GB" if d['sizeGB'] else "?"
+            probe = _hd_probe_drive_mode(d["deviceId"])
+            mode = probe["mode"]
+            if mode == "PC" and probe["hidden"]:
+                mode = "PC (hidden)"
+            elif mode == "PC":
+                mode = "PC (mounted)"
+            if probe["snapshot"]:
+                mode += " [snap]"
+            print(f"  {i:>2}  {d['friendlyName']:<28}  {sz:>8}  {d['busType']:<6}  {mode:<18}  {d['deviceId']}")
+        print()
+        sel = input(f"  Unmount partition on which drive? [1-{len(ext_drives)} / 0=back]: ").strip()
+        if sel == "0" or not sel:
+            return
+        try:
+            idx = int(sel) - 1
+            if not (0 <= idx < len(ext_drives)):
+                print("  Invalid selection.")
+                return
+        except ValueError:
+            print("  Invalid selection.")
+            return
+
+        device_id = ext_drives[idx]["deviceId"]
+
+    if _hd_refuse_system_drive(device_id):
+        return
+
+    # Change partition type to hidden
+    print()
+    print("  [*] Hiding partition type (Windows will unmount NTFS)...")
+    if not _hd_rewrite_gpt_type(device_id, _HD_HIDDEN_TYPE_GUID):
+        print("  [!] Failed to change partition type.")
+        return
+
+    # Rescan so Windows releases the mount
+    print()
+    _hd_diskpart_rescan()
+
+    print()
+    print("  [+] Partition unmounted — drive letter removed.")
+    print("      Use [b] Convert to Xbox Mode to restore original state.")
+
+
+# ---------------------------------------------------------------------------
+# Format Drive for Xbox
+# ---------------------------------------------------------------------------
+
+def _hd_format_xbox(device_id=None, drv_info=None):
+    """
+    Format a drive for Xbox external storage from scratch.
+    Creates GPT with Temp Content (41 GB) + User Content (remaining) NTFS partitions,
+    sets Xbox partition GUIDs, and writes Xbox MBR signature.
+    """
+    if not _hd_is_admin():
+        print("  [!] Not running as Administrator — formatting will fail.")
+        print("      Right-click Command Prompt > Run as Administrator, then relaunch XCT.")
+        return
+
+    if device_id is None:
+        print("\n  Scanning for physical drives...")
+        drives = _hd_list_drives()
+        if not drives:
+            print("  [!] No physical drives found.")
+            return
+
+        ext_drives = [d for d in drives if d["deviceNum"] != 0]
+        if not ext_drives:
+            print("  [!] No external drives found (only system drive detected).")
+            return
+
+        print()
+        print(f"  {'#':>2}  {'Name':<28}  {'Size':>8}  {'Bus':<6}  {'Mode':<18}  Device")
+        print("  " + "-" * 82)
+        for i, d in enumerate(ext_drives, 1):
+            sz = f"{d['sizeGB']:.0f} GB" if d['sizeGB'] else "?"
+            probe = _hd_probe_drive_mode(d["deviceId"])
+            mode = probe["mode"]
+            if mode == "PC" and probe["hidden"]:
+                mode = "PC (hidden)"
+            elif mode == "PC":
+                mode = "PC (mounted)"
+            if probe["snapshot"]:
+                mode += " [snap]"
+            print(f"  {i:>2}  {d['friendlyName']:<28}  {sz:>8}  {d['busType']:<6}  {mode:<18}  {d['deviceId']}")
+        print()
+        sel = input(f"  Format which drive? [1-{len(ext_drives)} / 0=back]: ").strip()
+        if sel == "0" or not sel:
+            return
+        try:
+            idx = int(sel) - 1
+            if not (0 <= idx < len(ext_drives)):
+                print("  Invalid selection.")
+                return
+        except ValueError:
+            print("  Invalid selection.")
+            return
+
+        drv_info = ext_drives[idx]
+        device_id = drv_info["deviceId"]
+
+    drv = drv_info or {}
+
+    if _hd_refuse_system_drive(device_id):
+        return
+
+    if drv.get("sizeGB", 999) < 60:
+        print(f"  [!] Drive is only {drv.get('sizeGB', 0):.1f} GB. Xbox requires at least ~60 GB for Temp Content (41 GB) + User Content.")
+        print("      Proceeding anyway, but the Xbox may not accept this drive.")
+        print()
+
+    # Confirmation
+    print()
+    print("  ┌─────────────────────────────────────────────────────────────────┐")
+    print("  │  WARNING: THIS WILL ERASE ALL DATA ON THE SELECTED DRIVE       │")
+    print("  └─────────────────────────────────────────────────────────────────┘")
+    print()
+    print(f"    Device:    {device_id}")
+    print(f"    Drive:     {drv.get('friendlyName', '?')}")
+    print(f"    Size:      {drv.get('sizeGB', '?')} GB")
+    print(f"    Serial:    {drv.get('serial') or '(none)'}")
+    print(f"    Bus:       {drv.get('busType', '?')}")
+    print()
+    print("    This will:")
+    print("      1. Wipe all existing data and partition tables")
+    print("      2. Create GPT partition table")
+    print("      3. Create 'Temp Content' partition (41 GB, NTFS)")
+    print("      4. Create 'User Content' partition (remaining space, NTFS)")
+    print("      5. Set Xbox partition type GUIDs")
+    print("      6. Set Xbox MBR signature (99 CC)")
+    print()
+    confirm = input('    Type "YES" to erase all data and format for Xbox: ').strip()
+    if confirm != "YES":
+        print("  Cancelled.")
+        return
+
+    disk_num = drv.get("deviceNum") or int(device_id.replace("\\\\.\\PHYSICALDRIVE", ""))
+    print()
+
+    # Step 1: Clean the drive
+    print("  Step 1: Clean drive (wipe partition tables)")
+    ok, stdout, stderr = _hd_diskpart_script([
+        f"select disk {disk_num}",
+        "clean",
+    ])
+    if not ok:
+        print("  [!] diskpart clean failed. Aborting.")
+        return
+
+    # Step 2: Convert to GPT
+    print("\n  Step 2: Convert to GPT")
+    ok, stdout, stderr = _hd_diskpart_script([
+        f"select disk {disk_num}",
+        "convert gpt",
+    ])
+    if not ok:
+        print("  [!] diskpart convert gpt failed. Aborting.")
+        return
+
+    # Step 3: Create Temp Content partition (41 GB = 41984 MB)
+    print('\n  Step 3: Create "Temp Content" partition (41 GB)')
+    ok, stdout, stderr = _hd_diskpart_script([
+        f"select disk {disk_num}",
+        "create partition primary size=41984",
+        'format quick fs=ntfs label="Temp Content"',
+    ])
+    if not ok:
+        print("  [!] Failed to create Temp Content partition. Aborting.")
+        return
+
+    # Step 4: Create User Content partition (remaining space)
+    print('\n  Step 4: Create "User Content" partition (remaining space)')
+    ok, stdout, stderr = _hd_diskpart_script([
+        f"select disk {disk_num}",
+        "create partition primary",
+        'format quick fs=ntfs label="User Content"',
+    ])
+    if not ok:
+        print("  [!] Failed to create User Content partition. Aborting.")
+        return
+
+    # Step 5: Set partition type GUIDs via PowerShell
+    # We need to find the partition numbers. After creating 2 data partitions on a GPT disk,
+    # the layout is typically: partition 1 = MSR (auto-created), partition 2 = Temp, partition 3 = User.
+    # But it can vary. Let's query and match by label.
+    print("\n  Step 5: Set Xbox partition type GUIDs")
+
+    # First, get partition info
+    ps_cmd = (
+        f"Get-Partition -DiskNumber {disk_num} | "
+        f"Select-Object PartitionNumber, @{{N='Label';E={{(Get-Volume -Partition $_).FileSystemLabel}}}}, "
+        f"@{{N='SizeGB';E={{[math]::Round($_.Size/1GB,2)}}}} | ConvertTo-Json -Compress"
+    )
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            capture_output=True, text=True, timeout=30)
+        parts_info = json.loads(r.stdout)
+        if isinstance(parts_info, dict):
+            parts_info = [parts_info]
+        print(f"    Partitions found: {len(parts_info)}")
+        for pi in parts_info:
+            print(f"      Partition {pi.get('PartitionNumber')}: {pi.get('Label', '?')!r}  ({pi.get('SizeGB', '?')} GB)")
+    except Exception as e:
+        print(f"    [!] Could not query partitions: {e}")
+        parts_info = []
+
+    # Find partition numbers by label
+    temp_part_num = None
+    user_part_num = None
+    for pi in parts_info:
+        label = (pi.get("Label") or "").strip()
+        if label == "Temp Content":
+            temp_part_num = pi["PartitionNumber"]
+        elif label == "User Content":
+            user_part_num = pi["PartitionNumber"]
+
+    guid_ok = True
+    if temp_part_num:
+        print(f"\n    Setting Temp Content (partition {temp_part_num}) type GUID: {_HD_TEMP_CONTENT_GUID}")
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f'Set-Partition -DiskNumber {disk_num} -PartitionNumber {temp_part_num} '
+             f'-GptType "{{{_HD_TEMP_CONTENT_GUID}}}"'],
+            capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            print(f"    → OK")
+        else:
+            print(f"    → FAILED: {r.stderr.strip()}")
+            guid_ok = False
+    else:
+        print("    [!] Could not find 'Temp Content' partition by label.")
+        guid_ok = False
+
+    if user_part_num:
+        print(f"\n    Setting User Content (partition {user_part_num}) type GUID: {_HD_USER_CONTENT_GUID}")
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f'Set-Partition -DiskNumber {disk_num} -PartitionNumber {user_part_num} '
+             f'-GptType "{{{_HD_USER_CONTENT_GUID}}}"'],
+            capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            print(f"    → OK")
+        else:
+            print(f"    → FAILED: {r.stderr.strip()}")
+            guid_ok = False
+    else:
+        print("    [!] Could not find 'User Content' partition by label.")
+        guid_ok = False
+
+    # Step 6: Set Xbox MBR signature
+    print("\n  Step 6: Set Xbox MBR signature (99 CC)")
+    handle = _hd_open_write(device_id)
+    if handle is None:
+        print("  [!] Could not open drive for MBR write.")
+        return
+
+    mbr = _hd_read_sectors(handle, 0, 1)
+    _hd_close(handle)
+    if mbr is None:
+        print("  [!] Could not read MBR.")
+        return
+
+    mbr_new = bytearray(mbr)
+    # Zero bootstrap area
+    mbr_new[0:0x1B8] = b'\x00' * 0x1B8
+    # Set NT Disk Signature
+    mbr_new[0x1B8:0x1BC] = _HD_NT_DISK_SIG
+    # Set Xbox boot signature
+    mbr_new[0x1FE] = 0x99
+    mbr_new[0x1FF] = 0xCC
+
+    print(f"    Bootstrap: zeroed (0x000-0x1B7)")
+    print(f"    NT Disk Sig: {' '.join(f'{b:02X}' for b in _HD_NT_DISK_SIG)} (0x1B8-0x1BB)")
+    print(f"    Boot Sig: 99 CC (0x1FE-0x1FF)")
+
+    handle = _hd_open_write(device_id)
+    if handle is None:
+        print("  [!] Could not open drive for MBR write.")
+        return
+    ok = _hd_write_sectors(handle, 0, bytes(mbr_new))
+    _hd_close(handle)
+    if not ok:
+        print("  [!] MBR write FAILED.")
+        return
+
+    # Read-back verify
+    handle = _hd_open_read(device_id)
+    if handle:
+        verify = _hd_read_sectors(handle, 0, 1)
+        _hd_close(handle)
+        if verify and verify == bytes(mbr_new):
+            print("  [✓] MBR verification PASSED")
+        elif verify:
+            print("  [!] MBR verification FAILED — mismatch!")
+        else:
+            print("  [!] Could not read back MBR for verification")
+
+    # Step 7: Final analysis
+    print("\n  Step 7: Verify final drive state")
+    _hd_analyze_drive(device_id)
+
+    # Report
+    print()
+    print("  ┌─────────────────────────────────────────────────────────────────┐")
+    print("  │  FORMAT COMPLETE                                               │")
+    print("  └─────────────────────────────────────────────────────────────────┘")
+    print()
+    if guid_ok:
+        print("  [+] Drive formatted for Xbox with custom partition GUIDs.")
+    else:
+        print("  [+] Drive formatted but partition GUID assignment had issues.")
+        print("      The Xbox may still accept the drive — test by plugging it in.")
+    print("  [*] The drive is now in Xbox mode (99 CC) and invisible to Windows.")
+    print("      Use [a] Convert to PC Mode to access the partitions from Windows.")
+
+
+# ---------------------------------------------------------------------------
+# Install XVC from CDN
+# ---------------------------------------------------------------------------
+
+def _hd_install_xvc(disk_num=None, drv_info=None):
+    """Download and install XVC game packages to a mounted Xbox drive."""
+    print("\n  [Install XVC from CDN]")
+    print()
+    print("  The drive must be mounted (use Mount Partition first) so Windows can")
+    print("  access the partition. After installing, convert back to Xbox mode.")
+    print()
+
+    if not _hd_is_admin():
+        print("  [!] Not running as Administrator.")
+        return
+
+    if disk_num is None:
+        # Step 1: Pick target drive
+        drives = _hd_list_drives()
+        if not drives:
+            print("  [!] No physical drives found.")
+            return
+
+        ext_drives = [d for d in drives if d["deviceNum"] != 0]
+        if not ext_drives:
+            print("  [!] No external drives found.")
+            return
+
+        print(f"  {'#':>2}  {'Name':<28}  {'Size':>8}  {'Bus':<6}  {'Mode':<18}  Device")
+        print("  " + "-" * 82)
+        for i, d in enumerate(ext_drives, 1):
+            sz = f"{d['sizeGB']:.0f} GB" if d['sizeGB'] else "?"
+            probe = _hd_probe_drive_mode(d["deviceId"])
+            mode = probe["mode"]
+            if mode == "PC" and probe["hidden"]:
+                mode = "PC (hidden)"
+            elif mode == "PC":
+                mode = "PC (mounted)"
+            if probe["snapshot"]:
+                mode += " [snap]"
+            print(f"  {i:>2}  {d['friendlyName']:<28}  {sz:>8}  {d['busType']:<6}  {mode:<18}  {d['deviceId']}")
+        print()
+        sel = input(f"  Install to which drive? [1-{len(ext_drives)} / 0=back]: ").strip()
+        if sel == "0" or not sel:
+            return
+        try:
+            idx = int(sel) - 1
+            if not (0 <= idx < len(ext_drives)):
+                print("  Invalid selection.")
+                return
+        except ValueError:
+            print("  Invalid selection.")
+            return
+
+        drv_info = ext_drives[idx]
+        disk_num = drv_info["deviceNum"]
+
+    drive_letter = _hd_get_mounted_letter(disk_num)
+    if not drive_letter:
+        print("  [!] No mounted partition found on this drive.")
+        print("      Use Mount Partition first to make the NTFS filesystem accessible.")
+        return
+
+    vol_info = _hd_get_volume_info(disk_num, drive_letter)
+    drive_path = f"{drive_letter}:\\"
+    size_gb = vol_info.get("SizeGB", "?")
+    free_gb = vol_info.get("FreeGB", "?")
+    print(f"  Target: {drive_letter}:  ({size_gb} GB total, {free_gb} GB free)")
+    print()
+
+    # Step 2: Pick a game to install
+    print("    [1] Enter a ProductId or Store URL")
+    print("    [2] Pick from CDN.json (re-download existing game)")
+    print("    [0] Back")
+    print()
+    mode = input("  Choice: ").strip()
+
+    if mode == "0" or not mode:
+        return
+
+    if mode == "2":
+        cdn_db_file = os.path.join(SCRIPT_DIR, "CDN.json")
+        if not os.path.isfile(cdn_db_file):
+            print("  [!] No CDN.json found. Scrape CDN links first.")
+            return
+        with open(cdn_db_file, "r", encoding="utf-8") as f:
+            cdn_data = json.load(f)
+        if not cdn_data:
+            print("  [!] CDN.json is empty.")
+            return
+
+        items = sorted(cdn_data.values(), key=lambda x: x.get("_title", x.get("storeId", "")))
+        print()
+        print(f"  {'#':>3}  {'StoreId':<14}  {'Size':>8}  Title")
+        print("  " + "─" * 70)
+        for i, item in enumerate(items, 1):
+            sz = item.get("sizeBytes", 0)
+            sz_gb = f"{sz/1e9:.2f}GB" if sz else "?"
+            print(f"  {i:>3}  {item.get('storeId','?'):<14}  {sz_gb:>8}  {item.get('_title','')[:44]}")
+        print()
+        sel = input(f"  Which game? [1-{len(items)} / 0=back]: ").strip()
+        if sel == "0":
+            return
+        try:
+            item = items[int(sel) - 1]
+        except (ValueError, IndexError):
+            print("  Invalid selection.")
+            return
+
+        product_id = item.get("storeId")
+        if not product_id:
+            print("  [!] No StoreId for this item.")
+            return
+        content_id = item.get("contentId", "")
+        print(f"\n  Selected: {item.get('_title', product_id)}")
+        print(f"  ProductId: {product_id}  ContentId: {content_id}")
+    elif mode == "1":
+        value = input("  Enter ProductId or Store URL: ").strip()
+        if not value or value == "0":
+            return
+        if value.startswith("http"):
+            input_type = "url"
+        elif len(value) == 12 and re.match(r'^[A-Za-z0-9]{12}$', value):
+            input_type = "ProductId"
+        else:
+            input_type = "ProductId"
+        product_id = value
+        content_id = ""
+    else:
+        print("  Invalid choice.")
+        return
+
+    # Step 3: Fetch CDN links
+    print(f"\n  Fetching package links from Microsoft delivery API...")
+    try:
+        if mode == "1":
+            links = _fe3_get_links(product_id, input_type=input_type)
+        else:
+            links = _fe3_get_links(product_id, input_type="ProductId")
+    except Exception as e:
+        print(f"  [!] Failed to get package links: {e}")
+        return
+
+    if not links:
+        print("  [!] No packages found for this product.")
+        return
+
+    xvc_links = [l for l in links if l["filename"].lower().endswith(".xvc") or
+                  l["filename"].lower().endswith(".msixvc")]
+    other_links = [l for l in links if l not in xvc_links]
+
+    print(f"\n  Packages found: {len(links)} total ({len(xvc_links)} XVC, {len(other_links)} other)")
+    print()
+    print(f"  {'#':>2}  {'Size':>10}  Filename")
+    print("  " + "─" * 70)
+    for i, l in enumerate(links, 1):
+        sz = f"{l['size']/1e9:.2f} GB" if l['size'] else "?"
+        tag = " ← XVC" if l in xvc_links else ""
+        print(f"  {i:>2}  {sz:>10}  {l['filename']}{tag}")
+    print()
+
+    if xvc_links:
+        print("  XVC packages are the game data files for Xbox consoles.")
+        sel = input(f"  Download which? [numbers e.g. 1 3 / *=all XVC / 0=back]: ").strip()
+    else:
+        print("  [!] No XVC packages found. These may be PC-only packages.")
+        sel = input(f"  Download which? [numbers e.g. 1 3 / *=all / 0=back]: ").strip()
+
+    if sel == "0" or not sel:
+        return
+
+    if sel == "*":
+        targets = xvc_links if xvc_links else links
+    else:
+        try:
+            indices = []
+            for part in sel.split():
+                if "-" in part:
+                    a, b = part.split("-", 1)
+                    indices.extend(range(int(a) - 1, int(b)))
+                else:
+                    indices.append(int(part) - 1)
+            targets = [links[i] for i in indices if 0 <= i < len(links)]
+        except (ValueError, IndexError):
+            print("  Invalid selection.")
+            return
+
+    if not targets:
+        print("  Nothing selected.")
+        return
+
+    total_bytes = sum(t["size"] for t in targets)
+    free_bytes = (vol_info.get("FreeGB") or 0) * 1e9
+    print(f"\n  Will download {len(targets)} package(s), {total_bytes/1e9:.2f} GB total")
+    print(f"  Free space on {drive_letter}: {free_gb} GB")
+    if total_bytes > free_bytes:
+        print("  [!] WARNING: Not enough free space!")
+    print()
+
+    confirm = input(f"  Proceed with download to {drive_letter}:\\? [Y/n]: ").strip().lower()
+    if confirm not in ("", "y", "yes"):
+        print("  Cancelled.")
+        return
+
+    # Step 4: Download packages to drive
+    for pkg in targets:
+        if content_id and pkg in xvc_links:
+            dest_name = content_id.upper()
+        else:
+            dest_name = pkg["filename"]
+        dest_file = os.path.join(drive_path, dest_name)
+        print(f"\n  ▸ {pkg['filename']}")
+        if content_id and pkg in xvc_links:
+            print(f"    → saving as {dest_name} (ContentId)")
+        _download_with_progress(pkg["url"], dest_file, pkg["size"])
+
+    print(f"\n  [+] Download complete. Files saved to {drive_letter}:\\")
+    print()
+    print("  Next steps:")
+    print("    1. Unmount the partition, then convert back to Xbox mode")
+    print("    2. Plug the drive into your Xbox")
+    print("    3. The game should appear in your installed games")
+    print()
+    print("  NOTE: The Xbox may require additional metadata files (.xvi, .xvs, .xct)")
+    print("  alongside the XVC for the game to be recognized. If the game doesn't")
+    print("  appear, you may need to start the download from the Xbox Store first,")
+    print("  then cancel it — this creates the metadata files — then try again.")
+
+
+# ---------------------------------------------------------------------------
+# Raw NTFS Reader — scrape .xvs files without mounting
+# ---------------------------------------------------------------------------
+
+def _hd_read_sectors_quiet(handle, lba, count=1):
+    """Read `count` sectors starting at `lba`. Returns bytes or None. No debug print."""
+    offset = lba * _HD_SECTOR
+    size = count * _HD_SECTOR
+    lo = offset & 0xFFFFFFFF
+    hi = _ct.c_long((offset >> 32) & 0xFFFFFFFF)
+    _ct.windll.kernel32.SetFilePointer(handle, lo, _ct.byref(hi), 0)
+    buf = _ct.create_string_buffer(size)
+    n = _ct.c_ulong(0)
+    ok = _ct.windll.kernel32.ReadFile(handle, buf, size, _ct.byref(n), None)
+    if not ok or n.value != size:
+        return None
+    return bytes(buf.raw)
+
+
+def _ntfs_read_boot_sector(handle, partition_start_lba):
+    """Read NTFS boot sector and parse key fields. Returns dict or None."""
+    data = _hd_read_sectors_quiet(handle, partition_start_lba)
+    if not data or len(data) < 0x50:
+        return None
+    # Validate OEM ID
+    oem = data[0x03:0x07]
+    if oem != b"NTFS":
+        return None
+    bps = struct.unpack_from("<H", data, 0x0B)[0]
+    spc = data[0x0D]
+    total_sectors = struct.unpack_from("<Q", data, 0x28)[0]
+    mft_cluster = struct.unpack_from("<Q", data, 0x30)[0]
+    mft_mirror_cluster = struct.unpack_from("<Q", data, 0x38)[0]
+    # MFT record size: signed int8 at 0x40
+    raw_val = struct.unpack_from("b", data, 0x40)[0]
+    if raw_val < 0:
+        mft_record_size = 1 << abs(raw_val)  # e.g. -10 → 1024
+    else:
+        mft_record_size = raw_val * spc * bps
+    return {
+        "bytes_per_sector": bps,
+        "sectors_per_cluster": spc,
+        "cluster_size": spc * bps,
+        "mft_start_cluster": mft_cluster,
+        "mft_mirror_cluster": mft_mirror_cluster,
+        "mft_record_size": mft_record_size,
+        "total_sectors": total_sectors,
+    }
+
+
+def _ntfs_apply_fixup(record, sector_size=512):
+    """Apply NTFS fixup array to a record. Returns fixed bytes or None."""
+    if len(record) < 8:
+        return None
+    fixup_offset = struct.unpack_from("<H", record, 0x04)[0]
+    fixup_count = struct.unpack_from("<H", record, 0x06)[0]
+    if fixup_count < 2 or fixup_offset + fixup_count * 2 > len(record):
+        return None
+    rec = bytearray(record)
+    sig = struct.unpack_from("<H", rec, fixup_offset)[0]
+    for i in range(1, fixup_count):
+        pos = i * sector_size - 2
+        if pos + 2 > len(rec):
+            break
+        actual = struct.unpack_from("<H", rec, pos)[0]
+        if actual != sig:
+            return None  # fixup mismatch
+        replacement = struct.unpack_from("<H", rec, fixup_offset + i * 2)[0]
+        struct.pack_into("<H", rec, pos, replacement)
+    return bytes(rec)
+
+
+def _ntfs_parse_attributes(record):
+    """Walk attribute chain in an MFT record. Yields (type, is_resident, info_dict)."""
+    if len(record) < 0x16:
+        return
+    attr_offset = struct.unpack_from("<H", record, 0x14)[0]
+    pos = attr_offset
+    while pos + 8 <= len(record):
+        atype = struct.unpack_from("<I", record, pos)[0]
+        if atype == 0xFFFFFFFF:
+            break
+        alen = struct.unpack_from("<I", record, pos + 4)[0]
+        if alen < 16 or pos + alen > len(record):
+            break
+        non_res = record[pos + 8]
+        if non_res == 0:
+            # Resident attribute
+            data_len = struct.unpack_from("<I", record, pos + 0x10)[0]
+            data_off = struct.unpack_from("<H", record, pos + 0x14)[0]
+            data = record[pos + data_off:pos + data_off + data_len]
+            yield (atype, False, {"data": data})
+        else:
+            # Non-resident attribute
+            runs_off = struct.unpack_from("<H", record, pos + 0x20)[0]
+            real_size = struct.unpack_from("<Q", record, pos + 0x30)[0]
+            runs_data = record[pos + runs_off:pos + alen]
+            yield (atype, True, {"runs_data": runs_data, "real_size": real_size})
+        pos += alen
+
+
+def _ntfs_decode_data_runs(runs_data):
+    """Decode NTFS data runs. Returns list of (abs_cluster, length_in_clusters)."""
+    runs = []
+    pos = 0
+    prev_offset = 0
+    while pos < len(runs_data):
+        header = runs_data[pos]
+        if header == 0:
+            break
+        len_bytes = header & 0x0F
+        off_bytes = (header >> 4) & 0x0F
+        pos += 1
+        if pos + len_bytes + off_bytes > len(runs_data):
+            break
+        # Length (unsigned)
+        length = int.from_bytes(runs_data[pos:pos + len_bytes], "little", signed=False)
+        pos += len_bytes
+        if off_bytes == 0:
+            # Sparse run — skip
+            runs.append((None, length))
+            continue
+        # Offset (signed, relative)
+        offset = int.from_bytes(runs_data[pos:pos + off_bytes], "little", signed=True)
+        pos += off_bytes
+        abs_cluster = prev_offset + offset
+        prev_offset = abs_cluster
+        runs.append((abs_cluster, length))
+    return runs
+
+
+def _ntfs_read_data_runs(handle, runs, cluster_size, partition_start_lba, real_size):
+    """Read data described by data runs. Returns bytes truncated to real_size, or None."""
+    sectors_per_cluster = cluster_size // _HD_SECTOR
+    chunks = []
+    total = 0
+    for cluster, length in runs:
+        if cluster is None:
+            # Sparse — fill with zeros
+            chunk_size = min(length * cluster_size, real_size - total)
+            chunks.append(b'\x00' * chunk_size)
+            total += chunk_size
+        else:
+            lba = partition_start_lba + cluster * sectors_per_cluster
+            sector_count = length * sectors_per_cluster
+            # Read in batches to avoid huge single reads
+            batch = 256  # 128KB per read
+            read_buf = bytearray()
+            remaining_sectors = sector_count
+            cur_lba = lba
+            while remaining_sectors > 0:
+                n = min(remaining_sectors, batch)
+                data = _hd_read_sectors_quiet(handle, cur_lba, n)
+                if data is None:
+                    return None
+                read_buf.extend(data)
+                cur_lba += n
+                remaining_sectors -= n
+            chunks.append(bytes(read_buf))
+            total += len(read_buf)
+        if total >= real_size:
+            break
+    result = b''.join(chunks)
+    return result[:real_size]
+
+
+def _ntfs_get_filename(record):
+    """Extract long filename from MFT record's $FILE_NAME attribute. Returns str or None."""
+    for atype, is_res, info in _ntfs_parse_attributes(record):
+        if atype != 0x30 or is_res:
+            continue
+        data = info["data"]
+        if len(data) < 0x44:
+            continue
+        namespace = data[0x41]
+        if namespace == 2:  # DOS 8.3 name — skip
+            continue
+        name_len = data[0x40]
+        name = data[0x42:0x42 + name_len * 2].decode("utf-16-le", errors="replace")
+        return name
+    return None
+
+
+def _ntfs_get_file_data(handle, record, cluster_size, partition_start_lba):
+    """Read $DATA content from an MFT record. Returns bytes or None."""
+    for atype, is_res, info in _ntfs_parse_attributes(record):
+        if atype != 0x80:
+            continue
+        if not is_res:
+            # Resident $DATA
+            return info["data"]
+        # Non-resident $DATA
+        runs = _ntfs_decode_data_runs(info["runs_data"])
+        if not runs:
+            return None
+        return _ntfs_read_data_runs(handle, runs, cluster_size, partition_start_lba, info["real_size"])
+    return None
+
+
+def _ntfs_read_mft_record(handle, record_num, mft_runs, record_size, cluster_size, partition_start_lba):
+    """Read a specific MFT record by number using known MFT data runs."""
+    byte_offset = record_num * record_size
+    current_byte = 0
+    spc = cluster_size // _HD_SECTOR
+    rec_sectors = (record_size + _HD_SECTOR - 1) // _HD_SECTOR
+    for cluster, length in mft_runs:
+        if cluster is None:
+            current_byte += length * cluster_size
+            continue
+        run_bytes = length * cluster_size
+        if byte_offset < current_byte + run_bytes:
+            offset_in_run = byte_offset - current_byte
+            lba = partition_start_lba + cluster * spc + offset_in_run // _HD_SECTOR
+            data = _hd_read_sectors_quiet(handle, lba, rec_sectors)
+            if data is None or len(data) < record_size or data[:4] != b"FILE":
+                return None
+            return _ntfs_apply_fixup(data[:record_size])
+        current_byte += run_bytes
+    return None
+
+
+def _ntfs_parse_attrlist(data):
+    """Parse $ATTRIBUTE_LIST data. Returns list of (attr_type, start_vcn, mft_record_num)."""
+    entries = []
+    pos = 0
+    while pos + 0x1A <= len(data):
+        atype = struct.unpack_from("<I", data, pos)[0]
+        entry_len = struct.unpack_from("<H", data, pos + 4)[0]
+        if entry_len < 0x1A or pos + entry_len > len(data):
+            break
+        start_vcn = struct.unpack_from("<Q", data, pos + 8)[0]
+        mft_ref = struct.unpack_from("<Q", data, pos + 0x10)[0]
+        record_num = mft_ref & 0x0000FFFFFFFFFFFF  # low 48 bits
+        entries.append((atype, start_vcn, record_num))
+        pos += entry_len
+    return entries
+
+
+def _ntfs_collect_mft_runs(handle, mft_rec0, initial_runs, record_size, cluster_size, partition_start_lba):
+    """Collect complete MFT data runs, following $ATTRIBUTE_LIST if present.
+    Returns (all_runs, real_size) or (initial_runs, initial_size) if no attr list."""
+    # Check for $ATTRIBUTE_LIST and get initial $DATA info
+    attrlist_data = None
+    first_runs = initial_runs
+    first_real_size = 0
+
+    for atype, is_nr, info in _ntfs_parse_attributes(mft_rec0):
+        if atype == 0x20:  # $ATTRIBUTE_LIST
+            if not is_nr:
+                # Resident
+                attrlist_data = info["data"]
+            else:
+                # Non-resident — read it using its own runs
+                al_runs = _ntfs_decode_data_runs(info["runs_data"])
+                attrlist_data = _ntfs_read_data_runs(
+                    handle, al_runs, cluster_size, partition_start_lba, info["real_size"])
+        if atype == 0x80:  # $DATA
+            if is_nr:
+                first_real_size = info["real_size"]
+
+    if attrlist_data is None:
+        # No attribute list — simple case
+        return first_runs, first_real_size
+
+    # Parse attribute list for all $DATA entries
+    al_entries = _ntfs_parse_attrlist(attrlist_data)
+    data_entries = sorted(
+        [(vcn, rec) for (at, vcn, rec) in al_entries if at == 0x80],
+        key=lambda x: x[0])
+
+    if not data_entries:
+        return first_runs, first_real_size
+
+    print(f"  $ATTRIBUTE_LIST: {len(al_entries)} entries, {len(data_entries)} $DATA fragments")
+
+    # Combine runs from all $DATA fragments
+    all_runs = []
+    seen_records = set()
+    for start_vcn, rec_num in data_entries:
+        if rec_num in seen_records:
+            continue
+        seen_records.add(rec_num)
+        if rec_num == 0:
+            # Already have these runs from initial parse
+            all_runs.extend(first_runs)
+        else:
+            # Read that MFT record using the runs we have so far
+            rec = _ntfs_read_mft_record(
+                handle, rec_num, first_runs if not all_runs else all_runs,
+                record_size, cluster_size, partition_start_lba)
+            if rec is None:
+                print(f"  [!] Could not read MFT record {rec_num} for $DATA fragment at VCN {start_vcn}")
+                continue
+            for at2, is_nr2, info2 in _ntfs_parse_attributes(rec):
+                if at2 == 0x80 and is_nr2:
+                    frag_runs = _ntfs_decode_data_runs(info2["runs_data"])
+                    all_runs.extend(frag_runs)
+                    break
+
+    return all_runs, first_real_size
+
+
+def _hd_scrape_cdn_links(disk_num=None, device_id=None):
+    """Raw-read NTFS partition to extract .xvs files and build CDN.json. No mount needed."""
+    print("\n  [Scrape CDN Links — Raw NTFS Reader]")
+    print()
+    print("  Reads .xvs files directly from NTFS via raw sector I/O.")
+    print("  No mount needed — does NOT modify the drive in any way.")
+    print("  Results saved to CDN.json for use by other tools.")
+    print()
+    print("  Include deleted .xvs files? Deleted XVCs remain in the MFT until")
+    print("  overwritten, so uninstalled games may still have recoverable CDN links.")
+    _incl_deleted = input("  Include deleted? [y/N]: ").strip().lower() == "y"
+    if _incl_deleted:
+        print("  → Including deleted MFT records")
+    print()
+
+    if not _hd_is_admin():
+        print("  [!] Not running as Administrator.")
+        return
+
+    # Open drive
+    if device_id is None:
+        device_id = f"\\\\.\\PhysicalDrive{disk_num}"
+    handle = _hd_open_read(device_id)
+    if handle is None:
+        return
+
+    try:
+        # Read GPT header (LBA 1)
+        gpt_hdr = _hd_read_sectors_quiet(handle, 1)
+        if not gpt_hdr or gpt_hdr[:8] != b"EFI PART":
+            print("  [!] No GPT partition table found.")
+            return
+        entry_start = struct.unpack_from("<Q", gpt_hdr, 72)[0]
+        num_entries = struct.unpack_from("<I", gpt_hdr, 80)[0]
+        entry_size = struct.unpack_from("<I", gpt_hdr, 84)[0]
+
+        # Read partition entries
+        entries_bytes = num_entries * entry_size
+        entries_sectors = (entries_bytes + _HD_SECTOR - 1) // _HD_SECTOR
+        raw_entries = _hd_read_sectors_quiet(handle, entry_start, entries_sectors)
+        if not raw_entries:
+            print("  [!] Failed to read GPT partition entries.")
+            return
+
+        # Enumerate ALL partitions from GPT
+        partition_start_lba = None
+        partition_end_lba = None
+        empty_guid = b'\x00' * 16
+        part_count = 0
+        for i in range(num_entries):
+            off = i * entry_size
+            if off + entry_size > len(raw_entries):
+                break
+            entry = raw_entries[off:off + entry_size]
+            if entry[0:16] == empty_guid:
+                continue
+            start_lba = struct.unpack_from("<Q", entry, 32)[0]
+            end_lba = struct.unpack_from("<Q", entry, 40)[0]
+            sz_gb = (end_lba - start_lba + 1) * _HD_SECTOR / (1024**3)
+            try:
+                pname = entry[56:128].decode("utf-16-le").rstrip("\x00")
+            except Exception:
+                pname = ""
+            type_guid = entry[0:16]
+            try:
+                tg = _hd_format_guid(type_guid)
+            except Exception:
+                tg = type_guid.hex()
+            print(f"  GPT[{i}]: \"{pname}\"  LBA {start_lba}–{end_lba} ({sz_gb:.2f} GB)  type={tg}")
+            if partition_start_lba is None:
+                partition_start_lba = start_lba
+                partition_end_lba = end_lba
+            part_count += 1
+
+        if partition_start_lba is None:
+            print("  [!] No partitions found in GPT.")
+            return
+        print(f"  GPT: entry_start={entry_start}, {num_entries} max entries, {part_count} used")
+
+        # Read NTFS boot sector
+        ntfs = _ntfs_read_boot_sector(handle, partition_start_lba)
+        if ntfs is None:
+            print("  [!] Partition is not NTFS.")
+            return
+        cluster_size = ntfs["cluster_size"]
+        record_size = ntfs["mft_record_size"]
+        vol_sectors = ntfs["total_sectors"]
+        vol_gb = vol_sectors * ntfs["bytes_per_sector"] / (1024**3)
+        mft_lba = partition_start_lba + ntfs["mft_start_cluster"] * ntfs["sectors_per_cluster"]
+        print(f"  NTFS: {ntfs['bytes_per_sector']}B/sector, {ntfs['sectors_per_cluster']} sectors/cluster, "
+              f"MFT record={record_size}B")
+        print(f"  Volume: {vol_sectors} sectors ({vol_gb:.2f} GB)")
+        print(f"  MFT cluster={ntfs['mft_start_cluster']} (LBA {mft_lba}), "
+              f"MFT mirror={ntfs['mft_mirror_cluster']}")
+
+        # Read MFT record 0 ($MFT itself) to get its full extent map
+        rec_sectors = (record_size + _HD_SECTOR - 1) // _HD_SECTOR
+        mft_rec0 = _hd_read_sectors_quiet(handle, mft_lba, rec_sectors)
+        if not mft_rec0 or mft_rec0[:4] != b"FILE":
+            print(f"  [!] Failed to read MFT record 0 at LBA {mft_lba}.")
+            print(f"      First 8 bytes: {mft_rec0[:8].hex() if mft_rec0 else 'None'}")
+            return
+        mft_rec0 = _ntfs_apply_fixup(mft_rec0[:record_size])
+        if mft_rec0 is None:
+            print("  [!] MFT record 0 fixup failed.")
+            return
+        rec0_name = _ntfs_get_filename(mft_rec0)
+        print(f"  MFT record 0 filename: {rec0_name!r}")
+
+        # Get $DATA runs from $MFT — this tells us where all MFT records live on disk
+        # First pass: get initial runs from record 0's $DATA attribute
+        initial_runs = []
+        mft_total_size = 0
+        for atype, is_res, info in _ntfs_parse_attributes(mft_rec0):
+            if atype == 0x80:  # $DATA
+                if is_res:  # non-resident
+                    initial_runs = _ntfs_decode_data_runs(info["runs_data"])
+                    mft_total_size = info["real_size"]
+                break
+        if not initial_runs:
+            print("  [!] Could not read MFT data runs.")
+            # List attributes found for debugging
+            print("  Attributes in MFT record 0:")
+            _attr_names = {0x10:'$STD_INFO',0x20:'$ATTR_LIST',0x30:'$FILE_NAME',0x40:'$OBJ_ID',
+                           0x50:'$SEC_DESC',0x60:'$VOL_NAME',0x70:'$VOL_INFO',0x80:'$DATA',
+                           0x90:'$INDEX_ROOT',0xA0:'$INDEX_ALLOC',0xB0:'$BITMAP'}
+            for at, nr, inf in _ntfs_parse_attributes(mft_rec0):
+                nm = _attr_names.get(at, f'0x{at:X}')
+                print(f"    {nm} ({'non-res' if nr else 'resident'})")
+            return
+        spc = ntfs["sectors_per_cluster"]
+        initial_clusters = sum(l for _, l in initial_runs if _ is not None)
+        initial_bytes = initial_clusters * cluster_size
+        for ri, (rc, rl) in enumerate(initial_runs):
+            if rc is not None:
+                print(f"  MFT run[{ri}]: cluster {rc}, {rl} clusters "
+                      f"(LBA {partition_start_lba + rc * spc}..+{rl * spc})")
+        print(f"  $MFT record 0: real_size={mft_total_size}, {len(initial_runs)} run(s) covering {initial_bytes/(1024*1024):.1f} MB")
+
+        # Follow $ATTRIBUTE_LIST if MFT is fragmented (runs split across records)
+        mft_runs, real_size_from_al = _ntfs_collect_mft_runs(
+            handle, mft_rec0, initial_runs, record_size, cluster_size, partition_start_lba)
+        if real_size_from_al > mft_total_size:
+            mft_total_size = real_size_from_al
+        # If the reported real_size seems too small, compute from actual runs
+        actual_clusters = sum(l for _, l in mft_runs if _ is not None)
+        actual_bytes = actual_clusters * cluster_size
+        if actual_bytes > mft_total_size:
+            mft_total_size = actual_bytes
+        total_records = mft_total_size // record_size
+        print(f"  MFT: {total_records} records ({mft_total_size / (1024*1024):.1f} MB, {len(mft_runs)} run(s))")
+
+        # Build flat list of (lba, sector_count) for MFT extents
+        mft_extents = []
+        for cluster, length in mft_runs:
+            if cluster is None:
+                continue  # sparse — skip
+            extent_lba = partition_start_lba + cluster * spc
+            extent_sectors = length * spc
+            mft_extents.append((extent_lba, extent_sectors))
+
+        # Probe beyond the known MFT for additional records.
+        # Xbox NTFS may grow the MFT without updating record 0's $DATA extent.
+        if mft_extents:
+            last_lba, last_sectors = mft_extents[-1]
+            probe_lba = last_lba + last_sectors
+            rec_sectors = (record_size + _HD_SECTOR - 1) // _HD_SECTOR
+            probe_data = _hd_read_sectors_quiet(handle, probe_lba, rec_sectors)
+            if probe_data and probe_data[:4] == b"FILE":
+                # There ARE more MFT records beyond the reported extent.
+                # Binary-search forward to find how far the MFT really extends.
+                extra_clusters = 1
+                while True:
+                    test_lba = probe_lba + extra_clusters * spc
+                    if test_lba >= partition_start_lba + vol_sectors:
+                        break
+                    td = _hd_read_sectors_quiet(handle, test_lba, rec_sectors)
+                    if td and td[:4] == b"FILE":
+                        extra_clusters *= 2
+                    else:
+                        break
+                # Narrow down: binary search between extra_clusters//2 and extra_clusters
+                lo = extra_clusters // 2
+                hi = extra_clusters
+                while lo < hi:
+                    mid = (lo + hi + 1) // 2
+                    test_lba = probe_lba + mid * spc
+                    td = _hd_read_sectors_quiet(handle, test_lba, rec_sectors)
+                    if td and td[:4] == b"FILE":
+                        lo = mid
+                    else:
+                        hi = mid - 1
+                extra_clusters = lo + 1  # total clusters with FILE records
+                extra_sectors = extra_clusters * spc
+                extra_records = (extra_clusters * cluster_size) // record_size
+                mft_extents.append((probe_lba, extra_sectors))
+                total_records += extra_records
+                mft_total_size += extra_clusters * cluster_size
+                print(f"  MFT extends beyond reported size! Found {extra_records} more records "
+                      f"({extra_clusters} clusters past end)")
+                print(f"  MFT actual: {total_records} records ({mft_total_size / (1024*1024):.1f} MB)")
+
+        # Scan all MFT records
+        xvs_items = []
+        records_scanned = 0
+        file_count = 0
+        in_use_count = 0
+        deleted_xvs_count = 0
+        fixup_fail_count = 0
+        all_filenames = []  # collect first N for diagnostic
+
+        _XBL_PREFIX = "[XBL:]" + chr(92)
+        def _clean_cdn_url(u):
+            if u.startswith(_XBL_PREFIX):
+                u = u[len(_XBL_PREFIX):]
+            elif u.startswith("[XBL:]/"):
+                u = u[7:]
+            return u.split(",")[0]
+
+        batch_records = 64
+        batch_size = batch_records * record_size
+        batch_sectors = (batch_size + _HD_SECTOR - 1) // _HD_SECTOR
+
+        for extent_lba, extent_sectors in mft_extents:
+            extent_bytes = extent_sectors * _HD_SECTOR
+            extent_records = extent_bytes // record_size
+            offset_in_extent = 0
+
+            while offset_in_extent < extent_records:
+                # How many records to read this batch
+                n_recs = min(batch_records, extent_records - offset_in_extent)
+                n_sectors = (n_recs * record_size + _HD_SECTOR - 1) // _HD_SECTOR
+                read_lba = extent_lba + (offset_in_extent * record_size) // _HD_SECTOR
+
+                raw = _hd_read_sectors_quiet(handle, read_lba, n_sectors)
+                if raw is None:
+                    offset_in_extent += n_recs
+                    records_scanned += n_recs
+                    continue
+
+                for r in range(n_recs):
+                    rec_off = r * record_size
+                    rec_data = raw[rec_off:rec_off + record_size]
+                    records_scanned += 1
+
+                    if rec_data[:4] != b"FILE":
+                        continue
+                    file_count += 1
+                    # Check in-use flag
+                    if len(rec_data) < 0x18:
+                        continue
+                    flags = struct.unpack_from("<H", rec_data, 0x16)[0]
+                    _is_in_use = bool(flags & 0x01)
+                    if not _is_in_use and not _incl_deleted:
+                        continue  # not in use, skip unless recovering deleted
+                    if _is_in_use:
+                        in_use_count += 1
+                    is_dir = bool(flags & 0x02)
+
+                    rec_fixed = _ntfs_apply_fixup(rec_data)
+                    if rec_fixed is None:
+                        fixup_fail_count += 1
+                        # Fixup mismatch — use raw record as fallback.
+                        # Filename + attribute headers are before byte 510
+                        # so they're unaffected. Only bytes at sector
+                        # boundaries (510-511, 1022-1023) are wrong.
+                        rec_fixed = bytes(rec_data)
+
+                    fname = _ntfs_get_filename(rec_fixed)
+                    if fname and len(all_filenames) < 50:
+                        all_filenames.append(("D " if is_dir else "F ") + fname)
+
+                    # Determine if this record could be a .xvs file
+                    fname_lc = fname.lower() if fname else ""
+                    is_xvs_name = fname_lc.endswith(".xvs")
+                    # Content-ID pattern: 8hex.8hex.8hex.8hex (possibly truncated .xvs name)
+                    _cid_pat = re.match(r'^[0-9a-f]{8}\.[0-9a-f]{8}\.[0-9a-f]{8}\.[0-9a-f]{8}$', fname_lc) if fname else None
+                    # Candidates: named .xvs, content-ID pattern, or unnamed non-dir file
+                    if not is_xvs_name and not _cid_pat and not (not fname and not is_dir):
+                        continue
+                    if is_dir:
+                        continue
+
+                    # Potential .xvs file — read its data
+                    label = fname or f"record#{records_scanned}"
+                    print(f"\r  MFT: {records_scanned}/{total_records} records, {len(xvs_items)} .xvs found — {label}", end="")
+                    file_data = _ntfs_get_file_data(handle, rec_fixed, cluster_size, partition_start_lba)
+                    if file_data is None:
+                        if is_xvs_name:
+                            print(f"\n  [!] Could not read data for {label}")
+                        continue
+
+                    # Parse .xvs JSON (UTF-16LE)
+                    try:
+                        text = file_data.decode("utf-16-le")
+                        # Strip BOM if present
+                        if text and text[0] == '\ufeff':
+                            text = text[1:]
+                        obj = json.loads(text)
+                    except Exception:
+                        if is_xvs_name:
+                            print(f"\n  [!] Failed to parse {label}")
+                        continue
+
+                    # Validate: must have Request.StoreId to be an .xvs file
+                    if "Request" not in obj:
+                        continue
+
+                    # Derive content_id
+                    if is_xvs_name:
+                        content_id = fname[:-4]  # strip .xvs
+                    elif _cid_pat:
+                        content_id = fname  # name was truncated, missing .xvs
+                    else:
+                        content_id = fname or "unknown"
+                    req = obj.get("Request", {})
+                    store_id = req.get("StoreId", "")
+                    sources = req.get("Sources", {})
+                    pkg_name = ""
+                    cdn_urls = []
+                    fg_paths = sources.get("ForegroundCrdPaths", [])
+                    for u in fg_paths:
+                        clean = _clean_cdn_url(u)
+                        if clean.startswith("http") and clean not in cdn_urls:
+                            cdn_urls.append(clean)
+                        if not pkg_name:
+                            import re as _re
+                            m = _re.search(r'/([A-Za-z][^/]+?_[\d.]+_[^/]+\.xvc)', clean)
+                            if m:
+                                pkg_name = m.group(1).split('_')[0]
+                    status = obj.get("Status", {})
+                    source = status.get("Source", {})
+                    current = source.get("Current", {})
+                    prior = source.get("Prior", {})
+                    build_version = current.get("BuildVersion", "")
+                    build_id = current.get("BuildId", "")
+                    platform = current.get("Platform", "")
+                    total_bytes = status.get("Progress", {}).get("Package", {}).get("TotalBytes", 0)
+                    specifiers = sources.get("Specifiers", {})
+                    content_types = specifiers.get("ContentTypes", "")
+                    plan_id = specifiers.get("PlanId", "")
+
+                    _item = {
+                        "contentId": content_id,
+                        "storeId": store_id,
+                        "packageName": pkg_name,
+                        "buildVersion": build_version,
+                        "buildId": build_id,
+                        "platform": platform,
+                        "sizeBytes": total_bytes,
+                        "cdnUrls": cdn_urls,
+                        "contentTypes": content_types,
+                        "devices": specifiers.get("Devices", ""),
+                        "language": specifiers.get("Languages", ""),
+                        "planId": plan_id,
+                        "operation": specifiers.get("Operation", ""),
+                        "fastStartState": status.get("FastStartState", ""),
+                        "priorBuildVersion": prior.get("BuildVersion", ""),
+                        "priorBuildId": prior.get("BuildId", ""),
+                        "source": "xbox_xvs",
+                        "scrapedAt": _dt.datetime.now().isoformat(),
+                    }
+                    if not _is_in_use:
+                        _item["deleted"] = True
+                        deleted_xvs_count += 1
+                    xvs_items.append(_item)
+
+                    print(f"\r  MFT: {records_scanned}/{total_records} records, {len(xvs_items)} .xvs found          ", end="")
+
+                offset_in_extent += n_recs
+
+        print(f"\r  MFT: {records_scanned}/{total_records} records scanned, {len(xvs_items)} .xvs files found          ")
+        print(f"  Stats: {file_count} FILE records, {in_use_count} in-use, {len(all_filenames)} with names"
+              + (f", {fixup_fail_count} fixup fail" if fixup_fail_count else "")
+              + (f", {deleted_xvs_count} deleted .xvs recovered" if deleted_xvs_count else ""))
+        if all_filenames and not xvs_items:
+            print("  Filenames found (D=dir, F=file):")
+            for fn in all_filenames:
+                print(f"    {fn}")
+
+    finally:
+        _ct.windll.kernel32.CloseHandle(handle)
+
+    if not xvs_items:
+        print("  [!] No .xvs files found via raw NTFS read.")
+        # Fallback: if drive is mounted, walk the real filesystem to diagnose
+        _mount_letter = None
+        if disk_num is not None:
+            _mount_letter = _hd_get_mounted_letter(disk_num)
+        if _mount_letter:
+            _mount_root = _mount_letter + ":/"
+            print(f"  [*] Drive is mounted at {_mount_letter}:  — listing files for diagnosis...")
+            _walk_count = 0
+            for dirpath, dirnames, filenames in os.walk(_mount_root):
+                rel = os.path.relpath(dirpath, _mount_root)
+                depth = 0 if rel == "." else rel.count(os.sep) + 1
+                indent = "    " + "  " * depth
+                dn = os.path.basename(dirpath) if rel != "." else _mount_letter + ":"
+                print(f"{indent}{dn}/")
+                for fn in sorted(filenames):
+                    fpath = os.path.join(dirpath, fn)
+                    try:
+                        sz = os.path.getsize(fpath)
+                    except OSError:
+                        sz = 0
+                    if sz >= 1024 * 1024:
+                        sz_str = f"{sz / (1024*1024):.1f} MB"
+                    elif sz >= 1024:
+                        sz_str = f"{sz / 1024:.0f} KB"
+                    else:
+                        sz_str = f"{sz} B"
+                    print(f"{indent}  {fn}  ({sz_str})")
+                    _walk_count += 1
+                if _walk_count > 500:
+                    print(f"{indent}  ... (stopped after 500 files)")
+                    break
+            if _walk_count == 0:
+                print("    (empty drive)")
+        else:
+            print("  Tip: mount the drive first ([c] in HD Tool menu) then re-run [e]")
+            print("       to see the actual file listing for diagnosis.")
+        return
+
+    # Build CDN.json keyed by storeId
+    cdn_path = os.path.join(SCRIPT_DIR, "CDN.json")
+    existing_cdn = {}
+    if os.path.isfile(cdn_path):
+        try:
+            existing_cdn = load_json(cdn_path) or {}
+        except Exception:
+            pass
+        _cdn_snapshot(existing_cdn)
+
+    _VERSION_FIELDS = ("buildId", "buildVersion", "cdnUrls", "sizeBytes",
+                        "platform", "scrapedAt", "priorBuildVersion", "priorBuildId")
+
+    def _version_snap(rec):
+        """Extract version-relevant fields from a CDN record."""
+        return {k: rec[k] for k in _VERSION_FIELDS if k in rec}
+
+    updated = 0
+    for item in xvs_items:
+        sid = item.get("storeId")
+        if sid:
+            existing = existing_cdn.get(sid)
+            if existing and existing.get("buildId") and item.get("buildId") \
+                    and existing["buildId"] != item["buildId"]:
+                # Different build — archive the old version, store the new one
+                versions = existing.get("versions", [])
+                # Seed versions list with old top-level record if not yet tracked
+                if not versions:
+                    versions.append(_version_snap(existing))
+                # Append new version if buildId not already present
+                new_snap = _version_snap(item)
+                if not any(v.get("buildId") == item["buildId"] for v in versions):
+                    versions.insert(0, new_snap)  # newest first
+                # Update top-level fields
+                existing_cdn[sid] = item
+                existing_cdn[sid]["versions"] = versions
+            elif existing:
+                # Same buildId or missing buildId — update in place, keep versions
+                old_versions = existing.get("versions")
+                existing_cdn[sid] = item
+                if old_versions:
+                    existing_cdn[sid]["versions"] = old_versions
+            else:
+                # New entry
+                existing_cdn[sid] = item
+            updated += 1
+        elif item.get("contentId"):
+            existing_cdn["_content_" + item["contentId"]] = item
+            updated += 1
+    save_json(cdn_path, existing_cdn)
+    _del_note = f", {deleted_xvs_count} from deleted files" if deleted_xvs_count else ""
+    print(f"  [+] CDN.json saved: {cdn_path} ({updated} new/updated{_del_note}, {len(existing_cdn)} total)")
+    print(f"      Rebuild HTML (option B from main menu) to apply to XCT.html")
+
+
+# ---------------------------------------------------------------------------
+# Xbox Hard Drive Tool — Main Menu
+# ---------------------------------------------------------------------------
+
+def _hd_get_mounted_letter(disk_num):
+    """Get the drive letter of a mounted partition on a physical disk.
+    Returns the drive letter (e.g. 'E') or None if not mounted."""
+    try:
+        ps_cmd = (
+            f"Get-Partition -DiskNumber {disk_num} -ErrorAction SilentlyContinue | "
+            "Get-Volume -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.DriveLetter } | "
+            "Select-Object DriveLetter, FileSystemLabel, "
+            "@{N='SizeGB';E={[math]::Round($_.Size/1GB,2)}}, "
+            "@{N='FreeGB';E={[math]::Round($_.SizeRemaining/1GB,2)}} | "
+            "ConvertTo-Json -Compress"
+        )
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            capture_output=True, text=True, timeout=15)
+        if r.returncode != 0 or not r.stdout.strip():
+            return None
+        data = json.loads(r.stdout)
+        if isinstance(data, dict):
+            data = [data]
+        for v in data:
+            dl = v.get("DriveLetter")
+            if dl:
+                return str(dl)
+        return None
+    except Exception:
+        return None
+
+
+def _hd_get_volume_info(disk_num, letter):
+    """Get volume size/free info for a mounted partition. Returns dict or {}."""
+    try:
+        ps_cmd = (
+            f"Get-Partition -DiskNumber {disk_num} -ErrorAction SilentlyContinue | "
+            f"Get-Volume -ErrorAction SilentlyContinue | "
+            f"Where-Object {{ $_.DriveLetter -eq '{letter}' }} | "
+            "Select-Object @{N='SizeGB';E={[math]::Round($_.Size/1GB,2)}}, "
+            "@{N='FreeGB';E={[math]::Round($_.SizeRemaining/1GB,2)}} | "
+            "ConvertTo-Json -Compress"
+        )
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            capture_output=True, text=True, timeout=15)
+        if r.returncode != 0 or not r.stdout.strip():
+            return {}
+        data = json.loads(r.stdout)
+        if isinstance(data, list):
+            data = data[0]
+        return data or {}
+    except Exception:
+        return {}
+
+
+def _hd_get_partition_list(disk_num, device_id):
+    """Get all partitions on a disk. Tries PowerShell first, falls back to raw GPT.
+    Returns list of dicts: {name, sizeGB, letter, type}."""
+    # Try PowerShell (works when disk is in PC mode / online)
+    try:
+        ps_cmd = (
+            f"Get-Partition -DiskNumber {disk_num} -ErrorAction Stop | "
+            "ForEach-Object { $v = Get-Volume -Partition $_ -EA SilentlyContinue; "
+            "[PSCustomObject]@{"
+            "N=$_.PartitionNumber; "
+            "Type=[string]$_.Type; "
+            "SizeGB=[math]::Round($_.Size/1GB,2); "
+            "Letter=if($_.DriveLetter){[string]$_.DriveLetter}else{''}; "
+            "Label=if($v){$v.FileSystemLabel}else{''}; "
+            "FS=if($v){$v.FileSystem}else{''}"
+            "} } | ConvertTo-Json -Compress"
+        )
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            capture_output=True, text=True, timeout=15)
+        if r.returncode == 0 and r.stdout.strip():
+            data = json.loads(r.stdout)
+            if isinstance(data, dict):
+                data = [data]
+            parts = []
+            for p in data:
+                name = p.get("Label") or p.get("Type") or "Partition"
+                sz = p.get("SizeGB", 0)
+                dl = p.get("Letter", "")
+                ptype = p.get("Type", "")
+                fs = p.get("FS", "")
+                parts.append({"name": name, "sizeGB": sz, "letter": dl, "type": ptype, "fs": fs})
+            if parts:
+                return parts
+    except Exception:
+        pass
+
+    # Fallback: read raw GPT partition entries
+    try:
+        share = _HD_FILE_SHARE_READ | _HD_FILE_SHARE_WRITE
+        handle = _ct.windll.kernel32.CreateFileW(
+            device_id, _HD_GENERIC_READ, share, None, _HD_OPEN_EXISTING, 0, None)
+        if handle in (_HD_INVALID_HANDLE, 0):
+            return []
+        buf = _ct.create_string_buffer(_HD_SECTOR)
+        n = _ct.c_ulong(0)
+        # Read GPT header (LBA 1)
+        lo = _HD_SECTOR & 0xFFFFFFFF
+        hi = _ct.c_long(0)
+        _ct.windll.kernel32.SetFilePointer(handle, lo, _ct.byref(hi), 0)
+        _ct.windll.kernel32.ReadFile(handle, buf, _HD_SECTOR, _ct.byref(n), None)
+        if n.value != _HD_SECTOR:
+            _ct.windll.kernel32.CloseHandle(handle)
+            return []
+        hdr = bytes(buf.raw)
+        if hdr[:8] != b"EFI PART":
+            _ct.windll.kernel32.CloseHandle(handle)
+            return []
+        entry_start = struct.unpack_from("<Q", hdr, 72)[0]
+        num_entries = struct.unpack_from("<I", hdr, 80)[0]
+        entry_size = struct.unpack_from("<I", hdr, 84)[0]
+
+        # Read all entry sectors
+        entries_bytes = num_entries * entry_size
+        entries_sectors = (entries_bytes + _HD_SECTOR - 1) // _HD_SECTOR
+        offset = entry_start * _HD_SECTOR
+        lo2 = offset & 0xFFFFFFFF
+        hi2 = _ct.c_long((offset >> 32) & 0xFFFFFFFF)
+        _ct.windll.kernel32.SetFilePointer(handle, lo2, _ct.byref(hi2), 0)
+        raw_buf = _ct.create_string_buffer(entries_sectors * _HD_SECTOR)
+        _ct.windll.kernel32.ReadFile(handle, raw_buf, entries_sectors * _HD_SECTOR, _ct.byref(n), None)
+        _ct.windll.kernel32.CloseHandle(handle)
+        raw = bytes(raw_buf.raw[:n.value])
+
+        parts = []
+        empty_guid = b'\x00' * 16
+        for i in range(num_entries):
+            off = i * entry_size
+            if off + entry_size > len(raw):
+                break
+            entry = raw[off:off + entry_size]
+            if entry[0:16] == empty_guid:
+                continue
+            start_lba = struct.unpack_from("<Q", entry, 32)[0]
+            end_lba = struct.unpack_from("<Q", entry, 40)[0]
+            sz = round((end_lba - start_lba + 1) * _HD_SECTOR / (1024**3), 2) if end_lba > start_lba else 0
+            try:
+                name = entry[56:128].decode("utf-16-le").rstrip("\x00")
+            except Exception:
+                name = ""
+            parts.append({"name": name or "Partition", "sizeGB": sz, "letter": "", "type": ""})
+        return parts
+    except Exception:
+        return []
+
+
+def _hd_probe_drive_mode(device_id):
+    """Read MBR signature and GPT partition type from a drive.
+    Returns dict with 'mode' ('Xbox'/'PC'/'Unknown'), 'sig', 'partType', 'hidden'."""
+    result = {"mode": "?", "sig": b"", "partType": "", "hidden": False, "snapshot": False}
+    try:
+        share = _HD_FILE_SHARE_READ | _HD_FILE_SHARE_WRITE
+        handle = _ct.windll.kernel32.CreateFileW(
+            device_id, _HD_GENERIC_READ, share, None, _HD_OPEN_EXISTING, 0, None)
+        if handle in (_HD_INVALID_HANDLE, 0):
+            return result
+        # Read MBR
+        buf = _ct.create_string_buffer(_HD_SECTOR)
+        n = _ct.c_ulong(0)
+        _ct.windll.kernel32.ReadFile(handle, buf, _HD_SECTOR, _ct.byref(n), None)
+        if n.value == _HD_SECTOR:
+            mbr = bytes(buf.raw)
+            sig = mbr[0x1FE:0x200]
+            result["sig"] = sig
+            if sig == _HD_XBOX_SIG:
+                result["mode"] = "Xbox"
+            elif sig == _HD_PC_SIG:
+                result["mode"] = "PC"
+            else:
+                result["mode"] = "Unknown"
+        # Read GPT header to find partition entry location
+        lo = _HD_SECTOR & 0xFFFFFFFF
+        hi = _ct.c_long(0)
+        _ct.windll.kernel32.SetFilePointer(handle, lo, _ct.byref(hi), 0)
+        _ct.windll.kernel32.ReadFile(handle, buf, _HD_SECTOR, _ct.byref(n), None)
+        if n.value == _HD_SECTOR:
+            hdr = bytes(buf.raw)
+            if hdr[:8] == b"EFI PART":
+                entry_start = struct.unpack_from("<Q", hdr, 72)[0]
+                # Read partition entry
+                offset = entry_start * _HD_SECTOR
+                lo2 = offset & 0xFFFFFFFF
+                hi2 = _ct.c_long((offset >> 32) & 0xFFFFFFFF)
+                _ct.windll.kernel32.SetFilePointer(handle, lo2, _ct.byref(hi2), 0)
+                _ct.windll.kernel32.ReadFile(handle, buf, _HD_SECTOR, _ct.byref(n), None)
+                if n.value == _HD_SECTOR:
+                    entry = bytes(buf.raw)
+                    type_guid = _hd_format_guid(entry[0:16])
+                    result["partType"] = type_guid
+                    result["hidden"] = (type_guid.upper() == _HD_HIDDEN_TYPE_GUID.upper())
+        _ct.windll.kernel32.CloseHandle(handle)
+    except Exception:
+        pass
+    # Check if snapshot exists
+    result["snapshot"] = os.path.isfile(_hd_snapshot_path(device_id))
+    return result
+
+
+
+# process_xbox_hd_tool removed — replaced by unified menu in process_xbox_usb_tool()
+
+
+# ---------------------------------------------------------------------------
+# Diskpart Wipe Drive
+# ---------------------------------------------------------------------------
+
+def _hd_wipe_drive(device_id=None, drv_info=None):
+    """Wipe a drive using diskpart clean — destroys ALL data and partition tables."""
+    if not _hd_is_admin():
+        print("  [!] Not running as Administrator.")
+        return
+
+    if device_id is None:
+        print("\n  Scanning for physical drives...")
+        drives = _hd_list_drives()
+        if not drives:
+            print("  [!] No physical drives found.")
+            return
+        ext_drives = [d for d in drives if d["deviceNum"] != 0]
+        if not ext_drives:
+            print("  [!] No external drives found.")
+            return
+        print()
+        print(f"  {'#':>2}  {'Name':<28}  {'Size':>8}  {'Bus':<6}  {'Mode':<18}  Device")
+        print("  " + "-" * 82)
+        for i, d in enumerate(ext_drives, 1):
+            sz = f"{d['sizeGB']:.0f} GB" if d['sizeGB'] else "?"
+            probe = _hd_probe_drive_mode(d["deviceId"])
+            mode = probe["mode"]
+            if mode == "PC" and probe["hidden"]:
+                mode = "PC (hidden)"
+            elif mode == "PC":
+                mode = "PC (mounted)"
+            if probe["snapshot"]:
+                mode += " [snap]"
+            print(f"  {i:>2}  {d['friendlyName']:<28}  {sz:>8}  {d['busType']:<6}  {mode:<18}  {d['deviceId']}")
+        print()
+        sel = input(f"  Wipe which drive? [1-{len(ext_drives)} / 0=back]: ").strip()
+        if sel == "0" or not sel:
+            return
+        try:
+            idx = int(sel) - 1
+            if not (0 <= idx < len(ext_drives)):
+                print("  Invalid selection.")
+                return
+        except ValueError:
+            print("  Invalid selection.")
+            return
+        drv_info = ext_drives[idx]
+        device_id = drv_info["deviceId"]
+
+    drv = drv_info or {}
+
+    if _hd_refuse_system_drive(device_id):
+        return
+
+    disk_num = drv.get("deviceNum") or int(device_id.replace("\\\\.\\PHYSICALDRIVE", ""))
+
+    print()
+    print("  ┌─────────────────────────────────────────────────────────────────┐")
+    print("  │          WARNING: THIS WILL DESTROY ALL DATA ON THE DRIVE      │")
+    print("  │                                                                 │")
+    print("  │  Diskpart clean erases the partition table and MBR/GPT.         │")
+    print("  │  ALL partitions, files, games, and snapshots will be lost.      │")
+    print("  │  THIS CANNOT BE UNDONE.                                         │")
+    print("  └─────────────────────────────────────────────────────────────────┘")
+    print()
+    print(f"    Device:    {device_id}")
+    print(f"    Drive:     {drv.get('friendlyName', '?')}")
+    print(f"    Size:      {drv.get('sizeGB', '?')} GB")
+    print(f"    Serial:    {drv.get('serial') or '(none)'}")
+    print(f"    Bus:       {drv.get('busType', '?')}")
+    print()
+    confirm = input('    Type "WIPE" to erase all data: ').strip()
+    if confirm != "WIPE":
+        print("  Cancelled.")
+        return
+
+    print()
+    print("  [*] Wiping drive...")
+    ok, stdout, stderr = _hd_diskpart_script([
+        f"select disk {disk_num}",
+        "clean",
+    ])
+    if ok:
+        # Delete GPT snapshot if it exists (no longer valid)
+        snap_path = _hd_snapshot_path(device_id)
+        if os.path.isfile(snap_path):
+            os.remove(snap_path)
+            print(f"  [*] Removed GPT snapshot (no longer valid).")
+        print()
+        print("  [+] Drive wiped — all partitions and data removed.")
+        print("      The drive is now uninitialized raw storage.")
+        print("      Use [g] Format Drive for Xbox or [m] Format as NTFS to create new partitions.")
+    else:
+        print("  [!] Diskpart clean failed.")
+
+
+# ---------------------------------------------------------------------------
+# Format as NTFS
+# ---------------------------------------------------------------------------
+
+def _hd_format_ntfs(device_id=None, drv_info=None):
+    """Format a drive as a single GPT NTFS partition (standard PC drive)."""
+    if not _hd_is_admin():
+        print("  [!] Not running as Administrator.")
+        return
+
+    if device_id is None:
+        print("\n  Scanning for physical drives...")
+        drives = _hd_list_drives()
+        if not drives:
+            print("  [!] No physical drives found.")
+            return
+        ext_drives = [d for d in drives if d["deviceNum"] != 0]
+        if not ext_drives:
+            print("  [!] No external drives found.")
+            return
+        print()
+        print(f"  {'#':>2}  {'Name':<28}  {'Size':>8}  {'Bus':<6}  {'Mode':<18}  Device")
+        print("  " + "-" * 82)
+        for i, d in enumerate(ext_drives, 1):
+            sz = f"{d['sizeGB']:.0f} GB" if d['sizeGB'] else "?"
+            probe = _hd_probe_drive_mode(d["deviceId"])
+            mode = probe["mode"]
+            if mode == "PC" and probe["hidden"]:
+                mode = "PC (hidden)"
+            elif mode == "PC":
+                mode = "PC (mounted)"
+            if probe["snapshot"]:
+                mode += " [snap]"
+            print(f"  {i:>2}  {d['friendlyName']:<28}  {sz:>8}  {d['busType']:<6}  {mode:<18}  {d['deviceId']}")
+        print()
+        sel = input(f"  Format which drive? [1-{len(ext_drives)} / 0=back]: ").strip()
+        if sel == "0" or not sel:
+            return
+        try:
+            idx = int(sel) - 1
+            if not (0 <= idx < len(ext_drives)):
+                print("  Invalid selection.")
+                return
+        except ValueError:
+            print("  Invalid selection.")
+            return
+        drv_info = ext_drives[idx]
+        device_id = drv_info["deviceId"]
+
+    drv = drv_info or {}
+
+    if _hd_refuse_system_drive(device_id):
+        return
+
+    disk_num = drv.get("deviceNum") or int(device_id.replace("\\\\.\\PHYSICALDRIVE", ""))
+
+    print()
+    print("  ┌─────────────────────────────────────────────────────────────────┐")
+    print("  │  WARNING: THIS WILL ERASE ALL DATA ON THE SELECTED DRIVE       │")
+    print("  └─────────────────────────────────────────────────────────────────┘")
+    print()
+    print(f"    Device:    {device_id}")
+    print(f"    Drive:     {drv.get('friendlyName', '?')}")
+    print(f"    Size:      {drv.get('sizeGB', '?')} GB")
+    print(f"    Serial:    {drv.get('serial') or '(none)'}")
+    print(f"    Bus:       {drv.get('busType', '?')}")
+    print()
+    print("    This will:")
+    print("      1. Wipe all existing data and partition tables")
+    print("      2. Create a GPT partition table")
+    print("      3. Create a single NTFS partition using all space")
+    print()
+    confirm = input('    Type "YES" to erase all data and format as NTFS: ').strip()
+    if confirm != "YES":
+        print("  Cancelled.")
+        return
+
+    label = "Xbox Drive"
+
+    # Step 1: Clean
+    print()
+    print("  Step 1: Clean drive")
+    ok, stdout, stderr = _hd_diskpart_script([
+        f"select disk {disk_num}",
+        "clean",
+    ])
+    if not ok:
+        print("  [!] diskpart clean failed. Aborting.")
+        return
+
+    # Step 2: Convert to GPT
+    print("\n  Step 2: Convert to GPT")
+    ok, stdout, stderr = _hd_diskpart_script([
+        f"select disk {disk_num}",
+        "convert gpt",
+    ])
+    if not ok:
+        print("  [!] diskpart convert gpt failed. Aborting.")
+        return
+
+    # Step 3: Create single NTFS partition
+    print(f'\n  Step 3: Create NTFS partition (label: "{label}")')
+    ok, stdout, stderr = _hd_diskpart_script([
+        f"select disk {disk_num}",
+        "create partition primary",
+        f'format quick fs=ntfs label="{label}"',
+        "assign",
+    ])
+    if not ok:
+        print("  [!] Failed to create NTFS partition.")
+        return
+
+    # Delete GPT snapshot if it exists (no longer valid)
+    snap_path = _hd_snapshot_path(device_id)
+    if os.path.isfile(snap_path):
+        os.remove(snap_path)
+        print(f"  [*] Removed old GPT snapshot.")
+
+    # Check what letter was assigned
+    letter = _hd_get_mounted_letter(disk_num)
+    letter_str = f" ({letter}:)" if letter else ""
+
+    print()
+    print("  ┌─────────────────────────────────────────────────────────────────┐")
+    print("  │  FORMAT COMPLETE                                               │")
+    print("  └─────────────────────────────────────────────────────────────────┘")
+    print()
+    print(f'  [+] Drive formatted as NTFS with label "{label}"{letter_str}')
+    print(f"      Ready to use as a standard PC drive.")
 
 
 # ===========================================================================
@@ -7416,7 +10356,7 @@ def build_usb_db(drive_letter="E"):
         except Exception:
             pass
         # Auto-snapshot the previous state before overwriting
-        _usb_db_snapshot(existing)
+        _cdn_snapshot(existing)
 
     updated = 0
     for item in items:
@@ -7433,20 +10373,20 @@ def build_usb_db(drive_letter="E"):
     print(f"    Rebuild HTML (option B from main menu) to apply to XCT.html")
 
 
-def _usb_db_snapshot(db_dict):
+def _cdn_snapshot(db_dict):
     """
-    Save a timestamped snapshot of usb_db to usb_db_snapshots/ directory.
-    Called automatically before each [I] rescan so we can diff before/after.
+    Save a timestamped snapshot of CDN.json to cdn_snapshots/ directory.
+    Called automatically before each rescan so we can diff before/after.
     """
-    snap_dir = os.path.join(SCRIPT_DIR, "usb_db_snapshots")
+    snap_dir = os.path.join(SCRIPT_DIR, "cdn_snapshots")
     os.makedirs(snap_dir, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    snap_path = os.path.join(snap_dir, f"usb_db_{ts}.json")
+    ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    snap_path = os.path.join(snap_dir, f"cdn_{ts}.json")
     try:
         save_json(snap_path, db_dict)
         # Keep only the 10 most recent snapshots to avoid disk clutter
         snaps = sorted(
-            [f for f in os.listdir(snap_dir) if f.startswith("usb_db_") and f.endswith(".json")],
+            [f for f in os.listdir(snap_dir) if f.startswith("cdn_") and f.endswith(".json")],
             reverse=True)
         for old in snaps[10:]:
             try:
@@ -7475,7 +10415,7 @@ def _extract_plan_uuid(cdn_url, content_id):
 
 def _cdn_diff_snapshots(snap_old, snap_new):
     """
-    Compare two usb_db dicts.  For each game where the CDN planUUID changed
+    Compare two CDN snapshot dicts.  For each game where the CDN planUUID changed
     (i.e. the game was updated), construct the prior-version URL using:
       - OLD planUUID   (from snap_old cdnUrls)
       - priorBuildId   (from snap_new — the new XVS knows its immediate predecessor)
@@ -7559,54 +10499,62 @@ def _cdn_diff_snapshots(snap_old, snap_new):
 
 def process_cdn_snapshot_compare():
     """
-    Compare two usb_db snapshots to find games that updated (planUUID changed),
+    Compare two CDN snapshots to find games that updated (planUUID changed),
     then probe the old-planUUID URL for the prior version.
     """
-    snap_dir = os.path.join(SCRIPT_DIR, "usb_db_snapshots")
-    current_path = os.path.join(SCRIPT_DIR, "usb_db.json")
+    snap_dir = os.path.join(SCRIPT_DIR, "cdn_snapshots")
+    current_path = os.path.join(SCRIPT_DIR, "CDN.json")
+    # Also check legacy usb_db_snapshots for backward compat
+    legacy_dir = os.path.join(SCRIPT_DIR, "usb_db_snapshots")
 
-    print("\n[USB DB Snapshot Compare — find updated games]")
+    print("\n[CDN Snapshot Compare — find updated games]")
 
-    # List available snapshots
+    # List available snapshots (new + legacy locations)
     snaps = []
+    snap_source_dir = snap_dir
     if os.path.isdir(snap_dir):
         snaps = sorted(
-            [f for f in os.listdir(snap_dir) if f.startswith("usb_db_") and f.endswith(".json")],
+            [f for f in os.listdir(snap_dir) if f.startswith("cdn_") and f.endswith(".json")],
             reverse=True)
+    if not snaps and os.path.isdir(legacy_dir):
+        snaps = sorted(
+            [f for f in os.listdir(legacy_dir) if f.startswith("usb_db_") and f.endswith(".json")],
+            reverse=True)
+        snap_source_dir = legacy_dir
 
     if not snaps:
-        print("[!] No snapshots found. Snapshots are auto-saved by [I] before each rescan.")
+        print("[!] No snapshots found. Snapshots are auto-saved by [e] Scrape CDN Links before each rescan.")
         print(f"    Expected location: {snap_dir}")
         return
 
     print(f"\n  Available snapshots ({len(snaps)}):")
     for i, s in enumerate(snaps, 1):
-        ts = s.replace("usb_db_", "").replace(".json", "")
+        ts = s.replace("cdn_", "").replace("usb_db_", "").replace(".json", "")
         ts_fmt = f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]} {ts[9:11]}:{ts[11:13]}:{ts[13:15]}" if len(ts) >= 15 else ts
         print(f"    [{i}] {ts_fmt}  ({s})")
-    print(f"    [C] Use current usb_db.json as 'new'")
+    print(f"    [C] Use current CDN.json as 'new'")
     print()
-    old_pick = input("  Use which snapshot as BEFORE (old)? [number / B=back]: ").strip()
-    if old_pick.upper() == "B":
+    old_pick = input("  Use which snapshot as BEFORE (old)? [number / 0=back]: ").strip()
+    if old_pick == "0":
         return
     try:
         old_idx = int(old_pick) - 1
         if not (0 <= old_idx < len(snaps)):
             raise ValueError
-        old_path = os.path.join(snap_dir, snaps[old_idx])
+        old_path = os.path.join(snap_source_dir, snaps[old_idx])
     except (ValueError, IndexError):
         print("[!] Invalid selection.")
         return
 
-    new_pick = input("  Use which as AFTER (new)? [number / C=current / B=back]: ").strip().upper()
-    if new_pick == "B":
+    new_pick = input("  Use which as AFTER (new)? [number / C=current / 0=back]: ").strip().upper()
+    if new_pick == "0":
         return
     if new_pick == "C":
         new_path = current_path
     else:
         try:
             new_idx = int(new_pick) - 1
-            new_path = os.path.join(snap_dir, snaps[new_idx])
+            new_path = os.path.join(snap_source_dir, snaps[new_idx])
         except (ValueError, IndexError):
             print("[!] Invalid selection.")
             return
@@ -7677,7 +10625,7 @@ def process_cdn_snapshot_compare():
     else:
         print("  All prior-version URLs returned 404.")
         print("  → If planUUID also stays constant, the packages may be at the same path.")
-        print("    Check the [A] CDN sweep option — it may now find them.")
+        print("    Check the [2] CDN sweep option — it may now find them.")
 
 
 def _build_catalog_map():
@@ -7795,18 +10743,18 @@ def process_usb_drive(drive_letter=None):
     # Action menu
     print()
     print("  What next?")
-    print("    [C] Copy files from drive to folder")
-    print("    [D] Download from Xbox CDN")
-    print("    [B] Back")
+    print("    [1] Copy files from drive to folder")
+    print("    [2] Download from Xbox CDN")
+    print("    [0] Back")
     print()
-    action = input("  Choice: ").strip().upper()
+    action = input("  Choice: ").strip()
 
-    if action in ("C", "D"):
-        dest = input("  Destination folder path (B=back): ").strip().strip('"').strip("'")
-        if not dest or dest.upper() == "B":
+    if action in ("1", "2"):
+        dest = input("  Destination folder path (0=back): ").strip().strip('"').strip("'")
+        if not dest or dest == "0":
             return
-        sel = input("  Which games? [all / numbers e.g. 1 3 5-8 / B=back]: ").strip().lower()
-        if sel == "b":
+        sel = input("  Which games? [all / numbers e.g. 1 3 5-8 / 0=back]: ").strip().lower()
+        if sel == "0":
             return
         if not sel or sel == "all":
             indices = None
@@ -7824,7 +10772,7 @@ def process_usb_drive(drive_letter=None):
                         indices.append(int(tok) - 1)
                     except ValueError:
                         pass
-        if action == "C":
+        if action == "1":
             backup_usb_games(enriched, drive_letter + ":/", dest, indices)
         else:
             download_from_cdn(enriched, dest, indices)
@@ -8241,15 +11189,15 @@ def _parse_selection(sel_str, max_idx):
 
 
 def _cdn_load_items():
-    """Load and enrich items from usb_db.json. Returns sorted list or None on error."""
-    usb_db_file = os.path.join(SCRIPT_DIR, "usb_db.json")
-    if not os.path.isfile(usb_db_file):
-        print("[!] No usb_db.json found. Run [I] (Save USB metadata) first.")
+    """Load and enrich items from CDN.json. Returns sorted list or None on error."""
+    cdn_file = os.path.join(SCRIPT_DIR, "CDN.json")
+    if not os.path.isfile(cdn_file):
+        print("[!] No CDN.json found. Run [e] Scrape CDN Links from the Xbox Hard Drive Tool first.")
         return None
-    usb_db = load_json(usb_db_file) or {}
-    items = [v for v in usb_db.values() if not v.get("contentId", "").startswith("_content_")]
+    cdn_data = load_json(cdn_file) or {}
+    items = [v for v in cdn_data.values() if not v.get("contentId", "").startswith("_content_")]
     if not items:
-        print("[!] USB DB is empty.")
+        print("[!] CDN.json is empty.")
         return None
     catalog_map = _build_catalog_map()
     for item in items:
@@ -8474,7 +11422,7 @@ def _wu_catalog_get_links(uid_info_list, timeout=20):
 def _cdn_sweep_wu_catalog(items):
     """
     For each item with a storeId:
-      1. Fetch WuCategoryId from DisplayCatalog API (cached in usb_db.json)
+      1. Fetch WuCategoryId from DisplayCatalog API (cached in CDN.json)
       2. Search Microsoft Update Catalog for all published update entries
          NOTE: Xbox console (XVC) packages may not appear in WU Catalog — it
          depends on whether the publisher submitted them to the WU feed.
@@ -8493,9 +11441,9 @@ def _cdn_sweep_wu_catalog(items):
     print("    Step 2: catalog.update.microsoft.com   → update history")
     print()
 
-    # Load usb_db for WuCategoryId caching
-    db_path  = os.path.join(SCRIPT_DIR, "usb_db.json")
-    usb_db   = (load_json(db_path) or {}) if os.path.isfile(db_path) else {}
+    # Load CDN.json for WuCategoryId caching
+    db_path  = os.path.join(SCRIPT_DIR, "CDN.json")
+    cdn_data = (load_json(db_path) or {}) if os.path.isfile(db_path) else {}
     db_dirty = False
     all_found = []
     w = 46
@@ -8507,11 +11455,11 @@ def _cdn_sweep_wu_catalog(items):
         print(f"\r  [{n:>3}/{len(candidates)}] {title_tr:<{w}}  [WuCategoryId…]  ", end="", flush=True)
 
         # Check cache first to avoid re-fetching
-        wuid = (usb_db.get(sid) or {}).get("wuCategoryId") or item.get("wuCategoryId")
+        wuid = (cdn_data.get(sid) or {}).get("wuCategoryId") or item.get("wuCategoryId")
         if not wuid:
             wuid = _display_catalog_get_wuid(sid)
-            if wuid and sid in usb_db:
-                usb_db[sid]["wuCategoryId"] = wuid
+            if wuid and sid in cdn_data:
+                cdn_data[sid]["wuCategoryId"] = wuid
                 db_dirty = True
 
         if not wuid:
@@ -8544,8 +11492,8 @@ def _cdn_sweep_wu_catalog(items):
     print()
 
     if db_dirty:
-        save_json(db_path, usb_db)
-        print(f"[+] WuCategoryId cache saved to usb_db.json")
+        save_json(db_path, cdn_data)
+        print(f"[+] WuCategoryId cache saved to CDN.json")
 
     return all_found
 
@@ -8632,8 +11580,8 @@ def process_gfwl_download():
 
     game = None
     while game is None:
-        sel = input(f"  Select [1-{len(games)} / B=back]: ").strip()
-        if sel.upper() == "B":
+        sel = input(f"  Select [1-{len(games)} / 0=back]: ").strip()
+        if sel == "0":
             return
         try:
             idx = int(sel) - 1
@@ -8699,9 +11647,9 @@ def process_gfwl_download():
         print(f"  {i:>3}  {label:>7}  {s:>10}  {size:>9}  {cid}")
     print()
 
-    pkg_sel = input(f"  Download which? [1-{len(pkgs)} / Enter=all / B=back]: ").strip()
+    pkg_sel = input(f"  Download which? [1-{len(pkgs)} / Enter=all / 0=back]: ").strip()
 
-    if pkg_sel.upper() == "B":
+    if pkg_sel == "0":
         return
     if not pkg_sel:
         selected_pkgs = pkgs
@@ -8715,8 +11663,8 @@ def process_gfwl_download():
 
     default_dest = os.path.join(SCRIPT_DIR, "gfwl_downloads")
     print()
-    dest = input(f"  Destination folder [Enter={default_dest} / B=back]: ").strip().strip('"').strip("'")
-    if dest.upper() == "B":
+    dest = input(f"  Destination folder [Enter={default_dest} / 0=back]: ").strip().strip('"').strip("'")
+    if dest == "0":
         return
     if not dest:
         dest = default_dest
@@ -9359,11 +12307,11 @@ def _freshdex_pick_game(db):
         while True:
             print()
             if offset < len(items):
-                prompt = f"  [{offset}/{len(items)}] Enter=next page / number=pick / B=back: "
+                prompt = f"  [{offset}/{len(items)}] Enter=next page / number=pick / 0=back: "
             else:
-                prompt = "  Pick game number (B=back): "
+                prompt = "  Pick game number (0=back): "
             sel = input(prompt).strip()
-            if sel.upper() == "B":
+            if sel == "0":
                 return None
             if sel == "" and offset < len(items):
                 shown = _show_page(items, offset)
@@ -9380,18 +12328,18 @@ def _freshdex_pick_game(db):
     # --- Filter menu ---
     print()
     print("  Filter by:")
-    print("    [A-Z] Starting letter")
-    print("    [#]   Non-alpha titles")
-    print("    [Y]   Release year")
-    print("    [G]   Genre/category")
-    print("    [P]   Platform (Windows 8/8.1 or 10/11)")
-    print("    [S]   Search by title")
-    print("    [Enter] List all")
-    print("    [B]   Back")
+    print("    [1]     Release year")
+    print("    [2]     Genre/category")
+    print("    [3]     Platform (Windows 8/8.1 or 10/11)")
+    print("    [4]     Search by title")
+    print("    [A-Z]   Starting letter")
+    print("    [#]     Non-alpha titles")
+    print("    [Enter]  List all")
+    print("    [0]     Back")
     print()
     filt = input("  Filter: ").strip()
 
-    if filt.upper() == "B":
+    if filt == "0":
         return None
 
     if filt == "":
@@ -9399,30 +12347,15 @@ def _freshdex_pick_game(db):
         print(f"\n  Listing all {len(db)} games:")
         return _paginated_pick(db)
 
-    if filt == "#":
-        # Non-alpha titles
-        items = [g for g in db if g["title"] and not g["title"][0].isalpha()]
-        print(f"\n  {len(items)} games starting with non-alpha characters:")
-        return _paginated_pick(items)
-
-    if len(filt) == 1 and filt.isalpha():
-        # Letter filter
-        letter = filt.upper()
-        items = [g for g in db if g["title"].upper().startswith(letter)]
-        print(f"\n  {len(items)} games starting with '{letter}':")
-        return _paginated_pick(items)
-
-    fu = filt.upper()
-
-    if fu == "Y":
-        yr = input("  Release year (e.g. 2015 / B=back): ").strip()
-        if not yr or yr.upper() == "B":
+    if filt == "1":
+        yr = input("  Release year (e.g. 2015 / 0=back): ").strip()
+        if not yr or yr == "0":
             return None
         items = [g for g in db if g.get("releaseDate", "").startswith(yr)]
         print(f"\n  {len(items)} games from {yr}:")
         return _paginated_pick(items)
 
-    if fu == "G":
+    if filt == "2":
         # Collect unique categories
         cats = {}
         for g in db:
@@ -9437,8 +12370,8 @@ def _freshdex_pick_game(db):
         for i, c in enumerate(cat_list, 1):
             print(f"    {i:>2}. {c} ({cats[c]})")
         print()
-        sel = input("  Pick category number (B=back): ").strip()
-        if sel.upper() == "B":
+        sel = input("  Pick category number (0=back): ").strip()
+        if sel == "0":
             return None
         try:
             chosen_cat = cat_list[int(sel) - 1]
@@ -9449,23 +12382,12 @@ def _freshdex_pick_game(db):
         print(f"\n  {len(items)} games in '{chosen_cat}':")
         return _paginated_pick(items)
 
-    if fu == "S":
-        q = input("  Search (B=back): ").strip().lower()
-        if not q or q == "b":
-            return None
-        items = [g for g in db
-                 if q in g.get("title", "").lower()
-                 or q in g.get("publisher", "").lower()
-                 or q in g.get("productId", "").lower()]
-        print(f"\n  {len(items)} matches for '{q}':")
-        return _paginated_pick(items)
-
-    if fu == "P":
+    if filt == "3":
         print()
         print("    [1] Windows 8/8.1 only")
         print("    [2] Windows 10/11 only")
         print("    [3] Both (Win 8/8.1 + Win 10/11)")
-        print("    [B] Back")
+        print("    [0] Back")
         print()
         ps = input("  Platform: ").strip()
         if ps == "1":
@@ -9481,6 +12403,32 @@ def _freshdex_pick_game(db):
             print("  [!] Invalid selection.")
             return None
         return _paginated_pick(items)
+
+    if filt == "4":
+        q = input("  Search (0=back): ").strip().lower()
+        if not q or q == "0":
+            return None
+        items = [g for g in db
+                 if q in g.get("title", "").lower()
+                 or q in g.get("publisher", "").lower()
+                 or q in g.get("productId", "").lower()]
+        print(f"\n  {len(items)} matches for '{q}':")
+        return _paginated_pick(items)
+
+    if filt == "#":
+        # Non-alpha titles
+        items = [g for g in db if g["title"] and not g["title"][0].isalpha()]
+        print(f"\n  {len(items)} games starting with non-alpha characters:")
+        return _paginated_pick(items)
+
+    if len(filt) == 1 and filt.isalpha():
+        # Letter filter
+        letter = filt.upper()
+        items = [g for g in db if g["title"].upper().startswith(letter)]
+        print(f"\n  {len(items)} games starting with '{letter}':")
+        return _paginated_pick(items)
+
+    print("  [!] Invalid selection.")
 
     print("  [!] Invalid filter.")
     return None
@@ -9520,22 +12468,22 @@ def process_store_packages():
 
     print()
     print("  Input type:")
-    print(f"    [F] Your Collection ({_pc_count} Games)" if _pc_count else "    [F] Your Collection")
-    print(f"    [X] Xbox Apps & Utilities ({len(_XBOX_APPS)})")
-    print("    [1] ProductId         e.g. 9NBLGGH5R558")
-    print("    [2] CategoryId        e.g. e89c9ccf-de94-45ed-9cd4-7e11d05c3da4 (WuCategoryId)")
-    print("    [3] PackageFamilyName e.g. Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe")
-    print("    [4] URL               e.g. https://www.microsoft.com/store/productId/9NBLGGH5R558")
-    print("    [B] Back")
+    print(f"    [1] Your Collection ({_pc_count} Games)" if _pc_count else "    [1] Your Collection")
+    print(f"    [2] Xbox Apps & Utilities ({len(_XBOX_APPS)})")
+    print("    [3] ProductId         e.g. 9NBLGGH5R558")
+    print("    [4] CategoryId        e.g. e89c9ccf-de94-45ed-9cd4-7e11d05c3da4 (WuCategoryId)")
+    print("    [5] PackageFamilyName e.g. Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe")
+    print("    [6] URL               e.g. https://www.microsoft.com/store/productId/9NBLGGH5R558")
+    print("    [0] Back")
     print()
-    choice = input("  Choice [F]: ").strip().upper() or "F"
-    if choice == "B":
+    choice = input("  Choice [1]: ").strip() or "1"
+    if choice == "0":
         return
     print()
 
-    type_map = {"1": "ProductId", "2": "CategoryId", "3": "PackageFamilyName", "4": "url"}
+    type_map = {"3": "ProductId", "4": "CategoryId", "5": "PackageFamilyName", "6": "url"}
 
-    if choice == "F":
+    if choice == "1":
         db = _build_freshdex_db()
         if not db:
             print("[!] No Windows games found. Run collection scans first.")
@@ -9553,13 +12501,13 @@ def process_store_packages():
         print(f"  Released:  {game.get('releaseDate', '')[:10]}")
         print(f"  Platforms: {', '.join(game.get('platforms', []))}")
         print(f"  ProductId: {value}")
-    elif choice == "X":
+    elif choice == "2":
         print("  Xbox Apps & Utilities:")
         for _xi, (_xname, _xpid) in enumerate(_XBOX_APPS, 1):
             print(f"    [{_xi:>2}] {_xname:<33} {_xpid}")
         print()
-        _xpick = input(f"  Choice [1-{len(_XBOX_APPS)} / B=back]: ").strip()
-        if _xpick.upper() == "B":
+        _xpick = input(f"  Choice [1-{len(_XBOX_APPS)} / 0=back]: ").strip()
+        if _xpick == "0":
             return
         if not _xpick.isdigit() or int(_xpick) < 1 or int(_xpick) > len(_XBOX_APPS):
             return
@@ -9569,8 +12517,8 @@ def process_store_packages():
         print(f"  {_xname} — {value}")
     elif choice in type_map:
         input_type = type_map[choice]
-        value = input(f"  Enter {input_type} (B=back): ").strip()
-        if not value or value.upper() == "B":
+        value = input(f"  Enter {input_type} (0=back): ").strip()
+        if not value or value == "0":
             return
     else:
         return
@@ -9582,10 +12530,10 @@ def process_store_packages():
     print("    [3] WIF (Windows Insider Fast)")
     print("    [4] WIS (Windows Insider Slow)")
     print("    [Enter] Scan all rings")
-    print("    [B] Back")
+    print("    [0] Back")
     print()
     _ring_pick = input("  Ring [Enter=all]: ").strip()
-    if _ring_pick.upper() == "B":
+    if _ring_pick == "0":
         return
     _ring_map = {"1": "RP", "2": "Retail", "3": "WIF", "4": "WIS"}
     _ring_order = [("RP", "Release Preview"), ("Retail", "Retail"), ("WIF", "Windows Insider Fast"), ("WIS", "Windows Insider Slow")]
@@ -9711,8 +12659,8 @@ def process_store_packages():
         if not _any_hit:
             print("  [!] No packages found on any ring.")
             print()
-        _cont = input("  Download from a specific ring? [1-4 / B=back]: ").strip()
-        if _cont.upper() == "B" or _cont not in _ring_map:
+        _cont = input("  Download from a specific ring? [1-4 / 0=back]: ").strip()
+        if _cont == "0" or _cont not in _ring_map:
             return
         ring = _ring_map[_cont]
     else:
@@ -9753,16 +12701,16 @@ def process_store_packages():
     _print_table(display_list)
     print()
 
-    sel = input("  Which file(s) to download? [numbers / Enter=all / A=all architectures / B=back]: ").strip()
+    sel = input("  Which file(s) to download? [numbers / Enter=all / A=all architectures / 0=back]: ").strip()
     if sel.upper() == "A":
         display_list = links
         show_all = True
         print(f"\n  Showing all {len(links)} packages:\n")
         _print_table(display_list)
         print()
-        sel = input("  Which file(s) to download? [numbers / Enter=all / B=back]: ").strip()
+        sel = input("  Which file(s) to download? [numbers / Enter=all / 0=back]: ").strip()
 
-    if sel.upper() == "B":
+    if sel == "0":
         return
     if sel == "":
         targets = display_list
@@ -9773,8 +12721,8 @@ def process_store_packages():
         return
 
     default_dest = os.path.join(SCRIPT_DIR, "store_downloads")
-    dest = input(f"  Destination folder [{default_dest} / B=back]: ").strip().strip('"').strip("'")
-    if dest.upper() == "B":
+    dest = input(f"  Destination folder [{default_dest} / 0=back]: ").strip().strip('"').strip("'")
+    if dest == "0":
         return
     dest = dest or default_dest
     os.makedirs(dest, exist_ok=True)
@@ -9820,8 +12768,8 @@ def _cdn_backup_games(items, select_all=False):
     if select_all:
         targets = downloadable
     else:
-        sel = input("  Which game(s) to download? [numbers e.g. 1 3 5-8 / *=all / B=back]: ").strip()
-        if sel.upper() == "B":
+        sel = input("  Which game(s) to download? [numbers e.g. 1 3 5-8 / *=all / 0=back]: ").strip()
+        if sel == "0":
             return
         if sel == "*":
             targets = downloadable
@@ -9832,8 +12780,8 @@ def _cdn_backup_games(items, select_all=False):
         return
     total_bytes = sum(t.get("sizeBytes", 0) for t in targets)
     print(f"\n  {len(targets)} package(s) selected  ({total_bytes/1e9:.2f} GB total)")
-    dest = input("  Destination folder (B=back): ").strip().strip('"').strip("'")
-    if not dest or dest.upper() == "B":
+    dest = input("  Destination folder (0=back): ").strip().strip('"').strip("'")
+    if not dest or dest == "0":
         return
     os.makedirs(dest, exist_ok=True)
     for item in targets:
@@ -9848,46 +12796,159 @@ def _cdn_backup_games(items, select_all=False):
 
 
 def process_xbox_usb_tool():
-    """Xbox One/Series X|S USB Hard Drive Tool — submenu."""
+    """Xbox One/Series X|S USB Hard Drive Tool — unified menu.
+    Picks a drive first, then shows all operations for that drive."""
     print("\n[Xbox One / Series X|S USB Hard Drive Tool]")
-    print()
-    print("    [V] Drive converter (PC ↔ Xbox MBR mode)")
-    print("    [S] Scan, index and save metadata to usb_db.json")
-    print("    [C] CDN backup a game")
-    print("    [A] CDN backup all games")
-    print("    [D] Discover previous versions")
-    print("    [B] Back")
-    print()
-    mode = input("  Choice: ").strip().upper()
 
-    if mode == "B" or not mode:
+    if not _hd_is_admin():
+        print("  [!] Not running as Administrator — write operations will fail.")
+
+    # Step 1: Pick a drive
+    print("\n  Scanning for physical drives...")
+    drives = _hd_list_drives()
+    if not drives:
+        print("  [!] No physical drives found.")
         return
-    elif mode == "V":
-        process_drive_converter()
-    elif mode == "S":
-        drive_letter = input("  Drive letter (default: E / B=back): ").strip() or "E"
-        if drive_letter.upper() == "B":
+
+    ext_drives = [d for d in drives if d["deviceNum"] != 0]
+    if not ext_drives:
+        print("  [!] No external drives found (only system drive detected).")
+        return
+
+    print()
+    print(f"  {'#':>2}  {'Name':<28}  {'Size':>8}  {'Bus':<6}  {'Mode':<18}  Device")
+    print("  " + "-" * 82)
+    for i, d in enumerate(ext_drives, 1):
+        sz = f"{d['sizeGB']:.0f} GB" if d['sizeGB'] else "?"
+        probe = _hd_probe_drive_mode(d["deviceId"])
+        mode = probe["mode"]
+        if mode == "PC" and probe["hidden"]:
+            mode = "PC (hidden)"
+        elif mode == "PC":
+            mode = "PC (mounted)"
+        if probe["snapshot"]:
+            mode += " [snap]"
+        print(f"  {i:>2}  {d['friendlyName']:<28}  {sz:>8}  {d['busType']:<6}  {mode:<18}  {d['deviceId']}")
+    print()
+    sel = input(f"  Select drive [1-{len(ext_drives)} / 0=back]: ").strip()
+    if sel == "0" or not sel:
+        return
+    try:
+        idx = int(sel) - 1
+        if not (0 <= idx < len(ext_drives)):
+            print("  Invalid selection.")
             return
-        drive_letter = drive_letter.rstrip(":/\\").upper()
-        process_usb_drive(drive_letter)
-        build_usb_db(drive_letter)
-    elif mode == "C":
-        items = _cdn_load_items()
-        if items:
-            _cdn_backup_games(items, select_all=False)
-    elif mode == "A":
-        items = _cdn_load_items()
-        if items:
-            _cdn_backup_games(items, select_all=True)
-    elif mode == "D":
-        process_cdn_version_discovery()
+    except ValueError:
+        print("  Invalid selection.")
+        return
+
+    drv = ext_drives[idx]
+    device_id = drv["deviceId"]
+    disk_num = drv["deviceNum"]
+
+    if _hd_refuse_system_drive(device_id):
+        return
+
+    # Step 2: Unified operations menu (loop)
+    while True:
+        # Re-probe drive mode each iteration
+        probe = _hd_probe_drive_mode(device_id)
+        mode_str = probe["mode"]
+        if mode_str == "PC" and probe["hidden"]:
+            mode_str = "PC (hidden)"
+        elif mode_str == "PC":
+            mode_str = "PC (mounted)"
+        if probe["snapshot"]:
+            mode_str += " [snap]"
+        letter = _hd_get_mounted_letter(disk_num)
+        mount_str = f"  Drive Letter: {letter}:" if letter else ""
+
+        is_xbox = probe["mode"] == "Xbox"
+        is_pc = probe["mode"] == "PC"
+
+        # Get all partitions
+        partitions = _hd_get_partition_list(disk_num, device_id)
+
+        print(f"\n[Xbox Hard Drive Tool]")
+        print(f"  Drive: {drv['friendlyName']}  ({device_id})")
+        print(f"  Size: {drv['sizeGB']} GB    Bus: {drv['busType']}    Mode: {mode_str}{mount_str}")
+        if partitions:
+            for p in partitions:
+                dl = f" ({p['letter']}:)" if p.get("letter") else ""
+                fs = f"  [{p['fs']}]" if p.get("fs") else ""
+                print(f"  Partition: \"{p['name']}\"  {p['sizeGB']} GB{fs}{dl}")
+        else:
+            print("  Partition: (none)")
+        print()
+        if not is_pc:
+            print("    [a] Convert to PC Mode      — swap MBR + hide partition (safe)")
+        if not is_xbox:
+            print("    [b] Convert to Xbox Mode    — restore original GPT from snapshot")
+        print("    [c] Mount Partition         — enable file access (WARNING: modifies NTFS)")
+        print("    [d] Unmount Partition       — hide partition again")
+        print("    [e] Scrape CDN Links        — raw-read .xvs files → CDN.json (no mount needed)")
+        print("    [f] Install XVC from CDN    — download game packages to drive")
+        print("    [g] Format Drive for Xbox   — create GPT + NTFS from scratch")
+        print("    [h] CDN backup a game       — download installed game from CDN to PC")
+        print("    [i] CDN backup all games    — download all installed games from CDN")
+        print("    [j] Discover versions       — CDN version discovery tools")
+        print("    [k] Rescan Disks            — force Windows to re-detect devices")
+        print("    [l] Analyze Drive           — raw sector dump + MBR/GPT breakdown")
+        print("    [m] Format as NTFS          — wipe + single NTFS partition (PC drive)")
+        print("    [n] WIPE DRIVE              — DESTROYS ALL DATA AND PARTITIONS")
+        print("    [0] Back")
+        print()
+        choice = input("  Choice: ").strip().lower()
+
+        if choice == "0" or not choice:
+            return
+        elif choice == "a":
+            if is_pc:
+                print("  Already in PC mode.")
+            else:
+                _hd_convert_interactive(to_xbox=False, device_id=device_id, drv_info=drv)
+        elif choice == "b":
+            if is_xbox:
+                print("  Already in Xbox mode.")
+            else:
+                _hd_convert_interactive(to_xbox=True, device_id=device_id, drv_info=drv)
+        elif choice == "c":
+            _hd_mount_interactive(device_id=device_id, drv_info=drv)
+        elif choice == "d":
+            _hd_unmount_interactive(device_id=device_id)
+        elif choice == "e":
+            _hd_scrape_cdn_links(disk_num=disk_num, device_id=device_id)
+        elif choice == "f":
+            _hd_install_xvc(disk_num=disk_num, drv_info=drv)
+        elif choice == "g":
+            _hd_format_xbox(device_id=device_id, drv_info=drv)
+        elif choice == "h":
+            items = _cdn_load_items()
+            if items:
+                _cdn_backup_games(items, select_all=False)
+        elif choice == "i":
+            items = _cdn_load_items()
+            if items:
+                _cdn_backup_games(items, select_all=True)
+        elif choice == "j":
+            process_cdn_version_discovery()
+        elif choice == "k":
+            _hd_diskpart_rescan()
+        elif choice == "l":
+            _hd_analyze_interactive(device_id=device_id, drv_info=drv)
+        elif choice == "m":
+            _hd_format_ntfs(device_id=device_id, drv_info=drv)
+        elif choice == "n":
+            _hd_wipe_drive(device_id=device_id, drv_info=drv)
+        else:
+            print("  Invalid choice.")
 
 
 def process_cdn_version_discovery():
     """
     Discover older Xbox game package versions.
     Modes:
-      [C] Compare snapshots — diff two usb_db scans to find updated games + probe old URLs
+      [C] Compare snapshots — diff two CDN scans to find updated games + probe old URLs
       [A] Xbox CDN sweep   — probe prior-version URLs derived from XVS priorBuildId/Version
       [W] WU Catalog scan  — query Windows Update Catalog for full version history
       [S] Select game      — verbose per-game probe (CDN strategy)
@@ -9895,16 +12956,16 @@ def process_cdn_version_discovery():
     """
     print("\n[CDN / Version Discovery]")
     print()
-    print("    [C] Compare snapshots  — diff two usb_db scans to find updated games + probe old URLs")
-    print("    [A] Xbox CDN sweep     — probe prior-version URLs from XVS data (fast, silent 404s)")
-    print("    [W] Windows Update Catalog — query update history via WuCategoryId (experimental)")
-    print("    [S] Select game        — verbose CDN probe for specific game(s)")
-    print("    [R] Refresh WU links   — re-fetch fresh download links by WuCategoryId")
-    print("    [B] Back")
+    print("    [1] Compare snapshots  — diff two CDN scans to find updated games + probe old URLs")
+    print("    [2] Xbox CDN sweep     — probe prior-version URLs from XVS data (fast, silent 404s)")
+    print("    [3] Windows Update Catalog — query update history via WuCategoryId (experimental)")
+    print("    [4] Select game        — verbose CDN probe for specific game(s)")
+    print("    [5] Refresh WU links   — re-fetch fresh download links by WuCategoryId")
+    print("    [0] Back")
     print()
-    mode = input("  Choice: ").strip().upper()
+    mode = input("  Choice: ").strip()
 
-    if mode == "B" or not mode:
+    if mode == "0" or not mode:
         return
 
     items = _cdn_load_items()
@@ -9917,11 +12978,11 @@ def process_cdn_version_discovery():
     print(f"[*] {total} entries  |  {has_cdn} with CDN URL  |  {has_pri} with prior version data")
     print()
 
-    if mode == "C":
+    if mode == "1":
         process_cdn_snapshot_compare()
         return
 
-    elif mode == "A":
+    elif mode == "2":
         all_found = _cdn_sweep_all(items)
         if all_found:
             print(f"  Games with prior versions on CDN: {len([f for f in all_found if f['url'].endswith('.xvc')])}")
@@ -9936,7 +12997,7 @@ def process_cdn_version_discovery():
                         print(f"      preview: {preview}")
         _cdn_finish(all_found)
 
-    elif mode == "W":
+    elif mode == "3":
         all_found = _cdn_sweep_wu_catalog(items)
         if all_found:
             print(f"\n  Games with multiple versions in WU Catalog: {len(all_found)}")
@@ -9972,7 +13033,7 @@ def process_cdn_version_discovery():
             print("  Nothing found.  Games may only have one published WU Catalog entry,")
             print("  or WuCategoryId is unavailable (not all titles have one).")
 
-    elif mode == "S":
+    elif mode == "4":
         print()
         print(f"  {'#':>3}  {'CDN':^3}  {'PRIOR':^5}  Title")
         print("  " + "─" * 62)
@@ -9981,8 +13042,8 @@ def process_cdn_version_discovery():
             has_prior_flag = "✓" if item.get("priorBuildVersion") and item.get("priorBuildId") else " "
             print(f"  {i:>3}  {has_cdn_flag:^3}  {has_prior_flag:^5}  {item.get('_title','')[:50]}")
         print()
-        sel = input("  Which game(s)? [numbers e.g. 1 3 5-8 / B=back]: ").strip().lower()
-        if sel == "b":
+        sel = input("  Which game(s)? [numbers e.g. 1 3 5-8 / 0=back]: ").strip().lower()
+        if sel == "0":
             return
         targets = [items[i] for i in _parse_selection(sel, len(items))]
         if not targets:
@@ -9997,7 +13058,7 @@ def process_cdn_version_discovery():
                 print("     (no CDN URL — skipping)")
                 continue
             if not item.get("buildVersion"):
-                print("     (no buildVersion — re-run [I])")
+                print("     (no buildVersion — re-scan drive)")
                 continue
             results = discover_cdn_versions(item)
             if not results:
@@ -10017,10 +13078,10 @@ def process_cdn_version_discovery():
                 print("     (nothing found)")
         _cdn_finish(all_found)
 
-    elif mode == "R":
+    elif mode == "5":
         # Re-fetch fresh download links for a previously-found WuCategoryId
-        wuid = input("  WuCategoryId (paste / B=back): ").strip()
-        if not wuid or wuid.upper() == "B":
+        wuid = input("  WuCategoryId (paste / 0=back): ").strip()
+        if not wuid or wuid == "0":
             return
         print(f"[*] Re-fetching links for {wuid} ...")
         links = _cdn_refresh_wu_links(wuid)
@@ -10047,7 +13108,7 @@ def process_cdn_version_discovery():
 def _pick_account(gamertags, prompt="Which account?", allow_all=True):
     """Prompt user to pick an account. Returns gamertag, '*', or None."""
     if not gamertags:
-        print("  [!] No gamertags configured. Use [A] to add one first.")
+        print("  [!] No gamertags configured. Use [c] to add one first.")
         return None
     if len(gamertags) == 1:
         return gamertags[0]
@@ -10057,8 +13118,8 @@ def _pick_account(gamertags, prompt="Which account?", allow_all=True):
     if allow_all:
         print(f"    [*] All gamertags")
     print()
-    sp = input(f"  {prompt} [1-{len(gamertags)}{', *' if allow_all else ''}, B=back]: ").strip()
-    if sp.upper() == "B":
+    sp = input(f"  {prompt} [1-{len(gamertags)}{', *' if allow_all else ''}, 0=back]: ").strip()
+    if sp == "0":
         return None
     if allow_all and sp == "*":
         return "*"
@@ -10081,67 +13142,67 @@ def interactive_menu():
         print_header()
         if gamertags:
             print(f"  Gamertags ({len(gamertags)}):")
-            print(f"    [0] Show list")
-            print(f"    [*] Process all")
-            print(f"    [A] Add new gamertag")
-            print(f"    [R] Refresh token")
-            print(f"    [D] Delete a gamertag")
-            print(f"    [X] Clear cache + rescan all")
+            print(f"    [a] Show list")
+            print(f"    [b] Process all")
+            print(f"    [c] Add new gamertag")
+            print(f"    [d] Refresh token")
+            print(f"    [e] Delete a gamertag")
+            print(f"    [f] Clear cache + rescan all")
         else:
             print("  Gamertags:  (none)")
-            print("    [A] Add a gamertag to unlock collection features")
+            print("    [c] Add a gamertag to unlock collection features")
         print()
         print("  Scan endpoints:")
-        print("    [E] Collections API only")
-        print("    [T] TitleHub only")
-        print("    [S] Content Access only (Xbox 360)")
+        print("    [g] Collections API only")
+        print("    [h] TitleHub only")
+        print("    [i] Content Access only (Xbox 360)")
         print()
         print("  Catalogs:")
-        print("    [G] Game Pass Catalog")
-        print("    [M] Full Marketplace")
-        print("    [L] Full Marketplace (all regions)")
-        print("    [P] Regional Prices (enrich marketplace)")
-        print("    [N] New Games")
-        print("    [C] Coming Soon")
-        print("    [F] Game Demos")
+        print("    [j] Game Pass Catalog")
+        print("    [k] Full Marketplace")
+        print("    [l] Full Marketplace (all regions)")
+        print("    [m] Regional Prices (enrich marketplace)")
+        print("    [n] New Games")
+        print("    [o] Coming Soon")
+        print("    [p] Game Demos")
         print()
         print("  Discovery:")
-        print("    [W] Web Browse catalog (US only)")
-        print("    [Z] Web Browse catalog (all 7 regions)")
-        print("    [H] TitleHub ID scan (coarse, all regions)")
-        print("    [Y] Full discovery (Marketplace + Browse + TitleHub, all regions)")
+        print("    [q] Web Browse catalog (US only)")
+        print("    [r] Web Browse catalog (all 7 regions)")
+        print("    [s] TitleHub ID scan (coarse, all regions)")
+        print("    [t] Full discovery (Marketplace + Browse + TitleHub, all regions)")
         print()
         print("  Build:")
-        print("    [B] Build/Rebuild Index")
+        print("    [u] Build/Rebuild Index")
         print()
         print("  Utilities:")
-        print("    [K] Xbox One / Series X|S USB Hard Drive Tool")
-        print("    [I] Xbox One / Series X|S CDN Installer")
-        print("    [U] Xbox One / Series X|S Hard Delist Installer")
-        print("    [O] Microsoft Store (Win8/8.1/10) CDN Installer")
-        print("    [J] Games for Windows Live (GFWL) CDN Installer")
+        print("    [v] Xbox One / Series X|S USB Hard Drive Tool")
+        print("    [w] Xbox One / Series X|S CDN Installer")
+        print("    [x] Xbox One / Series X|S Hard Delist Installer")
+        print("    [y] MS Store (Win8/8.1/10) CDN Installer")
+        print("    [z] Games for Windows Live (GFWL) CDN Installer")
         print()
-        print("    [Q] Quit")
+        print("    [0] Quit")
         print()
 
-        pick = input(f"  Pick [0, E, T, S, M, L, P, N, C, F, W, Z, H, Y, A, R, D, *, X, B, K, I, U, O, J, G, Q]: ").strip()
-        pu = pick.upper()
+        pick = input("  Pick: ").strip()
+        pu = pick.lower()
 
         _no_accts = not gamertags
 
-        if pu == "Q":
+        if pu == "0":
             break
-        elif pick == "0":
+        elif pu == "a":
             if _no_accts:
-                print("  [!] No gamertags configured. Use [A] to add one first.")
+                print("  [!] No gamertags configured. Use [c] to add one first.")
                 continue
             print()
             for i, gt in enumerate(gamertags, 1):
                 age = token_age_str(gt)
                 print(f"    [{i:>2}] {gt}  (token: {age})")
             print()
-            ap = input(f"  Process which gamertag? [1-{len(gamertags)} / B=back]: ").strip()
-            if ap.upper() == "B":
+            ap = input(f"  Process which gamertag? [1-{len(gamertags)} / 0=back]: ").strip()
+            if ap == "0":
                 continue
             try:
                 idx = int(ap) - 1
@@ -10163,12 +13224,12 @@ def interactive_menu():
             except ValueError:
                 print("  Invalid selection.")
             continue
-        elif pu == "A":
+        elif pu == "c":
             cmd_add()
             continue
-        elif pu == "R":
+        elif pu == "d":
             if _no_accts:
-                print("  [!] No gamertags configured. Use [A] to add one first.")
+                print("  [!] No gamertags configured. Use [c] to add one first.")
                 continue
             if len(gamertags) == 1:
                 gt = gamertags[0]
@@ -10177,8 +13238,8 @@ def interactive_menu():
                 for i, gt in enumerate(gamertags, 1):
                     print(f"    [{i}] {gt} (token: {token_age_str(gt)})")
                 print()
-                rp = input(f"  Refresh which gamertag? [1-{len(gamertags)} / B=back]: ").strip()
-                if rp.upper() == "B":
+                rp = input(f"  Refresh which gamertag? [1-{len(gamertags)} / 0=back]: ").strip()
+                if rp == "0":
                     continue
                 try:
                     idx = int(rp) - 1
@@ -10205,9 +13266,9 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("Refresh token", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "D":
+        elif pu == "e":
             if _no_accts:
-                print("  [!] No gamertags configured. Use [A] to add one first.")
+                print("  [!] No gamertags configured. Use [c] to add one first.")
                 continue
             gt = None
             if len(gamertags) == 1:
@@ -10217,8 +13278,8 @@ def interactive_menu():
                 for i, g in enumerate(gamertags, 1):
                     print(f"    [{i}] {g}")
                 print()
-                dp = input(f"  Delete which gamertag? [1-{len(gamertags)} / B=back]: ").strip()
-                if dp.upper() == "B":
+                dp = input(f"  Delete which gamertag? [1-{len(gamertags)} / 0=back]: ").strip()
+                if dp == "0":
                     continue
                 try:
                     idx = int(dp) - 1
@@ -10236,9 +13297,9 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Delete gamertag", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pick == "*":
+        elif pu == "b":
             if _no_accts:
-                print("  [!] No gamertags configured. Use [A] to add one first.")
+                print("  [!] No gamertags configured. Use [c] to add one first.")
                 continue
             _t0 = time.time()
             try:
@@ -10247,7 +13308,7 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("Process all gamertags", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "E":
+        elif pu == "g":
             gt = _pick_account(gamertags, "Collections API scan for which account?")
             if gt == "*":
                 _t0 = time.time()
@@ -10272,7 +13333,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Collections API scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "T":
+        elif pu == "h":
             gt = _pick_account(gamertags, "TitleHub scan for which account?")
             if gt == "*":
                 _t0 = time.time()
@@ -10297,7 +13358,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("TitleHub scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "S":
+        elif pu == "i":
             gt = _pick_account(gamertags, "Content Access scan for which account?")
             if gt == "*":
                 _t0 = time.time()
@@ -10326,9 +13387,9 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Content Access scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "X":
+        elif pu == "f":
             if _no_accts:
-                print("  [!] No gamertags configured. Use [A] to add one first.")
+                print("  [!] No gamertags configured. Use [c] to add one first.")
                 continue
             print()
             print("  This will delete all cached API data and rescan every gamertag.")
@@ -10343,7 +13404,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Clear cache + rescan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "B":
+        elif pu == "u":
             _t0 = time.time()
             try:
                 html_file = build_index()
@@ -10355,7 +13416,7 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("Build index", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "G":
+        elif pu == "j":
             _t0 = time.time()
             try:
                 process_gamepass_library()
@@ -10363,7 +13424,7 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("Game Pass catalog", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "M":
+        elif pu == "k":
             gt = _pick_account(gamertags, "Marketplace scan using which account?")
             if gt == "*":
                 gt = gamertags[0]
@@ -10378,7 +13439,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Marketplace scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "L":
+        elif pu == "l":
             gt = _pick_account(gamertags, "All-regions marketplace using which account?")
             if gt == "*":
                 gt = gamertags[0]
@@ -10393,7 +13454,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Marketplace (all regions)", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "P":
+        elif pu == "m":
             gt = _pick_account(gamertags, "Regional prices using which account?")
             if gt == "*":
                 gt = gamertags[0]
@@ -10410,7 +13471,7 @@ def interactive_menu():
                         continue
                     mkt_file = os.path.join(acct, "marketplace.json")
                     if not os.path.isfile(mkt_file):
-                        print("[!] No marketplace.json found. Run [M] Full Marketplace first.")
+                        print("[!] No marketplace.json found. Run [k] Full Marketplace first.")
                         continue
                     mkt_items = load_json(mkt_file)
                     print(f"[*] Enriching {len(mkt_items)} marketplace items with regional prices...")
@@ -10434,7 +13495,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Regional prices", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "N":
+        elif pu == "n":
             gt = _pick_account(gamertags, "New Games scan using which account?")
             if gt == "*":
                 gt = gamertags[0]
@@ -10449,7 +13510,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("New Games scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "C":
+        elif pu == "o":
             gt = _pick_account(gamertags, "Coming Soon scan using which account?")
             if gt == "*":
                 gt = gamertags[0]
@@ -10464,7 +13525,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Coming Soon scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "F":
+        elif pu == "p":
             gt = _pick_account(gamertags, "Game Demos scan using which account?")
             if gt == "*":
                 gt = gamertags[0]
@@ -10479,7 +13540,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Game Demos scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "W":
+        elif pu == "q":
             gt = _pick_account(gamertags, "Browse catalog using which account?", allow_all=False)
             if gt:
                 _t0 = time.time()
@@ -10513,7 +13574,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Browse catalog (US)", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "Z":
+        elif pu == "r":
             gt = _pick_account(gamertags, "Multi-region browse using which account?", allow_all=False)
             if gt:
                 _t0 = time.time()
@@ -10544,7 +13605,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Browse catalog (all regions)", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "Y":
+        elif pu == "t":
             gt = _pick_account(gamertags, "Full discovery using which account?", allow_all=False)
             if gt:
                 _t0 = time.time()
@@ -10591,7 +13652,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Full discovery", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "H":
+        elif pu == "s":
             gt = _pick_account(gamertags, "TitleHub scan using which account?", allow_all=False)
             if gt:
                 _t0 = time.time()
@@ -10606,7 +13667,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("TitleHub ID scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "K":
+        elif pu == "v":
             _t0 = time.time()
             try:
                 process_xbox_usb_tool()
@@ -10614,15 +13675,15 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("USB Hard Drive Tool", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "I":
+        elif pu == "w":
             print("\n[Xbox One / Series X|S CDN Installer]")
             print("  Coming soon.")
             continue
-        elif pu == "U":
+        elif pu == "x":
             print("\n[Xbox One / Series X|S Hard Delist Installer]")
             print("  Coming soon.")
             continue
-        elif pu == "J":
+        elif pu == "z":
             _t0 = time.time()
             try:
                 process_gfwl_download()
@@ -10630,7 +13691,7 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("GFWL CDN Installer", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "O":
+        elif pu == "y":
             _t0 = time.time()
             try:
                 process_store_packages()
