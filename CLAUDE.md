@@ -4,34 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Single-file Python tool (`XCT.py`, ~7000 lines) that handles Xbox Live authentication, fetches your game library via TitleHub and Collections APIs, enriches with catalog metadata, then generates a self-contained HTML explorer page. Supports multiple Xbox accounts.
+Xbox Collection Tracker (XCT) — single-file Python tool (`XCT.py`, ~13,600 lines) that authenticates with Xbox Live, fetches game library data via multiple Microsoft APIs, enriches with catalog metadata, and generates a self-contained HTML explorer page. Supports multiple Xbox accounts. Also includes Xbox hard drive tools, CDN download/install utilities, and GFWL game downloading.
 
-## Dependencies
-
-- Python 3.7+
-- `ecdsa` — EC P-256 signing for device-bound auth
-- `pip_system_certs` — Windows-only, fixes SSL cert issues by using OS certificate store
-
-Install: `pip install -r requirements.txt`
-
-The `ecdsa` package enables device-bound XSTS tokens required for the Collections API. Without it, only TitleHub (simple auth) works.
-
-## Running
+## Dependencies & Running
 
 ```bash
-python XCT.py                    # Interactive menu
-python XCT.py <gamertag>         # Refresh token + process specific account
-python XCT.py --all              # Refresh all tokens + process all accounts
-python XCT.py add               # Add new account (device code flow)
-python XCT.py extract [file]    # Extract token from HAR file
-python XCT.py build             # Rebuild HTML from cached data (no network)
-python XCT.py preview           # Generate blank HTML only (UI testing, no account data)
-python XCT.py --no-update ...   # Skip GitHub update check (combine with any other arg)
+pip install -r requirements.txt    # ecdsa + pip_system_certs (Windows)
+python XCT.py                      # Interactive menu
+python XCT.py <gamertag>           # Refresh token + process specific account
+python XCT.py --all                # Refresh all tokens + process all accounts
+python XCT.py add                  # Add new account (device code flow)
+python XCT.py extract [file]       # Extract token from HAR file
+python XCT.py build                # Rebuild HTML from cached data (no network)
+python XCT.py preview              # Generate blank HTML only (UI testing, no account data)
+python XCT.py --no-update ...      # Skip GitHub update check (combine with any other arg)
 ```
 
-There are no tests or linting configured in this project.
-
-`debug.log` is written automatically on every run — it mirrors all stdout plus Python version, CWD, and args. First place to look for tracebacks.
+There are no tests or linting configured. `debug.log` is auto-written every run — mirrors stdout plus Python version, CWD, and args. First place to look for tracebacks.
 
 ## Architecture
 
@@ -43,17 +32,17 @@ There are no tests or linting configured in this project.
 5. **XSTS Tokens** (`get_xsts_token_device_bound`) — Two XSTS tokens with device claims: `xboxlive.com` RP (TitleHub) and `mp.microsoft.com` RP (Collections API)
 6. **XBL3.0 Tokens** — Saved to `auth_token.txt` and `auth_token_xl.txt`
 
-The device-bound flow signs all requests with an EC P-256 key (`RequestSigner` class), producing XSTS tokens with device claims required by Collections API. Falls back to non-device-bound flow if `ecdsa` is not installed (only TitleHub works).
+`RequestSigner` class handles EC P-256 ProofOfPossession signatures. Falls back to non-device-bound flow if `ecdsa` is not installed (only TitleHub works).
 
 ### Token Lifecycle
 Tokens expire after ~16 hours. Auto-refresh triggers proactively when token age exceeds 12 hours (`_is_token_expired`), and reactively on 401 errors. Token refresh clears all cached API responses via `clear_api_cache()`.
 
 ### Library Pipeline (`process_account`)
 1. **Auth** (`read_auth_token`) — Reads XBL3.0 token from account directory
-2. **Entitlements** (`fetch_entitlements`) — Collections API (~5000 items with purchase metadata) + TitleHub (~1000 items with game metadata), merged in "Both" mode
-3. **Catalog Enrichment** — Primary: `catalog.gamepass.com/v3/products` (single POST, all IDs). Fallback: `displaycatalog.md.mp.microsoft.com/v7.0` (batched, 20 IDs/req)
-4. **Merge** (`merge_library`) — Combines entitlement records with catalog data into unified library items
-5. **Scan History** — `compute_changelog` diffs against previous scan, `save_scan` writes timestamped snapshot to `history/` subdirectory
+2. **Entitlements** (`fetch_entitlements`) — Collections API (~5000 items) + TitleHub (~1000 items), merged in "Both" mode
+3. **Catalog Enrichment** — Primary: `catalog.gamepass.com/v3/products` (single POST). Fallback: `displaycatalog.md.mp.microsoft.com/v7.0` (batched, 20 IDs/req)
+4. **Merge** (`merge_library`) — Combines entitlement records with catalog data
+5. **Scan History** — `compute_changelog` diffs against previous scan, `save_scan` writes timestamped snapshot to `history/`
 6. **Output** — `build_html_template` generates static HTML, `write_data_js` writes data as JS constants (`LIB`, `GP`, `PH`, `MKT`, `HISTORY`, `DEFAULT_FLAGS`, `ACCOUNTS`, `RATES`, `GC_FACTOR`)
 
 ### Marketplace Pipeline (`process_marketplace` / `process_marketplace_all_regions`)
@@ -62,63 +51,100 @@ Fetches Xbox store catalog via DynamicChannels (`fetch_dynamic_channel`) from `b
 ### Discovery Pipeline
 - **Web Browse** (`fetch_browse_all` / `fetch_browse_all_regions`) — Crawls Xbox store browse pages for all products
 - **TitleHub Scan** (`scan_titlehub_coarse`) — Batch-probes TitleHub ID ranges to discover hidden/delisted titles
-- **Content Access** (`fetch_contentaccess`) — Finds Xbox 360 backward-compatible titles via content access API
+- **Content Access** (`fetch_contentaccess`) — Finds Xbox 360 backward-compatible titles
 
 ### Combined Index (`build_index`)
-Merges all per-account libraries into a single combined `accounts/XCT.html` + `accounts/data.js` page. Each account also gets its own `accounts/{gamertag}/XCT.html` + `data.js`.
+Merges all per-account libraries into a single combined `accounts/XCT.html` + `accounts/data.js`. Each account also gets its own `accounts/{gamertag}/XCT.html` + `data.js`.
 
-### Key Endpoints
-- **Collections API** (`collections.mp.microsoft.com/v7.0`) — Full entitlements, requires device-bound token
-- **TitleHub** (`titlehub.xboxlive.com`) — Game metadata (names, images, platforms, GP status, achievements)
-- **Catalog v3** (`catalog.gamepass.com/v3/products`) — Rich metadata, single POST call
-- **Game Pass Subscriptions** (`catalog.gamepass.com/subscriptions`) — Public, no auth
-- **Display Catalog** (`displaycatalog.md.mp.microsoft.com/v7.0`) — Legacy fallback catalog
-- **DynamicChannels** (`bronze.xboxservices.com`) — Marketplace channel listings
-- **Exchange Rates** (`open.er-api.com/v6/latest/USD`) — Free currency conversion
+### Xbox Hard Drive Tool (`process_xbox_hd_tool`, menu `[v]`)
+Raw disk access via `\\.\PhysicalDriveN` on Windows. Reads/writes MBR, GPT, NTFS structures directly. Key operations:
+- **Analyze** — Reads MBR signature, GPT headers, partition entries, NTFS boot sector
+- **PC/Xbox mode conversion** — Rewrites MBR signature (`0x55AA` ↔ `0x99CC`) and GPT partition type GUID with full CRC recalculation (primary + backup GPT)
+- **Mount/Unmount** — Hides partition type GUID to prevent Windows NTFS corruption on read-only mount
+- **Format** — Creates Xbox-format GPT (non-standard: `PartitionEntryStart=3`, `NumberOfPartEntries=1`, `FirstUsableLBA=4`)
+- **Install XVC** — Raw NTFS parser (MFT traversal, data run decoding, fixup arrays) to scrape CDN links from `.xvs` files
+- **GPT snapshot/restore** — Saves sectors 0-3 + backup GPT; byte-for-byte restore
+
+Key NTFS functions: `_ntfs_read_boot_sector`, `_ntfs_apply_fixup`, `_ntfs_parse_attributes`, `_ntfs_decode_data_runs`, `_ntfs_read_mft_record`, `_ntfs_collect_mft_runs`
+
+### USB Drive Scanner (`scan_usb_drive` / `build_usb_db`)
+Scans Xbox external drive's `.xvs` files for installed game packages. Captures CDN URLs, build versions, content IDs, package sizes, prior-version data. Saves to `usb_db.json`.
+
+### CDN Version Discovery (`process_cdn_version_discovery`, menu `[w]` submenu)
+Probes Xbox CDN (`assets.xboxlive.com`) for game package versions. Includes snapshot comparison, WU Catalog integration, and direct CDN download.
+
+### MS Store CDN Installer (`process_store_packages`, menu `[y]`)
+Fetches direct CDN links from `fe3cr.delivery.mp.microsoft.com` (Windows Update SOAP API). Accepts ProductId, CategoryId, PackageFamilyName, or store URL. Supports RP/Retail/WIF/WIS rings. Downloads and optionally installs `.appx`/`.msixbundle` packages.
+
+### GFWL Downloader (`process_gfwl_download`, menu `[z]`)
+Downloads Games for Windows - LIVE packages from `download-ssl.xbox.com`. Uses `gfwl_links.json` (244 titles, 1,775 packages). Extracts with 7-Zip and launches installer.
 
 ### Regional Pricing
-Price comparison across 10 regions (AR, BR, TR, IS, NG, TW, NZ, CO, HK, US). Fetches actual Xbox regional prices via `catalog.gamepass.com/v3/products` with different `market` parameters. Exchange rates convert to "Gift Card USD" using `GC_FACTOR = 0.81`.
-
-## File Layout
-
-```
-XCT.py                  # Everything: auth, API calls, HTML generation (~7000 lines)
-xbox_auth.py            # Standalone auth helper (legacy, not used by main flow)
-tags.json               # Community game tags (delisted, indie, demo flags)
-requirements.txt        # Python deps (ecdsa, pip_system_certs)
-accounts.json           # Account registry: gamertag → {uhs} (auto-generated)
-exchange_rates.json     # Cached exchange rates (auto-generated)
-version.txt             # Current version string; checked against GitHub on startup
-endpoints.json          # API reference doc (not loaded by XCT.py, documentation only)
-debug.log               # Auto-written each run: stdout tee + Python/platform info
-accounts/
-  XCT.html              # Combined HTML page (all accounts)
-  data.js               # Combined library data (JS constants)
-  {gamertag}/
-    XCT.html            # Per-account HTML page
-    data.js             # Per-account data
-    auth_token.txt      # XBL3.0 token (mp.microsoft.com RP)
-    auth_token_xl.txt   # XBL3.0 token (xboxlive.com RP)
-    xuid.txt            # Xbox User ID
-    xbox_auth_state.json # MSA refresh token + EC P-256 key + device ID
-    *.json              # Cached API responses (1-hour TTL)
-    history/            # Timestamped scan snapshots for changelog
-```
+Price comparison across 10 regions (AR, BR, TR, IS, NG, TW, NZ, CO, HK, US). Exchange rates convert to "Gift Card USD" using `GC_FACTOR = 0.81`.
 
 ## Key Implementation Details
 
 - **Global path state**: `set_account_paths(gamertag)` sets module-level path globals (`AUTH_TOKEN_FILE`, `ENTITLEMENTS_FILE`, etc.) to the current account's directory. Must be called before any per-account operations.
 - **HTTP helpers**: `api_request()` handles retries with exponential backoff on 429/5xx. `msa_request()` handles MSA auth calls. `_signed_request()` adds EC P-256 ProofOfPossession signatures.
 - **Caching**: All API responses cached as JSON with 1-hour TTL (`CACHE_MAX_AGE = 3600`). `is_cache_fresh()` checks file age.
-- **HTML output**: `build_html_template()` (line ~3022) returns a ~1300-line Python string containing all HTML, CSS, and JS — there are no separate template files. Data is loaded from a separate `data.js` file via `<script src>`. Edit the frontend entirely within this function.
+- **HTML output**: `build_html_template()` (line ~3156) returns a ~1700-line Python string containing all HTML, CSS, and JS — no separate template files. Data is loaded from a separate `data.js` file via `<script src>`. Edit the frontend entirely within this function.
 - **Community tags**: `tags.json` maps product IDs to flags (delisted/indie/demo). Loaded at startup into `DEFAULT_FLAGS` dict, embedded in `data.js` output.
-- **Interactive menu**: `interactive_menu()` is the main loop. Always entered after CLI arg processing (if any).
+- **Interactive menu**: `interactive_menu()` (line ~12964) is the main loop. Uses single-letter keys `[a]`–`[z]` plus `[0]` to quit.
+- **Raw disk I/O**: `_hd_open_read`/`_hd_open_write` use `CreateFileW` via `ctypes` for direct sector access. Requires admin.
+- **GUID encoding**: Xbox GPT uses mixed-endian GUID format. `_hd_encode_guid()`/`_hd_format_guid()` handle conversion.
+- **Windows Update SOAP**: `_fe3_get_cookie`, `_fe3_sync_updates`, `_fe3_get_url` implement the WU SOAP protocol for package resolution.
+
+## Key Endpoints
+
+- **Collections API** (`collections.mp.microsoft.com/v7.0`) — Full entitlements, requires device-bound token
+- **TitleHub** (`titlehub.xboxlive.com`) — Game metadata (names, images, platforms, GP status, achievements)
+- **Catalog v3** (`catalog.gamepass.com/v3/products`) — Rich metadata, single POST call
+- **Display Catalog** (`displaycatalog.md.mp.microsoft.com/v7.0`) — Legacy fallback catalog
+- **DynamicChannels** (`bronze.xboxservices.com`) — Marketplace channel listings
+- **WU Delivery** (`fe3cr.delivery.mp.microsoft.com`) — MS Store package CDN links via SOAP
+- **Xbox CDN** (`assets{N}.xboxlive.com`) — Game package downloads
+- **GFWL CDN** (`download-ssl.xbox.com`) — GFWL package downloads
+
+## File Layout
+
+```
+XCT.py                  # Everything: auth, API calls, HTML generation, disk tools (~13,600 lines)
+xbox_auth.py            # Standalone auth helper (legacy, not used by main flow)
+tags.json               # Community game tags (delisted, indie, demo flags)
+gfwl_links.json         # GFWL package database (244 titles, 1,775 packages)
+requirements.txt        # Python deps (ecdsa, pip_system_certs)
+accounts.json           # Account registry: gamertag → {uhs} (auto-generated)
+exchange_rates.json     # Cached exchange rates (auto-generated)
+usb_db.json             # Xbox USB drive scan data (auto-generated)
+version.txt             # Current version string; checked against GitHub on startup
+endpoints.json          # API reference doc (documentation only, not loaded by XCT.py)
+debug.log               # Auto-written each run
+accounts/
+  XCT.html + data.js    # Combined (all accounts)
+  {gamertag}/
+    XCT.html + data.js  # Per-account
+    auth_token.txt       # XBL3.0 token (mp.microsoft.com RP)
+    auth_token_xl.txt    # XBL3.0 token (xboxlive.com RP)
+    xuid.txt             # Xbox User ID
+    xbox_auth_state.json # MSA refresh token + EC P-256 key + device ID
+    *.json               # Cached API responses (1-hour TTL)
+    history/             # Timestamped scan snapshots for changelog
+```
 
 ## Key Constants
 
+- `VERSION` — Current version string (also in `version.txt`)
 - `CLIENT_ID` / `SCOPE` — MSA app credentials for device-code auth
 - `PLATFORM_MAP` — Maps Microsoft platform identifiers to display names
 - `GP_COLLECTIONS` — Game Pass collection UUIDs → display names
 - `MARKETPLACE_CHANNELS` — DynamicChannel names → display labels
 - `PRICE_REGIONS` — Market codes → locale/currency/symbol info
-- `GITHUB_RAW_BASE` / `UPDATE_FILES` — Auto-update: checks `version.txt`, downloads `[XCT.py, xbox_auth.py, requirements.txt, tags.json]`
+- `GFWL_71_TIDS` — Set of 71 GFWL achievement game title IDs
+- `GITHUB_RAW_BASE` / `UPDATE_FILES` — Auto-update: checks `version.txt`, downloads `[XCT.py, xbox_auth.py, requirements.txt, tags.json, gfwl_links.json]`
+
+## Versioning Convention
+
+- Feature releases: `x.x` (e.g. 1.4, 1.5)
+- Bugfix releases: `x.x.x` (e.g. 1.4.1)
+- Always bump version in: `XCT.py` (`VERSION` constant), `version.txt`, `README.md` (header + new changelog section at top)
+- Bugfix changelog section goes above the feature section (most recent first)

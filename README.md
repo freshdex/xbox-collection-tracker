@@ -2,6 +2,57 @@
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
 
+## What's New in v1.8
+
+- **CDN Sync — Community Package Database `[S]`** — Upload your scraped CDN.json to the Freshdex shared database and download entries from other contributors. Register a username, earn points for every new game version you contribute, and climb the leaderboard. Each sync uploads your local entries, receives new ones from the community, and merges everything into your CDN.json. The more people scrape their drives, the more complete the archive becomes.
+- **Windows PC CDN Scraper `[T]`** — Scrape CDN links from locally installed Windows PC games. Auto-detects all drives with `\XboxGames\` directories, reads `.xvs` package metadata from each installed game, and merges into CDN.json — same format as the Xbox USB scraper. No Xbox hard drive needed; if you have games installed on your PC, you can contribute to the CDN database.
+- **CDN Sync Tab in HTML** — New tab in the generated HTML page showing the full CDN database with sortable columns (click any header to sort asc/desc), search, and filters for platform, source (local/synced/remote), contributor, and version count (multi-version/single). Includes a **Leaderboard** sub-tab showing top contributors with points and last sync date, and a **Sync Log** sub-tab with full history of every sync operation.
+- **CDN Title Enrichment** — CDN.json entries are now automatically enriched with game names, developer, and publisher from Microsoft's Display Catalog API (no auth required). Runs during scraping, syncing, and HTML builds. Games that previously showed as raw store IDs (e.g. `9P0478ZTXLZ4`) now display their real name (e.g. "Blasphemous").
+- **GFWL Product Key Recovery `[P]`** — Recovers Games for Windows - LIVE product keys from `Token.bin` files using Windows DPAPI decryption. Includes 312 GFWL title name mappings, optional web lookup for missing names, and save-to-file export. Based on elusiveeagle's recover-gfwl-keys project.
+- **Windows Gaming Repair Tool `[Q]`** — Repairs Xbox and Gaming Services components via PowerShell. Options: re-register all Xbox app packages, reset Gaming Services (remove + reinstall), restart Xbox services (GamingServices, XblAuthManager, XblGameSave, XboxNetApiSvc), or run the full repair sequence.
+- **Windows Store Reset `[R]`** — Launches `wsreset.exe` to clear Microsoft Store cache without deleting apps or account settings. Fixes store download failures, apps not opening, and slow performance.
+- **Platform type tagging** — CDN entries now show proper platform names with raw codes: Xbox One (ERA), Xbox One / One X (Gen8GameCore), Xbox Series X|S (Gen9GameCore), Windows PC (PCGameCore), Windows UWP (UWP).
+- **CDN Sync tab pagination** — Page buttons every 500 entries instead of a hard cutoff.
+- **CDN Sync tab column sorting** — Click any column header to sort ascending/descending with green arrow indicators.
+- **CDN Sync tab version filter** — New dropdown to show only multi-version games, single-version games, or all.
+- **CDN Sync tab contributor column** — Shows your username for local/synced entries and "Community" for entries received from others, with a filter dropdown.
+- **Show all versions by default** — The CDN Sync tab now shows older archived versions by default (previously hidden behind a checkbox).
+
+---
+
+## How to Scrape and Sync CDN Packages
+
+XCT can extract CDN download URLs from Xbox game packages installed on your Xbox external hard drive or your Windows PC. These URLs point directly to Microsoft's CDN servers and can be used to download game packages without a console.
+
+### Step 1: Scrape your games
+
+**From an Xbox USB drive** — Plug your Xbox external hard drive into your PC. From the XCT menu, press `[L]` (Scrape XVCs from Xbox Hard Drive). The scraper reads `.xvs` metadata files directly from raw disk sectors using a built-in NTFS parser — no need to convert the drive to PC mode or mount it. Pick your drive from the list and it will extract CDN URLs, build versions, content IDs, and package sizes for every installed game.
+
+**From Windows PC games** — If you have Xbox games installed on your PC (in `\XboxGames\` folders), press `[T]` (Scrape XVCs from Windows Games). It auto-detects all drives with installed games and reads the same `.xvs` package files.
+
+Both options merge results into `CDN.json` in your XCT directory. Game names are automatically resolved from Microsoft's Display Catalog.
+
+### Step 2: Sync with the community
+
+Press `[S]` (Sync CDN.json with Freshdex CDN Database) to share your entries and receive entries from other contributors.
+
+On first sync, you'll register a username (or get an anonymous one). Each sync:
+1. **Uploads** your local CDN entries to the shared database
+2. **Downloads** new entries from other contributors that you don't have
+3. **Merges** everything into your local CDN.json
+
+### Points system
+
+You earn **1 point** for every new unique game+version entry you contribute. If you're the first to upload a game that nobody else has, that's a point. If you upload a new version of a game that already exists, that's also a point. Duplicate entries (same game, same buildId) that are already in the database earn nothing.
+
+The leaderboard ranks contributors by total points. View it in the CDN Sync tab of the HTML page, or in the terminal after each sync.
+
+### Step 3: View in HTML
+
+Press `[K]` (Build/Rebuild Index) to regenerate the HTML page. Open `accounts/XCT.html` and click the **CDN Sync** tab to browse all entries. Use column sorting, search, and filters to find specific games. The **Source** column shows whether each entry is local (yours, not yet synced), synced (uploaded to server), or remote (from other contributors).
+
+---
+
 ## What's New in v1.7
 
 - **Raw NTFS CDN Scraper — no mount, no conversion, no risk** — The `[E] Scrape CDN Links` tool in the Xbox Hard Drive menu now reads .xvs files directly from raw disk sectors using a built-in NTFS parser (MFT traversal, data run decoding, fixup arrays). Your Xbox drive **never needs to be converted to PC mode or mounted** — the scraper opens the physical disk read-only, walks the MFT, and extracts every .xvs file's CDN URLs, build versions, content IDs, and package metadata. Zero writes to the drive, zero risk of Windows NTFS corruption. Just plug in your Xbox drive, pick it, and scrape.
@@ -143,43 +194,52 @@ Run `python XCT.py` to open the interactive menu. Pick an option by typing its l
 
 | Option | What it does |
 |--------|-------------|
-| **1, 2, 3...** | Process a specific account (refreshes token + rebuilds library) |
-| **A** | Add a new Xbox account |
-| **R** | Refresh an existing account's login token |
-| **D** | Delete an account |
-| **\*** | Process all accounts at once |
-| **X** | Clear all cached data and rescan everything from scratch |
-| **B** | Rebuild HTML from cached data (no internet needed) |
-| **Q** | Quit |
+| **A** | Show gamertag list / process specific account |
+| **B** | Process all accounts |
+| **C** | Add a new Xbox account |
+| **D** | Refresh a token |
+| **E** | Refresh all tokens |
+| **F** | Delete a gamertag |
+| **G** | Clear cache + rescan all |
+| **K** | Build/Rebuild HTML Index |
+| **0** | Quit |
 
 ### Scan endpoints
 
 | Option | What it does |
 |--------|-------------|
-| **E** | Collections API only scan |
-| **T** | TitleHub only scan |
-| **S** | Content Access scan (finds Xbox 360 backward-compatible titles) |
+| **H** | Collections API only |
+| **I** | TitleHub only |
+| **J** | Content Access only (Xbox 360 backward-compatible titles) |
 
-### Catalogs
-
-| Option | What it does |
-|--------|-------------|
-| **G** | Game Pass catalog |
-| **M** | Full Marketplace scan (all channels, GB region) |
-| **L** | Full Marketplace scan (all channels, all 11 regions) |
-| **P** | Regional Prices (enrich existing marketplace data with price comparison) |
-| **N** | New Games catalog |
-| **C** | Coming Soon catalog |
-| **F** | Game Demos catalog |
-
-### Discovery
+### XVC CDN Scrape and Sync
 
 | Option | What it does |
 |--------|-------------|
-| **W** | Web Browse catalog (US only) |
-| **Z** | Web Browse catalog (all 7 regions — catches region exclusives) |
-| **H** | TitleHub ID scan (discovers hidden/delisted titles) |
-| **Y** | Full discovery (Marketplace + Browse + TitleHub, all regions) |
+| **L** | Scrape XVCs from Xbox One / Series X|S USB hard drive |
+| **T** | Scrape XVCs from locally installed Windows PC games |
+| **S** | Sync CDN.json with Freshdex CDN Database |
+
+### CDN Installers
+
+| Option | What it does |
+|--------|-------------|
+| **M** | Xbox One / Series X|S CDN Installer |
+| **N** | MS Store (Win8/8.1/10) CDN Installer |
+
+### GFWL
+
+| Option | What it does |
+|--------|-------------|
+| **O** | GFWL CDN Installer |
+| **P** | Recover GFWL Product Keys |
+
+### Windows/Store
+
+| Option | What it does |
+|--------|-------------|
+| **Q** | Windows Gaming Repair Tool |
+| **R** | Windows Store Reset Tool |
 
 ### Command line shortcuts
 
@@ -195,7 +255,7 @@ python XCT.py build              # Rebuild HTML without fetching data
 
 ## The HTML page
 
-The generated page (`accounts/XCT.html`) has six tabs:
+The generated page (`accounts/XCT.html`) has these tabs:
 
 ### Library
 
@@ -230,6 +290,14 @@ History of your scans showing what changed each time (games added, removed, or m
 ### Gamertags
 
 Per-account stats table showing item counts, game/DLC counts, and total values for each gamertag.
+
+### CDN Sync
+
+Browse the community CDN package database. Three sub-tabs: **CDN Entries** (sortable table with filters for platform, source, contributor, and version count), **Leaderboard** (top contributors ranked by points), and **Sync Log** (history of sync operations).
+
+### GFWL
+
+Searchable list of all 71 Games for Windows - LIVE achievement games with manifest download links per package.
 
 ---
 
@@ -266,21 +334,28 @@ Tokens expire after approximately 16 hours. XCT proactively checks token age bef
 ## File structure
 
 ```
-XCT.py                  # Main script
-xbox_auth.py            # Standalone auth helper
-tags.json               # Community game tags (delisted, indie, etc.)
-requirements.txt        # Python dependencies
-accounts.json           # Account registry (auto-generated)
-exchange_rates.json     # Cached exchange rates (auto-generated)
+XCT.py                    # Main script
+xbox_auth.py              # Standalone auth helper
+tags.json                 # Community game tags (delisted, indie, etc.)
+gfwl_links.json           # GFWL package database (244 titles, 1,775 packages)
+requirements.txt          # Python dependencies
+accounts.json             # Account registry (auto-generated)
+exchange_rates.json       # Cached exchange rates (auto-generated)
+CDN.json                  # Scraped CDN package data (auto-generated)
+cdn_sync_config.json      # CDN sync username + API key (auto-generated)
+cdn_sync_meta.json        # Per-entry source tracking (auto-generated)
+cdn_sync_log.json         # Sync operation history (auto-generated)
+cdn_leaderboard_cache.json # Leaderboard cache (auto-generated)
+usb_db.json               # Xbox USB drive scan data (auto-generated)
 accounts/
-  XCT.html              # Combined HTML page (all accounts)
-  data.js               # Combined library data
+  XCT.html                # Combined HTML page (all accounts)
+  data.js                 # Combined library data
   {gamertag}/
-    XCT.html            # Per-account HTML page
-    data.js             # Per-account library data
-    *.json              # Cached API responses (1-hour TTL)
-    auth_token.txt      # Auth tokens
-    xbox_auth_state.json # Saved login credentials
+    XCT.html              # Per-account HTML page
+    data.js               # Per-account library data
+    *.json                # Cached API responses (1-hour TTL)
+    auth_token.txt        # Auth tokens
+    xbox_auth_state.json  # Saved login credentials
 ```
 
 ## Community Tags

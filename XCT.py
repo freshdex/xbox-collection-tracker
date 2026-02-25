@@ -30,6 +30,7 @@ import io
 import json
 import os
 import re
+import secrets
 import ssl
 import subprocess
 import struct
@@ -59,7 +60,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "1.7"
+VERSION = "1.8"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -224,6 +225,11 @@ CACHE_MAX_AGE = 3600  # 1 hour
 # Default item flags — loaded from community-editable tags.json
 TAGS_FILE = os.path.join(SCRIPT_DIR, "tags.json")
 EXCHANGE_RATES_FILE = os.path.join(SCRIPT_DIR, "exchange_rates.json")
+CDN_SYNC_CONFIG_FILE = os.path.join(SCRIPT_DIR, "cdn_sync_config.json")
+CDN_SYNC_API_BASE = "https://cdn.freshdex.app/api/v1"
+CDN_LEADERBOARD_CACHE_FILE = os.path.join(SCRIPT_DIR, "cdn_leaderboard_cache.json")
+CDN_SYNC_META_FILE = os.path.join(SCRIPT_DIR, "cdn_sync_meta.json")
+CDN_SYNC_LOG_FILE = os.path.join(SCRIPT_DIR, "cdn_sync_log.json")
 
 def load_default_flags():
     if os.path.isfile(TAGS_FILE):
@@ -3223,6 +3229,9 @@ def build_html_template(gamertag=""):
         '.gfwl-mlink:hover{background:#2a5c42}\n'
         '.gfwl-base{background:#1e3a2e;color:#4ec9a0;padding:1px 5px;border-radius:3px;font-size:10px}\n'
         '.gfwl-dlc{background:#1e2a3a;color:#4ea0c9;padding:1px 5px;border-radius:3px;font-size:10px}\n'
+        '.sub-tab{padding:6px 14px;border:1px solid #333;background:#1a1a1a;color:#aaa;border-radius:6px;font-size:12px;cursor:pointer}\n'
+        '.sub-tab:hover{border-color:#555;color:#e0e0e0}\n'
+        '.sub-tab.active{border-color:#107c10;color:#107c10;background:#0a1f0a}\n'
         '.cb-drop{position:relative;display:inline-block}\n'
         '.cb-btn{padding:7px 10px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap;user-select:none}\n'
         '.cb-btn:hover{border-color:#555}\n'
@@ -3397,6 +3406,7 @@ def build_html_template(gamertag=""):
         '<div class="tab" id="tab-hist" onclick="switchTab(\'history\',this)" style="display:none">Scan Log <span class="cnt" id="tab-hist-cnt"></span></div>\n'
         '<div class="tab" id="tab-acct" onclick="switchTab(\'gamertags\',this)" style="display:none">Gamertags <span class="cnt" id="tab-acct-cnt"></span></div>\n'
         '<div class="tab" id="tab-gfwl" onclick="switchTab(\'gfwl\',this)" style="display:none">GFWL <span class="cnt" id="tab-gfwl-cnt"></span></div>\n'
+        '<div class="tab" id="tab-cdnsync" onclick="switchTab(\'cdnsync\',this)" style="display:none">CDN Sync <span class="cnt" id="tab-cdnsync-cnt"></span></div>\n'
         '<div class="tab" id="tab-imp" onclick="switchTab(\'imports\',this)" style="display:none">Imports <span class="cnt" id="tab-imp-cnt"></span></div>\n'
         '<select id="lib-cur" class="tab-cur" onchange="_onCur()">'
         '<option value="USD" selected>USD $</option>'
@@ -3613,6 +3623,34 @@ def build_html_template(gamertag=""):
         '<p class="sub" id="gfwl-sub"></p>\n'
         '<div class="search-row"><input type="text" id="gfwl-search" placeholder="Search GFWL games..." oninput="filterGFWL()"></div>\n'
         '<div id="gfwl-list"></div>\n'
+        '</div>\n'
+
+        # -- CDN Sync section (entry browser + leaderboard) --
+        '<div class="section" id="cdnsync">\n'
+        '<h2>CDN Sync Database</h2>\n'
+        '<p class="sub" id="cdnsync-sub"></p>\n'
+        '<div style="display:flex;gap:8px;margin:10px 0 14px 0">\n'
+        '<button class="sub-tab active" id="cdnsync-tab-entries" onclick="_cdnSyncTab(\'entries\')">CDN Entries</button>\n'
+        '<button class="sub-tab" id="cdnsync-tab-lb" onclick="_cdnSyncTab(\'lb\')">Leaderboard</button>\n'
+        '<button class="sub-tab" id="cdnsync-tab-log" onclick="_cdnSyncTab(\'log\')">Sync Log</button>\n'
+        '</div>\n'
+        '<div id="cdnsync-entries">\n'
+        '<div class="search-row"><input type="text" id="cdnsync-search" placeholder="Search by game name, store ID, build version..." oninput="filterCDNSync()"></div>\n'
+        '<div style="display:flex;gap:10px;margin:6px 0 10px 0;flex-wrap:wrap">\n'
+        '<select id="cdnsync-plat" onchange="filterCDNSync()"><option value="">All platforms</option></select>\n'
+        '<select id="cdnsync-src" onchange="filterCDNSync()"><option value="">All sources</option><option value="local">Local (not synced)</option><option value="synced">Synced (on server)</option><option value="remote">Remote (from others)</option></select>\n'
+        '<select id="cdnsync-verfilter" onchange="filterCDNSync()"><option value="">All games</option><option value="multi">Multi-version only</option><option value="single">Single version only</option></select>\n'
+        '<select id="cdnsync-who" onchange="filterCDNSync()"><option value="">All contributors</option></select>\n'
+        '<label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#aaa"><input type="checkbox" id="cdnsync-ver" checked onchange="filterCDNSync()"> Show all versions</label>\n'
+        '</div>\n'
+        '<div id="cdnsync-list"></div>\n'
+        '</div>\n'
+        '<div id="cdnsync-lb" style="display:none">\n'
+        '<div id="cdnlb-list"></div>\n'
+        '</div>\n'
+        '<div id="cdnsync-log" style="display:none">\n'
+        '<div id="cdnlog-list"></div>\n'
+        '</div>\n'
         '</div>\n'
 
         # -- Context menu + Modal --
@@ -4842,9 +4880,215 @@ def build_html_template(gamertag=""):
         "  el.innerHTML=h;\n"
         "}\n"
 
+        # -- CDN Sync tab logic (entry browser + leaderboard) --
+        "let _cdnSyncFlat=[];\n"
+        "let _cdnSyncQ='';\n"
+        "let _cdnSortCol='name',_cdnSortDir='asc';\n"
+        "let _cdnMultiSids=new Set();\n"
+        "function _cdnSyncTab(which){\n"
+        "  document.getElementById('cdnsync-entries').style.display=which==='entries'?'':'none';\n"
+        "  document.getElementById('cdnsync-lb').style.display=which==='lb'?'':'none';\n"
+        "  document.getElementById('cdnsync-log').style.display=which==='log'?'':'none';\n"
+        "  document.getElementById('cdnsync-tab-entries').className='sub-tab'+(which==='entries'?' active':'');\n"
+        "  document.getElementById('cdnsync-tab-lb').className='sub-tab'+(which==='lb'?' active':'');\n"
+        "  document.getElementById('cdnsync-tab-log').className='sub-tab'+(which==='log'?' active':'');\n"
+        "}\n"
+        "function _cdnSzFmt(b){if(!b)return'-';if(b>=1e9)return(b/1e9).toFixed(1)+' GB';if(b>=1e6)return(b/1e6).toFixed(0)+' MB';return(b/1024).toFixed(0)+' KB';}\n"
+        "const _CDN_PLAT={'ERA':'Xbox One','Gen8GameCore':'Xbox One / One X','Gen9GameCore':'Xbox Series X|S','PCGameCore':'Windows PC','UWP':'Windows UWP'};\n"
+        "function _cdnPlat(p){return _CDN_PLAT[p]?_CDN_PLAT[p]+' ('+p+')':p||'-';}\n"
+        "function _cdnSyncBuildFlat(){\n"
+        "  _cdnSyncFlat=[];_cdnMultiSids=new Set();\n"
+        "  if(typeof CDN_DB==='undefined'||!CDN_DB)return;\n"
+        "  const syncMeta=typeof CDN_SYNC_META!=='undefined'?CDN_SYNC_META:{};\n"
+        "  const syncUser=typeof CDN_SYNC_USER!=='undefined'?CDN_SYNC_USER:'';\n"
+        "  const libMap={};\n"
+        "  if(typeof LIB!=='undefined')LIB.forEach(x=>{libMap[x.productId]=x.title});\n"
+        "  Object.keys(CDN_DB).forEach(sid=>{\n"
+        "    if(sid.startsWith('_content_'))return;\n"
+        "    const rec=CDN_DB[sid];\n"
+        "    const name=libMap[sid]||rec.title||rec.packageName||sid;\n"
+        "    const meta=syncMeta[sid]||{};\n"
+        "    const topSrc=meta.source||'local';\n"
+        "    const who=topSrc==='remote'?'Community':syncUser||'You';\n"
+        "    const hasVer=(rec.versions||[]).filter(v=>v.buildId!==rec.buildId).length>0;\n"
+        "    if(hasVer)_cdnMultiSids.add(sid);\n"
+        "    _cdnSyncFlat.push({sid:sid,name:name,bid:rec.buildId||'',bv:rec.buildVersion||'',\n"
+        "      plat:rec.platform||'',sz:rec.sizeBytes||0,urls:rec.cdnUrls||[],\n"
+        "      cid:rec.contentId||'',pkg:rec.packageName||'',src:topSrc,who:who,\n"
+        "      ct:rec.contentTypes||'',dev:rec.devices||'',lang:rec.language||'',\n"
+        "      planId:rec.planId||'',scrapedAt:rec.scrapedAt||'',\n"
+        "      priorBv:rec.priorBuildVersion||'',priorBid:rec.priorBuildId||'',isVer:false});\n"
+        "    (rec.versions||[]).forEach(v=>{\n"
+        "      if(v.buildId===rec.buildId)return;\n"
+        "      const vSrc=(meta.versions&&meta.versions[v.buildId])||topSrc;\n"
+        "      const vWho=vSrc==='remote'?'Community':syncUser||'You';\n"
+        "      _cdnSyncFlat.push({sid:sid,name:name,bid:v.buildId||'',bv:v.buildVersion||'',\n"
+        "        plat:v.platform||rec.platform||'',sz:v.sizeBytes||0,urls:v.cdnUrls||[],\n"
+        "        cid:rec.contentId||'',pkg:rec.packageName||'',src:vSrc,who:vWho,\n"
+        "        ct:rec.contentTypes||'',dev:rec.devices||'',lang:rec.language||'',\n"
+        "        planId:rec.planId||'',scrapedAt:v.scrapedAt||'',\n"
+        "        priorBv:v.priorBuildVersion||'',priorBid:v.priorBuildId||'',isVer:true});\n"
+        "    });\n"
+        "  });\n"
+        "  _cdnSyncFlat.sort((a,b)=>a.name.localeCompare(b.name)||a.bv.localeCompare(b.bv));\n"
+        "  const plats=new Set(_cdnSyncFlat.map(e=>e.plat).filter(Boolean));\n"
+        "  const sel=document.getElementById('cdnsync-plat');\n"
+        "  if(sel)[...plats].sort().forEach(p=>{const o=document.createElement('option');o.value=p;o.textContent=_cdnPlat(p);sel.appendChild(o)});\n"
+        "  const whos=new Set(_cdnSyncFlat.map(e=>e.who).filter(Boolean));\n"
+        "  const whoSel=document.getElementById('cdnsync-who');\n"
+        "  if(whoSel)[...whos].sort().forEach(w=>{const o=document.createElement('option');o.value=w;o.textContent=w;whoSel.appendChild(o)});\n"
+        "}\n"
+        "function filterCDNSync(){\n"
+        "  _cdnSyncQ=(document.getElementById('cdnsync-search').value||'').toLowerCase().trim();\n"
+        "  _cdnPage=0;renderCDNSync();\n"
+        "}\n"
+        "function _cdnSortBy(col){if(_cdnSortCol===col){_cdnSortDir=_cdnSortDir==='asc'?'desc':'asc'}else{_cdnSortCol=col;_cdnSortDir='asc'}renderCDNSync()}\n"
+        "let _cdnPage=0;\n"
+        "function renderCDNSync(){\n"
+        "  const el=document.getElementById('cdnsync-list');\n"
+        "  if(!el||!_cdnSyncFlat.length)return;\n"
+        "  const showVer=document.getElementById('cdnsync-ver').checked;\n"
+        "  const platF=document.getElementById('cdnsync-plat').value;\n"
+        "  const srcF=document.getElementById('cdnsync-src').value;\n"
+        "  const verF=document.getElementById('cdnsync-verfilter').value;\n"
+        "  const whoF=document.getElementById('cdnsync-who').value;\n"
+        "  let items=_cdnSyncFlat.filter(e=>{\n"
+        "    if(!showVer&&e.isVer)return false;\n"
+        "    if(platF&&e.plat!==platF)return false;\n"
+        "    if(srcF&&e.src!==srcF)return false;\n"
+        "    if(whoF&&e.who!==whoF)return false;\n"
+        "    if(verF==='multi'&&!_cdnMultiSids.has(e.sid))return false;\n"
+        "    if(verF==='single'&&_cdnMultiSids.has(e.sid))return false;\n"
+        "    if(_cdnSyncQ){\n"
+        "      const hay=(e.name+' '+e.sid+' '+_xvd(e.bv)+' '+_cdnPlat(e.plat)+' '+e.pkg+' '+e.who).toLowerCase();\n"
+        "      if(!hay.includes(_cdnSyncQ))return false;\n"
+        "    }\n"
+        "    return true;\n"
+        "  });\n"
+        "  const d=_cdnSortDir==='asc'?1:-1;\n"
+        "  const cmp={name:(a,b)=>a.name.localeCompare(b.name)*d||a.bv.localeCompare(b.bv),\n"
+        "    sid:(a,b)=>a.sid.localeCompare(b.sid)*d,\n"
+        "    bv:(a,b)=>a.bv.localeCompare(b.bv)*d||a.name.localeCompare(b.name),\n"
+        "    plat:(a,b)=>a.plat.localeCompare(b.plat)*d||a.name.localeCompare(b.name),\n"
+        "    sz:(a,b)=>((a.sz||0)-(b.sz||0))*d||a.name.localeCompare(b.name),\n"
+        "    src:(a,b)=>a.src.localeCompare(b.src)*d||a.name.localeCompare(b.name),\n"
+        "    who:(a,b)=>a.who.localeCompare(b.who)*d||a.name.localeCompare(b.name),\n"
+        "    date:(a,b)=>(a.scrapedAt||'').localeCompare(b.scrapedAt||'')*d||a.name.localeCompare(b.name)};\n"
+        "  if(cmp[_cdnSortCol])items.sort(cmp[_cdnSortCol]);\n"
+        "  const total=_cdnSyncFlat.filter(e=>!e.isVer).length;\n"
+        "  const shown=items.filter(e=>!e.isVer).length;\n"
+        "  document.getElementById('cdnsync-sub').textContent=total+' games · '+_cdnSyncFlat.length+' total entries · '+items.length+' shown';\n"
+        "  const PAGE=500;\n"
+        "  const pages=Math.ceil(items.length/PAGE)||1;\n"
+        "  if(_cdnPage>=pages)_cdnPage=pages-1;\n"
+        "  if(_cdnPage<0)_cdnPage=0;\n"
+        "  const display=items.slice(_cdnPage*PAGE,(_cdnPage+1)*PAGE);\n"
+        "  function _sa(c,l){return '<th class=\"sortable'+(_cdnSortCol===c?(_cdnSortDir==='asc'?' sort-asc':' sort-desc'):'')+'\" onclick=\"_cdnSortBy(\\''+c+'\\')\"'+'>'+l+'</th>'}\n"
+        "  let h='<table class=\"gtbl\" style=\"width:100%;font-size:12px\"><thead><tr>'\n"
+        "    +_sa('name','Game')+_sa('sid','Store ID')+_sa('bv','Build Version')+_sa('plat','Platform')\n"
+        "    +_sa('sz','Size')+_sa('who','Contributor')+_sa('date','Date Scraped')+'<th>CDN URLs</th>'+_sa('src','Source')+'</tr></thead><tbody>';\n"
+        "  display.forEach(e=>{\n"
+        "    const ver=_xvd(e.bv);\n"
+        "    const sz=_cdnSzFmt(e.sz);\n"
+        "    const srcBadge=e.src==='remote'?'<span style=\"color:#4fc3f7\">remote</span>':e.src==='synced'?'<span style=\"color:#81c784\">synced</span>':'<span style=\"color:#888\">local</span>';\n"
+        "    const urlList=Array.isArray(e.urls)?e.urls:(e.urls?[e.urls]:[]);\n"
+        "    const urlHtml=urlList.length?urlList.slice(0,2).map(u=>`<a href=\"${u}\" target=\"_blank\" style=\"color:#81c784;font-size:11px;word-break:break-all\">${u.length>60?u.slice(0,60)+'...':u}</a>`).join('<br>')+(urlList.length>2?`<br><span style=\"color:#888\">+${urlList.length-2} more</span>`:''):'<span style=\"color:#555\">-</span>';\n"
+        "    const cls=e.isVer?' style=\"opacity:0.65\"':'';\n"
+        "    const dt=e.scrapedAt?e.scrapedAt.substring(0,10):'-';\n"
+        "    h+=`<tr${cls}><td>${e.name}${e.isVer?' <span style=\"color:#888;font-size:10px\">(older)</span>':''}</td>`;\n"
+        "    h+=`<td class=\"gt-mono\" style=\"font-size:11px\">${e.sid}</td>`;\n"
+        "    h+=`<td class=\"gt-mono\" style=\"font-size:11px\" title=\"buildId: ${e.bid}\">${ver||e.bid.slice(0,12)}</td>`;\n"
+        "    h+=`<td>${_cdnPlat(e.plat)}</td><td class=\"num\">${sz}</td>`;\n"
+        "    h+=`<td style=\"font-size:11px\">${e.who}</td><td class=\"gt-mono\" style=\"font-size:11px\">${dt}</td>`;\n"
+        "    h+=`<td>${urlHtml}</td><td>${srcBadge}</td></tr>`;\n"
+        "  });\n"
+        "  h+='</tbody></table>';\n"
+        "  if(pages>1){\n"
+        "    h+='<div style=\"display:flex;justify-content:center;gap:6px;margin:12px 0;flex-wrap:wrap\">';\n"
+        "    for(let i=0;i<pages;i++){h+=`<button style=\"padding:4px 10px;background:${i===_cdnPage?'#107c10':'#333'};color:#eee;border:1px solid #555;border-radius:4px;cursor:pointer\" onclick=\"_cdnPage=${i};renderCDNSync()\">${i+1}</button>`}\n"
+        "    h+='</div>';\n"
+        "  }\n"
+        "  el.innerHTML=h;\n"
+        "}\n"
+        "function renderCDNLeaderboard(){\n"
+        "  const el=document.getElementById('cdnlb-list');\n"
+        "  if(!el)return;\n"
+        "  const hasLb=typeof CDN_LEADERBOARD!=='undefined'&&CDN_LEADERBOARD.length;\n"
+        "  const hasCdn=_cdnSyncFlat.length>0;\n"
+        "  if(!hasLb&&!hasCdn)return;\n"
+        "  document.getElementById('tab-cdnsync').style.display='';\n"
+        "  const games=_cdnSyncFlat.filter(e=>!e.isVer).length;\n"
+        "  document.getElementById('tab-cdnsync-cnt').textContent=games||'';\n"
+        "  if(!hasLb){el.innerHTML='<p style=\"color:#888\">No leaderboard data. Run [s] Sync to fetch.</p>';return;}\n"
+        "  const s=typeof CDN_LB_STATS!=='undefined'?CDN_LB_STATS:{};\n"
+        "  const medals=['\\u{1F947}','\\u{1F948}','\\u{1F949}'];\n"
+        "  let h='<p style=\"color:#aaa;margin-bottom:10px\">'+(s.total_contributors||0)+' contributors \\u00B7 '+(s.total_entries||0).toLocaleString()+' entries \\u00B7 '+(s.total_games||0).toLocaleString()+' games in database</p>';\n"
+        "  h+='<table class=\"gtbl\" style=\"width:100%;max-width:600px\"><thead><tr><th style=\"width:50px\">Rank</th><th>Contributor</th><th class=\"num\">Points</th><th>Last Sync</th></tr></thead><tbody>';\n"
+        "  CDN_LEADERBOARD.forEach((e,i)=>{\n"
+        "    const rank=i<3?medals[i]:'#'+(i+1);\n"
+        "    const ls=e.lastSync?new Date(e.lastSync).toLocaleDateString():'-';\n"
+        "    h+=`<tr><td style=\"text-align:center\">${rank}</td><td>${e.username}</td><td class=\"num\">${e.points.toLocaleString()}</td><td>${ls}</td></tr>`;\n"
+        "  });\n"
+        "  h+='</tbody></table>';\n"
+        "  el.innerHTML=h;\n"
+        "}\n"
+        "function renderCDNSyncLog(){\n"
+        "  const el=document.getElementById('cdnlog-list');\n"
+        "  if(!el)return;\n"
+        "  const log=typeof CDN_SYNC_LOG!=='undefined'?CDN_SYNC_LOG:[];\n"
+        "  if(!log.length){el.innerHTML='<p style=\"color:#888\">No sync history yet. Run [s] Sync to start.</p>';return;}\n"
+        "  const libMap={};\n"
+        "  if(typeof LIB!=='undefined')LIB.forEach(x=>{libMap[x.productId]=x.title});\n"
+        "  const cdnMap=typeof CDN_DB!=='undefined'&&CDN_DB?CDN_DB:{};\n"
+        "  function _gn(sid){return libMap[sid]||(cdnMap[sid]&&(cdnMap[sid].title||cdnMap[sid].packageName))||sid;}\n"
+        "  let h='<p style=\"color:#aaa;margin-bottom:14px\">'+log.length+' sync operation'+(log.length!==1?'s':'')+' logged</p>';\n"
+        "  log.forEach((e,i)=>{\n"
+        "    const d=e.ts?new Date(e.ts).toLocaleString():'-';\n"
+        "    const uGames=(e.uploadedIds||[]).map(s=>_gn(s)).sort();\n"
+        "    const rGames=(e.receivedIds||[]).map(s=>_gn(s)).sort();\n"
+        "    const rid='cdnlog-d'+i;\n"
+        "    const hasGames=uGames.length+rGames.length>0;\n"
+        "    h+='<div style=\"border:1px solid #333;border-radius:8px;margin-bottom:12px;background:#111\">';\n"
+        "    h+='<div style=\"display:flex;align-items:center;justify-content:space-between;padding:12px 16px;cursor:pointer\" onclick=\"var d=document.getElementById(\\''+rid+'\\');var a=this.querySelector(\\'span.cdnlog-arrow\\');if(d.style.display===\\'none\\'){d.style.display=\\'\\';a.textContent=\\'\\u25BC\\'}else{d.style.display=\\'none\\';a.textContent=\\'\\u25B6\\'}\">';\n"
+        "    h+='<div style=\"display:flex;align-items:center;gap:12px;flex-wrap:wrap\">';\n"
+        "    h+=`<span style=\"color:#e0e0e0;font-weight:600\">${e.user||'anonymous'}</span>`;\n"
+        "    h+=`<span style=\"color:#888;font-size:12px\">${d}</span>`;\n"
+        "    h+='</div>';\n"
+        "    h+='<div style=\"display:flex;align-items:center;gap:16px;font-size:13px\">';\n"
+        "    if(e.uploaded)h+=`<span style=\"color:#81c784\">\\u2191 ${e.uploaded} uploaded</span>`;\n"
+        "    if(e.received)h+=`<span style=\"color:#4fc3f7\">\\u2193 ${e.received} received</span>`;\n"
+        "    h+=`<span style=\"color:#ffd740\">+${e.ptsEarned||0} pts</span>`;\n"
+        "    h+=`<span style=\"color:#888\">(${(e.totalPts||0).toLocaleString()} total)</span>`;\n"
+        "    h+='<span class=\"cdnlog-arrow\" style=\"color:#888;font-size:11px\">\\u25B6</span>';\n"
+        "    h+='</div></div>';\n"
+        "    h+=`<div id=\"${rid}\" style=\"display:none;padding:0 16px 14px 16px;border-top:1px solid #222\">`;\n"
+        "    h+='<div style=\"display:flex;gap:24px;flex-wrap:wrap;margin-top:10px;font-size:12px;color:#888\">';\n"
+        "    h+=`<div>Dupes skipped: <span style=\"color:#ccc\">${(e.dupes||0).toLocaleString()}</span></div>`;\n"
+        "    h+=`<div>DB entries: <span style=\"color:#ccc\">${(e.dbEntries||0).toLocaleString()}</span></div>`;\n"
+        "    h+=`<div>DB games: <span style=\"color:#ccc\">${(e.dbGames||0).toLocaleString()}</span></div>`;\n"
+        "    h+='</div>';\n"
+        "    if(uGames.length){\n"
+        "      h+='<div style=\"margin-top:12px\"><div style=\"color:#81c784;font-size:12px;margin-bottom:6px\">\\u2191 Uploaded ('+uGames.length+')</div>';\n"
+        "      h+='<div style=\"display:flex;flex-wrap:wrap;gap:4px\">';\n"
+        "      uGames.forEach(g=>{h+=`<span style=\"display:inline-block;padding:2px 8px;background:#0a1f0a;border:1px solid #1b5e20;border-radius:4px;font-size:11px;color:#a5d6a7\">${g}</span>`;});\n"
+        "      h+='</div></div>';\n"
+        "    }\n"
+        "    if(rGames.length){\n"
+        "      h+='<div style=\"margin-top:12px\"><div style=\"color:#4fc3f7;font-size:12px;margin-bottom:6px\">\\u2193 Received ('+rGames.length+')</div>';\n"
+        "      h+='<div style=\"display:flex;flex-wrap:wrap;gap:4px\">';\n"
+        "      rGames.forEach(g=>{h+=`<span style=\"display:inline-block;padding:2px 8px;background:#0a1a2f;border:1px solid #0d47a1;border-radius:4px;font-size:11px;color:#90caf9\">${g}</span>`;});\n"
+        "      h+='</div></div>';\n"
+        "    }\n"
+        "    if(!hasGames)h+='<div style=\"margin-top:10px;color:#555;font-size:12px\">No game details recorded for this sync.</div>';\n"
+        "    h+='</div></div>';\n"
+        "  });\n"
+        "  el.innerHTML=h;\n"
+        "}\n"
+
         '_loadImports().catch(()=>{}).then(()=>{\n'
         'try{initDropdowns();filterLib();filterPH();filterGP();filterMKT();renderHistory();renderImports();}catch(e){console.error("init error",e)}\n'
         'renderGFWL();\n'
+        '_cdnSyncBuildFlat();renderCDNSync();renderCDNLeaderboard();renderCDNSyncLog();\n'
         "document.getElementById('loading-overlay').style.display='none';\n"
         '});\n'
         '</script></body></html>'
@@ -4887,6 +5131,16 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
             cdn_db = load_json(cdn_db_file) or {}
         except Exception:
             pass
+    if cdn_db:
+        before = sum(1 for k, v in cdn_db.items() if not k.startswith("_content_") and not v.get("title"))
+        if before:
+            _enrich_cdn_titles(cdn_db)
+            after = sum(1 for k, v in cdn_db.items() if not k.startswith("_content_") and not v.get("title"))
+            if after < before:
+                try:
+                    save_json(cdn_db_file, cdn_db)
+                except Exception:
+                    pass
 
     # Load GFWL achievement games catalog
     GFWL_71_TIDS = {
@@ -4922,6 +5176,45 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
         except Exception:
             pass
 
+    # Load CDN leaderboard cache if available
+    cdn_leaderboard = []
+    cdn_lb_stats = {}
+    if os.path.isfile(CDN_LEADERBOARD_CACHE_FILE):
+        try:
+            lb_cache = load_json(CDN_LEADERBOARD_CACHE_FILE) or {}
+            cdn_leaderboard = lb_cache.get("leaderboard", [])
+            cdn_lb_stats = {
+                "total_contributors": lb_cache.get("total_contributors", 0),
+                "total_entries": lb_cache.get("total_entries", 0),
+                "total_games": lb_cache.get("total_games", 0),
+            }
+        except Exception:
+            pass
+
+    # Load CDN sync metadata (tracks local vs remote source per entry)
+    cdn_sync_meta = {}
+    if os.path.isfile(CDN_SYNC_META_FILE):
+        try:
+            cdn_sync_meta = load_json(CDN_SYNC_META_FILE) or {}
+        except Exception:
+            pass
+
+    # Load CDN sync username
+    cdn_sync_user = ""
+    if os.path.isfile(CDN_SYNC_CONFIG_FILE):
+        try:
+            cdn_sync_user = (load_json(CDN_SYNC_CONFIG_FILE) or {}).get("username", "")
+        except Exception:
+            pass
+
+    # Load CDN sync log (history of sync operations)
+    cdn_sync_log = []
+    if os.path.isfile(CDN_SYNC_LOG_FILE):
+        try:
+            cdn_sync_log = load_json(CDN_SYNC_LOG_FILE) or []
+        except Exception:
+            pass
+
     content = (
         "const LIB=" + json.dumps(library, ensure_ascii=False) + ";\n"
         "const GP=" + json.dumps(gp_items, ensure_ascii=False) + ";\n"
@@ -4934,6 +5227,11 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
         "const GC_FACTOR=" + str(GC_FACTOR) + ";\n"
         "const CDN_DB=" + json.dumps(cdn_db, ensure_ascii=False) + ";\n"
         "const GFWL=" + json.dumps(gfwl_data, ensure_ascii=False) + ";\n"
+        "const CDN_LEADERBOARD=" + json.dumps(cdn_leaderboard, ensure_ascii=False) + ";\n"
+        "const CDN_LB_STATS=" + json.dumps(cdn_lb_stats, ensure_ascii=False) + ";\n"
+        "const CDN_SYNC_META=" + json.dumps(cdn_sync_meta, ensure_ascii=False) + ";\n"
+        "const CDN_SYNC_USER=" + json.dumps(cdn_sync_user, ensure_ascii=False) + ";\n"
+        "const CDN_SYNC_LOG=" + json.dumps(cdn_sync_log, ensure_ascii=False) + ";\n"
     )
     with open(data_js_path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -9205,8 +9503,9 @@ def _ntfs_get_filename(record):
     return None
 
 
-def _ntfs_get_file_data(handle, record, cluster_size, partition_start_lba):
-    """Read $DATA content from an MFT record. Returns bytes or None."""
+def _ntfs_get_file_data(handle, record, cluster_size, partition_start_lba, max_size=0):
+    """Read $DATA content from an MFT record. Returns bytes or None.
+    If max_size > 0, skip non-resident files larger than max_size bytes."""
     for atype, is_res, info in _ntfs_parse_attributes(record):
         if atype != 0x80:
             continue
@@ -9214,6 +9513,8 @@ def _ntfs_get_file_data(handle, record, cluster_size, partition_start_lba):
             # Resident $DATA
             return info["data"]
         # Non-resident $DATA
+        if max_size and info["real_size"] > max_size:
+            return None  # file too large, skip
         runs = _ntfs_decode_data_runs(info["runs_data"])
         if not runs:
             return None
@@ -9349,6 +9650,9 @@ def _hd_scrape_cdn_links(disk_num=None, device_id=None):
     handle = _hd_open_read(device_id)
     if handle is None:
         return
+
+    xvs_items = []
+    deleted_xvs_count = 0
 
     try:
         # Read GPT header (LBA 1)
@@ -9609,8 +9913,14 @@ def _hd_scrape_cdn_links(disk_num=None, device_id=None):
 
                     # Potential .xvs file — read its data
                     label = fname or f"record#{records_scanned}"
-                    print(f"\r  MFT: {records_scanned}/{total_records} records, {len(xvs_items)} .xvs found — {label}", end="")
-                    file_data = _ntfs_get_file_data(handle, rec_fixed, cluster_size, partition_start_lba)
+                    print(f"\r  MFT: {records_scanned}/{total_records} records, {len(xvs_items)} .xvs found — {label}          ", end="")
+                    try:
+                        _XVS_MAX_SIZE = 10 * 1024 * 1024  # 10 MB — real .xvs files are a few KB
+                        file_data = _ntfs_get_file_data(handle, rec_fixed, cluster_size, partition_start_lba, max_size=_XVS_MAX_SIZE)
+                    except Exception as _read_err:
+                        if is_xvs_name:
+                            print(f"\n  [!] Error reading {label}: {type(_read_err).__name__}: {_read_err}")
+                        continue
                     if file_data is None:
                         if is_xvs_name:
                             print(f"\n  [!] Could not read data for {label}")
@@ -9704,6 +10014,8 @@ def _hd_scrape_cdn_links(disk_num=None, device_id=None):
             for fn in all_filenames:
                 print(f"    {fn}")
 
+    except Exception as _scan_err:
+        print(f"\n  [!] Error during MFT scan: {type(_scan_err).__name__}: {_scan_err}")
     finally:
         _ct.windll.kernel32.CloseHandle(handle)
 
@@ -9796,6 +10108,7 @@ def _hd_scrape_cdn_links(disk_num=None, device_id=None):
         elif item.get("contentId"):
             existing_cdn["_content_" + item["contentId"]] = item
             updated += 1
+    _enrich_cdn_titles(existing_cdn)
     save_json(cdn_path, existing_cdn)
     _del_note = f", {deleted_xvs_count} from deleted files" if deleted_xvs_count else ""
     print(f"  [+] CDN.json saved: {cdn_path} ({updated} new/updated{_del_note}, {len(existing_cdn)} total)")
@@ -11511,6 +11824,1192 @@ def _cdn_refresh_wu_links(wu_cat_id, timeout=20):
     return _wu_catalog_get_links(uid_infos, timeout=timeout)
 
 
+def windows_gaming_repair():
+    """
+    Repair Windows gaming components (Gaming Services, Xbox App, Game Bar,
+    Xbox Identity Provider, Xbox Live In-Game Experience, Xbox Live Auth Manager).
+    Reimplements Microsoft's GamingRepairTool.exe logic.
+    """
+    import sys as _sys
+    print("\n  [Windows Gaming Repair Tool]")
+    print()
+    print("  Checks and repairs Xbox/Gaming components on this PC.")
+    print("  Equivalent to Microsoft's GamingRepairTool.exe.")
+    print()
+
+    if _sys.platform != "win32":
+        print("  [!] This tool is Windows-only.")
+        return
+
+    _COMPONENTS = [
+        ("Gaming Services",             "Microsoft.GamingServices",         "Microsoft.GamingServices_8wekyb3d8bbwe"),
+        ("Xbox App",                    "Microsoft.GamingApp",              "Microsoft.GamingApp_8wekyb3d8bbwe"),
+        ("Game Bar",                    "Microsoft.XboxGamingOverlay",      "Microsoft.XboxGamingOverlay_8wekyb3d8bbwe"),
+        ("Xbox Identity Provider",      "Microsoft.XboxIdentityProvider",   "Microsoft.XboxIdentityProvider_8wekyb3d8bbwe"),
+        ("Xbox Live In-Game Experience","Microsoft.Xbox.TCUI",              "Microsoft.Xbox.TCUI_8wekyb3d8bbwe"),
+    ]
+    _SERVICES = ["GamingServices", "XblAuthManager"]
+
+    def _ps(cmd, timeout=60):
+        """Run a PowerShell command, return (returncode, stdout, stderr)."""
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", cmd],
+            capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout.strip(), r.stderr.strip()
+
+    # 1. Check installed status of each component
+    print("  Checking components...\n")
+    for label, name, pfn in _COMPONENTS:
+        rc, out, err = _ps(f"Get-AppxPackage -Name '{name}' -AllUsers | Select-Object -First 1 | "
+                           "ForEach-Object { $_.Version + '|' + $_.Status + '|' + $_.InstallLocation }")
+        if out:
+            parts = out.split("|", 2)
+            ver = parts[0] if parts else "?"
+            status = parts[1] if len(parts) > 1 else "?"
+            print(f"    {label}: v{ver} ({status})")
+        else:
+            print(f"    {label}: NOT INSTALLED")
+
+    # Check services
+    for svc in _SERVICES:
+        rc, out, err = _ps(f"(Get-Service -Name '{svc}' -ErrorAction SilentlyContinue).Status")
+        print(f"    {svc} service: {out or 'not found'}")
+    print()
+
+    print("  Repair options:")
+    print("    [1] Re-register all Xbox app packages (safe, fixes most issues)")
+    print("    [2] Reset Gaming Services (removes + reinstalls)")
+    print("    [3] Restart Xbox services")
+    print("    [4] Full repair (all of the above)")
+    print("    [b] Back")
+    print()
+    choice = input("  Pick: ").strip().lower()
+
+    if choice == "b":
+        return
+
+    # Step functions
+    def _reregister():
+        """Re-register all Xbox Appx packages."""
+        print("\n  Re-registering Xbox app packages...")
+        for label, name, pfn in _COMPONENTS:
+            print(f"    {label}...", end=" ", flush=True)
+            rc, out, err = _ps(
+                f"Get-AppxPackage -Name '{name}' -AllUsers | "
+                "ForEach-Object { Add-AppxPackage -Register ($_.InstallLocation + '\\AppxManifest.xml') "
+                "-DisableDevelopmentMode -ErrorAction SilentlyContinue }", timeout=120)
+            if rc == 0:
+                print("OK")
+            else:
+                # Try reinstall via winget as fallback
+                print(f"re-register failed, skipping")
+
+    def _reset_gaming_services():
+        """Remove and reinstall Gaming Services."""
+        print("\n  Resetting Gaming Services...")
+        print("    Removing...", end=" ", flush=True)
+        rc, out, err = _ps(
+            "Get-AppxPackage -Name 'Microsoft.GamingServices' -AllUsers | "
+            "Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue", timeout=120)
+        print("done" if rc == 0 else f"({err[:80]})" if err else "done")
+
+        print("    Reinstalling via MS Store...", end=" ", flush=True)
+        rc, out, err = _ps("Start-Process 'ms-windows-store://pdp/?productid=9MWPM2CQNLHN'", timeout=30)
+        if rc == 0:
+            print("store opened — install Gaming Services from the store page")
+        else:
+            print(f"failed ({err[:80]})" if err else "failed")
+
+    def _restart_services():
+        """Restart Xbox-related Windows services."""
+        print("\n  Restarting Xbox services...")
+        all_svcs = _SERVICES + ["XblGameSave", "XboxNetApiSvc", "GamingServicesNet"]
+        for svc in all_svcs:
+            print(f"    {svc}...", end=" ", flush=True)
+            rc, out, err = _ps(
+                f"$s = Get-Service -Name '{svc}' -ErrorAction SilentlyContinue; "
+                f"if($s) {{ Restart-Service -Name '{svc}' -Force -ErrorAction SilentlyContinue; "
+                "'restarted' } else { 'not found' }", timeout=30)
+            print(out or "done")
+
+    if choice == "1":
+        _reregister()
+    elif choice == "2":
+        _reset_gaming_services()
+    elif choice == "3":
+        _restart_services()
+    elif choice == "4":
+        _restart_services()
+        _reregister()
+        _reset_gaming_services()
+        _restart_services()
+        print("\n  [+] Full repair complete.")
+    else:
+        print("  Invalid choice.")
+        return
+
+    print("\n  Done. You may need to restart your PC for changes to take full effect.")
+
+
+def clear_credential_manager():
+    """
+    Clear all Windows Credential Manager entries. Fixes issues where the
+    MS Store, Xbox app, or Game Pass app get stuck on the wrong account
+    or fail to sign in.
+    """
+    import sys as _sys
+    print("\n  [Clear Windows Credential Manager]")
+    print()
+    print("  Deletes all saved credentials from Windows Credential Manager.")
+    print("  This fixes MS Store / Xbox app sign-in issues, wrong-account")
+    print("  problems, and stale token errors.")
+    print()
+    print("  You will need to sign back into the MS Store and Xbox app after.")
+    print()
+    print("  WARNING: This clears ALL credentials, not just Microsoft ones.")
+    print("  Games that use Credential Manager for sign-in (e.g. Instant War)")
+    print("  and other apps with stored credentials will also be affected.")
+    print()
+    confirm = input("  Proceed? [y/N]: ").strip().lower()
+    if confirm != "y":
+        print("  Cancelled.")
+        return
+
+    if _sys.platform != "win32":
+        print("  [!] This tool is Windows-only.")
+        return
+
+    # Enumerate all credentials via cmdkey /list
+    try:
+        result = subprocess.run(
+            ["cmdkey", "/list"],
+            capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        print(f"  [!] Failed to run cmdkey: {e}")
+        return
+
+    # Parse target names from output
+    targets = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line.lower().startswith("target:"):
+            # "Target: LegacyGeneric:target=..." or "Target: Domain:target=..."
+            target = line.split(":", 1)[1].strip()
+            # cmdkey /delete wants the full target string
+            targets.append(target)
+
+    if not targets:
+        print("  No credentials found in Credential Manager.")
+        return
+
+    print(f"  Found {len(targets)} credential(s). Deleting...")
+    deleted = 0
+    failed = 0
+    for target in targets:
+        try:
+            r = subprocess.run(
+                ["cmdkey", "/delete:" + target],
+                capture_output=True, text=True, timeout=10)
+            if r.returncode == 0:
+                deleted += 1
+            else:
+                failed += 1
+        except Exception:
+            failed += 1
+
+    print(f"  [+] Deleted {deleted} credential(s)" + (f", {failed} failed" if failed else ""))
+    print("  Restart the MS Store and Xbox app, then sign back in.")
+
+
+def recover_gfwl_keys():
+    """
+    Recover GFWL product keys from Token.bin files using Windows DPAPI.
+    Based on recover-gfwl-keys by elusiveeagle
+    https://github.com/elusiveeagle/recover-gfwl-keys
+    """
+    import ctypes
+    import ctypes.wintypes
+    import re as _re
+
+    # -- Title map from dbox.tools (https://dbox.tools/titles/gfwl/) --------
+    TITLE_MAP = {
+        "33390FA0": "7 Wonders 3", "33390FA1": "Chainz 2: Relinked",
+        "35530FA0": "Cubis Gold", "35530FA1": "Cubis Gold 2",
+        "35530FA2": "Ranch Rush 2", "355A0FA0": "Mahjongg Dimensions",
+        "36590FA0": "TextTwist 2", "36590FA1": "Super TextTwist",
+        "41560829": "007: Quantum of Solace", "41560FA0": "Call of Duty 4",
+        "41560FA1": "Call of Duty: World at War", "41560FA2": "Singularity",
+        "41560FA3": "Transformers: War for Cybertron", "41560FA4": "Blur",
+        "41560FA5": "Prototype", "41560FA6": "007: Blood Stone",
+        "415807D5": "BlazBlue: Calamity Trigger", "425307D6": "Fallout 3",
+        "42530FA0": "Hunted Demon's Forge", "425607F3": "Tron: Evolution",
+        "42560FA0": "LEGO Pirates of the Caribbean: The Video Game",
+        "434307DE": "Lost Planet: Extreme Condition: Colonies Edition",
+        "434307F4": "Street Fighter IV", "434307F7": "Resident Evil 5",
+        "43430803": "Dark Void", "43430808": "Lost Planet 2",
+        "4343080E": "Dead Rising 2",
+        "43430FA0": "Super Street Fighter IV: Arcade Edition",
+        "43430FA1": "Resident Evil: Operation Raccoon City",
+        "43430FA2": "Dead Rising 2 Off The Record",
+        "43430FA5": "Street Fighter X Tekken",
+        "434D0820": "Dirt 2", "434D082F": "Fuel", "434D0831": "F1 2010",
+        "434D083E": "Operation Flashpoint: Red River",
+        "434D0FA0": "Dirt 3", "434D0FA1": "F1 2011",
+        "44540FA0": "Crash Time 4", "44540FA1": "Crash Time 4 Demo",
+        "4541091C": "Dragon Age: Awakening",
+        "4541091F": "Battlefield: Bad Co. 2",
+        "45410920": "Mass Effect 2", "45410921": "Dragon Age: Origins",
+        "45410935": "Bulletstorm", "45410FA1": "Medal of Honor",
+        "45410FA2": "Need for Speed: Shift", "45410FA3": "Dead Space 2",
+        "45410FA4": "Bulletstorm Demo", "45410FA5": "Dragon Age 2",
+        "45410FA8": "Crysis 2", "45410FAB": "The Sims 3",
+        "45410FAC": "The Sims 3: Late Night",
+        "45410FAD": "The Sims 3: Ambitions",
+        "45410FAE": "World Adventures",
+        "45410FAF": "The Sims Medieval", "45410FB1": "Darkspore",
+        "45410FB2": "Shift 2: Unleashed", "45410FB3": "Spore",
+        "45410FB4": "The Sims 3 Generations",
+        "45410FB5": "Alice: Madness Returns",
+        "45410FB6": "Harry Potter and the Deathly Hallows: Part 2",
+        "45410FB7": "The Sims Medieval Pirates & Nobles",
+        "45410FB8": "Tiger Woods PGA Tour 12: The Masters",
+        "454D07D4": "FlatOut: Ultimate Carnage",
+        "46450FA0": "Divinity II: The Dragon Knight Saga",
+        "46450FA1": "Cities XL 2011", "46450FA2": "The Next Big Thing",
+        "46450FA3": "Faery", "46450FA4": "Pro Cycling Manager",
+        "46550FA0": "Jewel Quest 5", "46550FA1": "Family Feud Dream Home",
+        "484507D3": "Rugby League", "48450FA0": "AFL Live",
+        "48450FA1": "Rugby League Live 2",
+        "49470FA1": "Test Drive Ferrari Racing Legend",
+        "4B590FA0": "Tropico 3 Gold Edition", "4B590FA1": "Patrician IV",
+        "4B590FA3": "Commandos Complete", "4B590FA5": "Dungeons",
+        "4B590FA8": "Patrician: RoaD", "4B590FA9": "Elements of War",
+        "4B590FAA": "The First Templar",
+        "4C4107EB": "Star Wars: The Clone Wars: Republic Heroes",
+        "4D5307D6": "Shadowrun", "4D53080F": "Halo 2",
+        "4D530841": "Viva Pinata", "4D530842": "Gears of War",
+        "4D5308D2": "Microsoft Flight", "4D5308D3": "Firebird Project",
+        "4D530901": "Game Room", "4D53090A": "Fable III",
+        "4D530935": "Flight Simulator X", "4D530936": "Age of Empires III",
+        "4D530937": "Fable: The Lost Chapters",
+        "4D530942": "AoE Online - Beta", "4D530FA0": "Zoo Tycoon 2",
+        "4D530FA2": "Toy Soldiers",
+        "4D530FA3": "Age of Empires Online",
+        "4D530FA4": "Toy Soldiers: Cold War",
+        "4D530FA5": "Ms. Splosion Man",
+        "4D530FA6": "Skulls of the Shogun",
+        "4D530FA7": "Insanely Twisted Shadow Planet",
+        "4D530FA8": "Iron Brigade Download Games for Windows Live",
+        "4D530FA9": "MGS Pinball FX2 GFWL Games For Windows Live",
+        "4D530FAA": "MGS Vodka PC", "4D5388B0": "BugBash 2",
+        "4E4D0FA1": "Dark Souls: Prepare to Die Edition",
+        "4E4D0FA2": "Ace Combat: Assault Horizon: Enhanced Edition",
+        "4E4E0FA0": "Trainz Simulator 2010",
+        "4E4E0FA1": "Settle and Carlisle",
+        "4E4E0FA2": "Classic Cabon City",
+        "4E4E0FA3": "TS 2010: Blue Comet",
+        "4E4E0FA4": "Trainz Simulator 12", "4F420FA0": "BubbleTown",
+        "4F430FA0": "King's Bounty Platinum",
+        "50470FA1": "Bejeweled 2", "50470FA3": "Bookworm",
+        "50470FA4": "Plants vs. Zombies", "50470FA5": "Zuma's Revenge",
+        "50470FA6": "Bejeweled 3",
+        "50580FA0": "Europa Universalis III",
+        "50580FA1": "Hearts of Iron III", "50580FA2": "King Arthur",
+        "50580FA3": "Mount & Blade Warband", "50580FA4": "Victoria 2",
+        "50580FA6": "Europa Universalis III: Divine Wind",
+        "50580FA7": "Europa Universalis III: Heir to the Throne",
+        "50580FA8": "King Arthur The Druids",
+        "50580FA9": "King Arthur The Saxons",
+        "50580FAB": "Cities in Motion", "50580FAC": "Cities in Motion",
+        "50580FAD": "Europa Universalis III: Chronicles",
+        "50580FAE": "Darkest Hour",
+        "50580FAF": "Mount & Blade: With Fire & Sword",
+        "50580FB0": "King Arthur Collection",
+        "50580FB1": "Supreme Ruler Cold War",
+        "50580FB2": "Pirates of Black Cove",
+        "51320FA0": "Poker Superstars III",
+        "51320FA1": "Slingo Deluxe",
+        "534307EB": "Kane & Lynch: Dead Men",
+        "534307FA": "Battlestations Pacific",
+        "534307FF": "Batman: Arkham Asylum",
+        "53430800": "Battlestations Pacific",
+        "5343080C": "Batman: Arkham Asylum: Game of the Year Edition",
+        "53430813": "Championship Manager 10",
+        "53430814": "Tomb Raider Underworld",
+        "534507F0": "Universe at War: Earth Assault",
+        "534507F6": "The Club", "53450826": "Stormrise",
+        "5345082C": "Vancouver 2010", "53450849": "Alpha Protocol",
+        "5345084E": "Football Manager 2010",
+        "53450854": "Rome: Total War",
+        "53450FA0": "Football Manager 2011",
+        "53450FA1": "Dreamcast Collection",
+        "53450FA2": "Virtua Tennis 4",
+        "53460FA0": "A Vampyre Story", "53460FA1": "Ankh 2",
+        "53460FA2": "Ankh 3",
+        "53460FA3": "Rise of Flight: Iron Cross Edition",
+        "535007E3": "Section 8",
+        "53510FA0": "Deus Ex: Game of the Year Edition",
+        "53510FA1": "Deus Ex: Invisible War",
+        "53510FA2": "Hitman: Blood Money",
+        "53510FA3": "Thief: Deadly Shadows",
+        "53510FA4": "Hitman 2: Silent Assassin",
+        "53510FA5": "Mini Ninjas",
+        "53510FA6": "Lara Croft Tomb Raider: Legend",
+        "53510FA7": "Lara Croft Tomb Raider: Anniversary",
+        "53510FA8": "Battlestations: Midway",
+        "53510FA9": "Conflict: Denied Ops",
+        "53510FAA": "Project: Snowblind",
+        "544707D4": "Section 8: Prejudice",
+        "5451081F": "Juiced 2: Hot Import Nights",
+        "5451082D": "Warhammer 40,000: Dawn of War II",
+        "54510837": "Red Faction: Guerrilla",
+        "54510868": "Warhammer 40,000: Dawn of War II: Chaos Rising",
+        "54510871": "Saints Row 2", "54510872": "S.T.A.L.K.E.R.",
+        "5451087F": "Dawn of War",
+        "54510880": "Warhammer 40,000: Dawn of War: Dark Crusade",
+        "54510881": "Supreme Commander",
+        "54510882": "Supreme Commander: Forged Alliance",
+        "5451882F": "Dawn of War II",
+        "5454083B": "Grand Theft Auto IV",
+        "5454085C": "BioShock 2",
+        "5454086E": "Grand Theft Auto: Episodes from Liberty City",
+        "5454086F": "BioShock 2", "54540871": "BioShock 2 (JP)",
+        "54540873": "Borderlands",
+        "54540874": "Sid Meier's Civilization IV: Complete",
+        "54540876": "Grand Theft Auto: San Andreas",
+        "54540877": "Grand Theft Auto: Vice City",
+        "54540878": "Max Payne 2", "54540879": "Max Payne",
+        "5454087B": "BioShock", "54540880": "Bully Scholarship Ed.",
+        "54540881": "Grand Theft Auto III",
+        "54590FA0": "Rift", "54590FA1": "Rift: Collector's Edition",
+        "54590FA2": "Rift: Ashes of History Edition",
+        "554C0FA0": "4 Elements", "554C0FA1": "Gardenscapes",
+        "554C0FA2": "Call of Atlantis",
+        "554C0FA3": "Around the World in 80",
+        "554C0FA4": "Fishdom: Spooky Splash",
+        "55530855": "Prince of Persia: The Forgotten Sands",
+        "55530856": "Assassin's Creed II",
+        "55530857": "Tom Clancy's Splinter Cell: Conviction",
+        "55530859": "Prince of Persia: Warrior Within",
+        "5553085A": "Prince of Persia: The Sands of Time",
+        "5553085B": "The Settlers 7: Paths to a Kingdom",
+        "5553085E": "Assassin's Creed",
+        "5553085F": "World In Conflict",
+        "55530860": "Dawn of Discovery Gold",
+        "55530861": "Prince of Persia",
+        "55530862": "Tom Clancy's Rainbow Six: Vegas 2",
+        "55530864": "Tom Clancy's Ghost Recon: Advanced Warfighter 2",
+        "55530865": "Far Cry 2", "55530866": "Silent Hunter 5",
+        "55530FA0": "Prince of Persia: The Two Thrones",
+        "55530FA1": "Tom Clancy's H.A.W.X. 2",
+        "55530FA2": "Shaun White Skate",
+        "55530FA3": "Assassin's Creed: Brotherhood",
+        "55530FA4": "Assassin's Creed: Brotherhood Deluxe",
+        "55530FA6": "From Dust",
+        "57520806": "F.E.A.R. 2", "57520808": "LEGO Batman",
+        "57520809": "LEGO Harry Potter: Years 1-4",
+        "57520FA0": "Batman: Arkham City",
+        "57520FA1": "LEGO Universe",
+        "57520FA2": "Mortal Kombat: Arcade Kollection",
+        "57520FA3": "Gotham City Impostors",
+        "584109EB": "Tinker", "584109F0": "World of Goo",
+        "584109F1": "Mahjong Wisdom", "58410A01": "Where's Waldo",
+        "58410A10": "Osmos", "58410A1C": "CarneyVale: Showtime",
+        "58410A6D": "Blacklight: Tango Down",
+        "585207D1": "G4W-LIVE System",
+        "5A450FA0": "Battle vs. Chess", "5A450FA1": "Two Worlds II",
+        "5A500FA1": "Kona's Crate",
+    }
+
+    KEY_PATTERN = _re.compile(r'^[0-9A-Z]{5}-[0-9A-Z]{5}-[0-9A-Z]{5}-[0-9A-Z]{5}-[0-9A-Z]{5}$')
+    TID_PATTERN = _re.compile(r'^[0-9A-Fa-f]{8}$')
+
+    # -- DPAPI via ctypes ---------------------------------------------------
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", ctypes.wintypes.DWORD),
+                     ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+    def dpapi_decrypt(cipher_bytes):
+        blob_in = DATA_BLOB()
+        blob_in.cbData = len(cipher_bytes)
+        blob_in.pbData = ctypes.cast(
+            ctypes.create_string_buffer(cipher_bytes, len(cipher_bytes)),
+            ctypes.POINTER(ctypes.c_char))
+        blob_out = DATA_BLOB()
+        ok = ctypes.windll.crypt32.CryptUnprotectData(
+            ctypes.byref(blob_in), None, None, None, None, 0,
+            ctypes.byref(blob_out))
+        if not ok:
+            return None
+        plain = ctypes.string_at(blob_out.pbData, blob_out.cbData)
+        ctypes.windll.kernel32.LocalFree(blob_out.pbData)
+        return plain
+
+    # -- Web lookup from dbox.tools -----------------------------------------
+    def dbox_lookup(title_id):
+        try:
+            import urllib.request, json as _json
+            url = f"https://dbox.tools/api/title_ids/{title_id}"
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = _json.loads(resp.read())
+            if isinstance(data, list) and data and "name" in data[0]:
+                return data[0]["name"]
+        except Exception:
+            pass
+        return None
+
+    # -- Main logic ---------------------------------------------------------
+    print("\n  [recover-gfwl-keys by elusiveeagle]")
+    print("  https://github.com/elusiveeagle/recover-gfwl-keys")
+    print()
+    print("  Recovers product keys for previously activated GFWL titles")
+    print("  by decrypting Token.bin files with Windows DPAPI.")
+    print()
+
+    if sys.platform != "win32":
+        print("  [!] This tool only works on Windows.")
+        return
+
+    # Default or custom path
+    base_path = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "XLive", "Titles")
+    print(f"  Scan path: {base_path}")
+    custom = input("  Custom path? [Enter=default]: ").strip()
+    if custom:
+        base_path = custom
+
+    if not os.path.isdir(base_path):
+        print(f"  [!] Path not found: {base_path}")
+        print("  No GFWL titles have been installed or activated under this account.")
+        return
+
+    # Find valid title subdirectories
+    subdirs = []
+    try:
+        for entry in os.scandir(base_path):
+            if entry.is_dir() and TID_PATTERN.match(entry.name):
+                subdirs.append(entry)
+    except OSError as e:
+        print(f"  [!] Cannot read directory: {e}")
+        return
+
+    if not subdirs:
+        print("  [!] No valid GFWL title subdirectories found (expected 8-hex-digit folder names).")
+        return
+
+    print(f"  Found {len(subdirs)} title folder(s). Decrypting...")
+    print()
+
+    # Ask about web lookup for missing names
+    web_lookup = input("  Look up missing title names from dbox.tools? [y/N]: ").strip().lower() == "y"
+
+    results = []
+    cache_missed = []
+    web_failed = []
+
+    for entry in sorted(subdirs, key=lambda e: e.name.upper()):
+        tid = entry.name.upper()
+        token_path = os.path.join(entry.path, "Token.bin")
+
+        if not os.path.isfile(token_path):
+            continue
+
+        try:
+            with open(token_path, "rb") as f:
+                raw = f.read()
+        except OSError:
+            print(f"  [!] Cannot read {token_path}")
+            continue
+
+        if len(raw) <= 4:
+            print(f"  [!] {tid}: Token.bin too small ({len(raw)} bytes)")
+            continue
+
+        # Skip 4-byte header, decrypt remainder
+        cipher = raw[4:]
+        plain = dpapi_decrypt(cipher)
+        if plain is None:
+            print(f"  [!] {tid}: DPAPI decryption failed (wrong user account or corrupted file)")
+            continue
+
+        # Decode and validate key
+        try:
+            key = plain.decode("ascii").strip("\x00").strip().upper()
+        except UnicodeDecodeError:
+            print(f"  [!] {tid}: Decrypted data is not valid ASCII")
+            continue
+
+        if not KEY_PATTERN.match(key):
+            print(f"  [!] {tid}: Decrypted but invalid key format: {key}")
+            continue
+
+        # Resolve title name
+        name = TITLE_MAP.get(tid)
+        if name is None:
+            if web_lookup:
+                name = dbox_lookup(tid)
+                if name is None:
+                    web_failed.append(tid)
+            else:
+                cache_missed.append(tid)
+
+        results.append((tid, key, name or ""))
+
+    # Output results
+    print()
+    if not results:
+        print("  No GFWL product keys were recovered.")
+        print("  This is expected if no GFWL titles have been activated under this Windows account.")
+        return
+
+    print(f"  Recovered {len(results)} GFWL product key(s)\n")
+    print(f"  {'Title ID':<10}  {'Product Key':<31}  Title Name")
+    print(f"  {'─' * 10}  {'─' * 31}  {'─' * 40}")
+    for tid, key, name in results:
+        print(f"  {tid:<10}  {key:<31}  {name}")
+
+    if cache_missed:
+        print(f"\n  [*] Could not resolve names for: {', '.join(cache_missed)}")
+        print("  Re-run with web lookup enabled to fetch missing names from dbox.tools.")
+    if web_failed:
+        print(f"\n  [*] Web lookup failed for: {', '.join(web_failed)}")
+        print("  These titles may be missing from the dbox.tools database.")
+        print("  Report at: https://github.com/elusiveeagle/recover-gfwl-keys/issues")
+
+    # Offer to save to file
+    print()
+    save = input("  Save results to file? [y/N]: ").strip().lower()
+    if save == "y":
+        out_path = os.path.join(os.getcwd(), "gfwl_keys.txt")
+        custom_out = input(f"  Output file [{out_path}]: ").strip()
+        if custom_out:
+            out_path = custom_out
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(f"GFWL Product Keys — recovered {len(results)} key(s)\n")
+                f.write(f"recover-gfwl-keys by elusiveeagle\n\n")
+                f.write(f"{'Title ID':<10}  {'Product Key':<31}  Title Name\n")
+                f.write(f"{'─' * 10}  {'─' * 31}  {'─' * 40}\n")
+                for tid, key, name in results:
+                    f.write(f"{tid:<10}  {key:<31}  {name}\n")
+            print(f"  [+] Saved to {out_path}")
+        except OSError as e:
+            print(f"  [!] Failed to save: {e}")
+
+
+# ===========================================================================
+# CDN Sync — Freshdex shared CDN database
+# ===========================================================================
+
+def _cdn_sync_load_config():
+    """Load CDN sync config (username, api_key, last_sync) from disk."""
+    if os.path.isfile(CDN_SYNC_CONFIG_FILE):
+        try:
+            return load_json(CDN_SYNC_CONFIG_FILE)
+        except Exception:
+            pass
+    return {}
+
+
+def _cdn_sync_save_config(config):
+    """Save CDN sync config to disk."""
+    save_json(CDN_SYNC_CONFIG_FILE, config)
+
+
+def _cdn_sync_register(username, existing_api_key=None):
+    """Register or reclaim a username with the CDN sync server.
+    Returns (api_key, total_points, created) or raises on error."""
+    payload = {"username": username}
+    if existing_api_key:
+        payload["api_key"] = existing_api_key
+    result = api_request(
+        CDN_SYNC_API_BASE + "/register",
+        method="POST",
+        headers={"Content-Type": "application/json"},
+        body=payload,
+        retries=2,
+    )
+    if result is None:
+        raise ConnectionError("Could not reach CDN sync server. Check your internet connection.")
+    if "error" in result:
+        raise ValueError(result["error"])
+    return result["api_key"], result.get("total_points", 0), result.get("created", True)
+
+
+def _cdn_sync_flatten_entries(cdn_data):
+    """Flatten CDN.json dict into a list of individual version entries
+    and a set of 'storeId:buildId' known_keys.
+
+    Explodes the versions[] array so each build is a separate entry.
+    Skips _content_* orphan entries (no storeId).
+    """
+    entries = []
+    known_keys = set()
+
+    for sid, rec in cdn_data.items():
+        if sid.startswith("_content_"):
+            continue
+        bid = rec.get("buildId")
+        if not sid or not bid:
+            continue
+
+        # Top-level entry
+        entry = {
+            "storeId": sid,
+            "buildId": bid,
+            "contentId": rec.get("contentId"),
+            "packageName": rec.get("packageName"),
+            "buildVersion": rec.get("buildVersion"),
+            "platform": rec.get("platform"),
+            "sizeBytes": rec.get("sizeBytes"),
+            "cdnUrls": rec.get("cdnUrls", []),
+            "contentTypes": rec.get("contentTypes"),
+            "devices": rec.get("devices"),
+            "language": rec.get("language"),
+            "planId": rec.get("planId"),
+            "source": rec.get("source"),
+            "scrapedAt": rec.get("scrapedAt"),
+            "priorBuildVersion": rec.get("priorBuildVersion"),
+            "priorBuildId": rec.get("priorBuildId"),
+        }
+        # Normalize cdnUrls to list
+        if isinstance(entry["cdnUrls"], str):
+            entry["cdnUrls"] = [entry["cdnUrls"]]
+        entries.append(entry)
+        known_keys.add(f"{sid}:{bid}")
+
+        # Explode versions array
+        for ver in rec.get("versions", []):
+            vbid = ver.get("buildId")
+            if vbid and vbid != bid:
+                ventry = {
+                    "storeId": sid,
+                    "buildId": vbid,
+                    "contentId": rec.get("contentId"),
+                    "packageName": rec.get("packageName"),
+                    "buildVersion": ver.get("buildVersion"),
+                    "platform": ver.get("platform") or rec.get("platform"),
+                    "sizeBytes": ver.get("sizeBytes"),
+                    "cdnUrls": ver.get("cdnUrls", []),
+                    "contentTypes": rec.get("contentTypes"),
+                    "devices": rec.get("devices"),
+                    "language": rec.get("language"),
+                    "planId": rec.get("planId"),
+                    "source": rec.get("source"),
+                    "scrapedAt": ver.get("scrapedAt"),
+                    "priorBuildVersion": ver.get("priorBuildVersion"),
+                    "priorBuildId": ver.get("priorBuildId"),
+                }
+                if isinstance(ventry["cdnUrls"], str):
+                    ventry["cdnUrls"] = [ventry["cdnUrls"]]
+                entries.append(ventry)
+                known_keys.add(f"{sid}:{vbid}")
+
+    return entries, known_keys
+
+
+def _cdn_sync_merge_remote(cdn_data, remote_entries):
+    """Merge remote entries into local CDN.json dict.
+    New storeId -> add directly.
+    Existing storeId with different buildId -> add to versions[] array.
+    Returns count of new entries merged. Also updates sync metadata file."""
+    _VERSION_FIELDS = ("buildId", "buildVersion", "cdnUrls", "sizeBytes",
+                       "platform", "scrapedAt", "priorBuildVersion", "priorBuildId")
+
+    # Load existing sync metadata
+    sync_meta = {}
+    if os.path.isfile(CDN_SYNC_META_FILE):
+        try:
+            sync_meta = load_json(CDN_SYNC_META_FILE) or {}
+        except Exception:
+            pass
+
+    merged = 0
+    for entry in remote_entries:
+        sid = entry.get("storeId")
+        bid = entry.get("buildId")
+        if not sid or not bid:
+            continue
+
+        # Build a local-format record
+        rec = {
+            "storeId": sid,
+            "buildId": bid,
+            "contentId": entry.get("contentId"),
+            "packageName": entry.get("packageName"),
+            "buildVersion": entry.get("buildVersion"),
+            "platform": entry.get("platform"),
+            "sizeBytes": entry.get("sizeBytes"),
+            "cdnUrls": entry.get("cdnUrls", []),
+            "contentTypes": entry.get("contentTypes"),
+            "devices": entry.get("devices"),
+            "language": entry.get("language"),
+            "planId": entry.get("planId"),
+            "source": entry.get("source"),
+            "scrapedAt": entry.get("scrapedAt"),
+            "priorBuildVersion": entry.get("priorBuildVersion"),
+            "priorBuildId": entry.get("priorBuildId"),
+        }
+
+        existing = cdn_data.get(sid)
+        if not existing:
+            # New game — add directly
+            cdn_data[sid] = rec
+            # Mark as remote in sync metadata
+            if sid not in sync_meta:
+                sync_meta[sid] = {"source": "remote"}
+            merged += 1
+        elif existing.get("buildId") != bid:
+            # Different build — add to versions array (same logic as _hd_scrape_cdn_links)
+            versions = existing.get("versions", [])
+            if not versions:
+                # Seed with current top-level
+                versions.append({k: existing[k] for k in _VERSION_FIELDS if k in existing})
+            if not any(v.get("buildId") == bid for v in versions):
+                versions.insert(0, {k: rec[k] for k in _VERSION_FIELDS if k in rec})
+                existing["versions"] = versions
+                # Track this version as remote
+                if sid not in sync_meta:
+                    sync_meta[sid] = {"source": "local"}
+                ver_meta = sync_meta[sid].setdefault("versions", {})
+                ver_meta[bid] = "remote"
+                merged += 1
+        # Same buildId — skip (we already have it)
+
+    # Save sync metadata
+    try:
+        save_json(CDN_SYNC_META_FILE, sync_meta)
+    except Exception:
+        pass
+
+    return merged
+
+
+def scan_pc_games(base_path):
+    """
+    Scan a Windows PC XboxGames directory for installed game packages.
+    Each game folder contains a {GUID}.xvs file with the same UTF-16LE JSON
+    structure as Xbox external drive XVS files.
+    Returns list of dicts (same shape as scan_usb_drive output).
+    """
+    if not os.path.isdir(base_path):
+        print(f"  [!] Path not found: {base_path}")
+        return []
+    try:
+        game_dirs = [d for d in os.listdir(base_path)
+                     if os.path.isdir(os.path.join(base_path, d))]
+    except Exception as e:
+        print(f"  [!] Cannot list {base_path}: {e}")
+        return []
+
+    _XBL_PREFIX = "[XBL:]" + chr(92)
+
+    def _clean_cdn_url(u):
+        if u.startswith(_XBL_PREFIX):
+            u = u[len(_XBL_PREFIX):]
+        elif u.startswith("[XBL:]/"):
+            u = u[7:]
+        return u.split(",")[0]
+
+    results = []
+    for game_dir in sorted(game_dirs):
+        game_path = os.path.join(base_path, game_dir)
+        try:
+            xvs_files = [f for f in os.listdir(game_path) if f.endswith('.xvs')]
+        except Exception:
+            continue
+        for xvs_file in xvs_files:
+            content_id = xvs_file[:-4]
+            try:
+                raw = open(os.path.join(game_path, xvs_file), 'rb').read()
+                obj = json.loads(raw.decode('utf-16-le'))
+                req = obj.get("Request", {})
+                store_id = req.get("StoreId", "")
+                sources = req.get("Sources", {})
+                pkg_name = ""
+                cdn_urls = []
+                fg_paths = sources.get("ForegroundCrdPaths", [])
+                for u in fg_paths:
+                    clean = _clean_cdn_url(u)
+                    if clean.startswith("http") and clean not in cdn_urls:
+                        cdn_urls.append(clean)
+                    if not pkg_name:
+                        import re as _re
+                        m = _re.search(r'/([A-Za-z][^/]+?_[\d.]+_[^/]+\.xvc)', clean)
+                        if m:
+                            pkg_name = m.group(1).split('_')[0]
+                status = obj.get("Status", {})
+                source = status.get("Source", {})
+                current = source.get("Current", {})
+                prior = source.get("Prior", {})
+                build_version = current.get("BuildVersion", "")
+                build_id = current.get("BuildId", "")
+                platform = current.get("Platform", "")
+                total_bytes = status.get("Progress", {}).get("Package", {}).get("TotalBytes", 0)
+                fast_start = status.get("FastStartState", "")
+                specifiers = sources.get("Specifiers", {})
+                results.append({
+                    "contentId": content_id,
+                    "storeId": store_id,
+                    "packageName": pkg_name,
+                    "buildVersion": build_version,
+                    "buildId": build_id,
+                    "platform": platform,
+                    "sizeBytes": total_bytes,
+                    "cdnUrls": cdn_urls,
+                    "contentTypes": specifiers.get("ContentTypes", ""),
+                    "devices": specifiers.get("Devices", ""),
+                    "language": specifiers.get("Languages", ""),
+                    "planId": specifiers.get("PlanId", ""),
+                    "operation": specifiers.get("Operation", ""),
+                    "fastStartState": fast_start,
+                    "priorBuildVersion": prior.get("BuildVersion", ""),
+                    "priorBuildId": prior.get("BuildId", ""),
+                    "source": "pc_xvs",
+                    "scrapedAt": _dt.datetime.now().isoformat(),
+                })
+            except Exception as e:
+                results.append({"contentId": content_id, "storeId": "", "packageName": "",
+                                "buildVersion": "", "platform": "", "sizeBytes": 0,
+                                "cdnUrls": [], "source": "pc_xvs", "error": str(e)})
+    return results
+
+
+def _enrich_cdn_titles(cdn_data):
+    """Look up game titles from Display Catalog for CDN entries missing a title."""
+    need = [sid for sid, rec in cdn_data.items()
+            if not sid.startswith("_content_") and not rec.get("title")]
+    if not need:
+        return
+    print(f"  Looking up titles for {len(need)} CDN entries...", end=" ", flush=True)
+    found = 0
+    for i in range(0, len(need), 20):
+        batch = need[i:i + 20]
+        try:
+            results = fetch_catalog_batch(batch, "US", "en-US")
+            for sid, info in results.items():
+                t = info.get("title")
+                if t and sid in cdn_data:
+                    cdn_data[sid]["title"] = t
+                    if info.get("developer"):
+                        cdn_data[sid]["developer"] = info["developer"]
+                    if info.get("publisher"):
+                        cdn_data[sid]["publisher"] = info["publisher"]
+                    found += 1
+        except Exception:
+            pass
+    print(f"{found} resolved")
+
+
+def process_pc_cdn_scrape():
+    """Scrape CDN links from Windows PC game installations (XboxGames directories)."""
+    print("\n  [Windows PC Game CDN Scraper]\n")
+
+    # Auto-detect drives with \XboxGames\ directories
+    found = []
+    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        candidate = f"{letter}:/XboxGames"
+        if os.path.isdir(candidate):
+            try:
+                count = sum(1 for d in os.listdir(candidate)
+                            if os.path.isdir(os.path.join(candidate, d)))
+                found.append((candidate, count))
+            except Exception:
+                pass
+
+    if found:
+        print("  Found XboxGames directories:")
+        for path, count in found:
+            print(f"    {path}  ({count} game folders)")
+        print()
+        ans = input("  Scan these locations? [Y/n/custom path] ").strip()
+        if ans.lower() == 'n':
+            print("  Cancelled.")
+            return
+        if ans and ans.lower() != 'y':
+            found = [(ans, 0)]
+    else:
+        print("  [!] No XboxGames directories found on any drive.")
+        custom = input("  Enter path to scan (or blank to cancel): ").strip()
+        if not custom:
+            return
+        found = [(custom, 0)]
+
+    # Scan all locations
+    all_items = []
+    for path, _ in found:
+        print(f"\n  [*] Scanning {path} ...")
+        items = scan_pc_games(path)
+        print(f"      {len(items)} package(s) found")
+        all_items.extend(items)
+
+    if not all_items:
+        print("\n  [!] No .xvs files found in any game directory.")
+        return
+
+    # Merge into CDN.json (same logic as _hd_scrape_cdn_links)
+    cdn_path = os.path.join(SCRIPT_DIR, "CDN.json")
+    existing_cdn = {}
+    if os.path.isfile(cdn_path):
+        try:
+            existing_cdn = load_json(cdn_path) or {}
+        except Exception:
+            pass
+        _cdn_snapshot(existing_cdn)
+
+    _VERSION_FIELDS = ("buildId", "buildVersion", "cdnUrls", "sizeBytes",
+                        "platform", "scrapedAt", "priorBuildVersion", "priorBuildId")
+
+    def _version_snap(rec):
+        return {k: rec[k] for k in _VERSION_FIELDS if k in rec}
+
+    updated = 0
+    for item in all_items:
+        sid = item.get("storeId")
+        if sid:
+            existing = existing_cdn.get(sid)
+            if existing and existing.get("buildId") and item.get("buildId") \
+                    and existing["buildId"] != item["buildId"]:
+                versions = existing.get("versions", [])
+                if not versions:
+                    versions.append(_version_snap(existing))
+                new_snap = _version_snap(item)
+                if not any(v.get("buildId") == item["buildId"] for v in versions):
+                    versions.insert(0, new_snap)
+                existing_cdn[sid] = item
+                existing_cdn[sid]["versions"] = versions
+            elif existing:
+                old_versions = existing.get("versions")
+                existing_cdn[sid] = item
+                if old_versions:
+                    existing_cdn[sid]["versions"] = old_versions
+            else:
+                existing_cdn[sid] = item
+            updated += 1
+        elif item.get("contentId"):
+            existing_cdn["_content_" + item["contentId"]] = item
+            updated += 1
+    _enrich_cdn_titles(existing_cdn)
+    save_json(cdn_path, existing_cdn)
+    print(f"\n  [+] CDN.json saved: {cdn_path} ({updated} new/updated, {len(existing_cdn)} total)")
+    print(f"      Rebuild HTML (option B from main menu) to apply to XCT.html")
+
+    # Offer to sync
+    sync_ans = input("\n  Sync with CDN database now? [Y/n] ").strip()
+    if sync_ans.lower() != 'n':
+        process_cdn_sync()
+
+
+def process_cdn_sync():
+    """Sync local CDN.json with Freshdex shared CDN database."""
+    print("\n  [Freshdex CDN Sync]\n")
+
+    # Load CDN.json
+    cdn_path = os.path.join(SCRIPT_DIR, "CDN.json")
+    if not os.path.isfile(cdn_path):
+        print("  [!] No CDN.json found. Scrape CDN links from your Xbox hard drive first.")
+        print("      Use [l] Xbox Hard Drive Tool -> [e] Scrape CDN Links")
+        return
+    try:
+        cdn_data = load_json(cdn_path) or {}
+    except Exception as e:
+        print(f"  [!] Failed to load CDN.json: {e}")
+        return
+    if not cdn_data:
+        print("  [!] CDN.json is empty. Scrape CDN links first.")
+        return
+
+    # Count real entries (skip _content_* orphans)
+    real_count = sum(1 for k in cdn_data if not k.startswith("_content_"))
+    print(f"  Local CDN.json: {real_count} games")
+    print()
+
+    # Load or setup config
+    config = _cdn_sync_load_config()
+    if config.get("api_key"):
+        print(f"  Logged in as: {config.get('username', '(unknown)')}")
+        if config.get("last_sync"):
+            print(f"  Last sync: {config['last_sync']}")
+        print()
+        change = input("  Continue as this user? [Y/n/c=change user]: ").strip().lower()
+        if change == "n":
+            return
+        if change == "c":
+            config = {}  # force re-registration below
+    if not config.get("api_key"):
+        print("  Register a username to track your contributions on the leaderboard.")
+        print("  Or press Enter for anonymous sync (no points tracked).\n")
+        username = input("  Username (or Enter for anonymous): ").strip()
+        if not username:
+            username = f"anon_{secrets.token_hex(4)}"
+            print(f"  Using anonymous name: {username}")
+        try:
+            api_key, points, created = _cdn_sync_register(username)
+            config = {"username": username, "api_key": api_key}
+            _cdn_sync_save_config(config)
+            if created:
+                print(f"  [+] Registered as '{username}'")
+            else:
+                print(f"  [+] Welcome back, '{username}' ({points} points)")
+        except Exception as e:
+            print(f"  [!] Registration failed: {e}")
+            return
+        print()
+
+    # Flatten entries + build known_keys
+    print("  Preparing upload...", end=" ", flush=True)
+    entries, known_keys = _cdn_sync_flatten_entries(cdn_data)
+    print(f"{len(entries)} entries, {len(known_keys)} unique versions")
+
+    # Sync with server
+    print("  Syncing with server...", end=" ", flush=True)
+    result = api_request(
+        CDN_SYNC_API_BASE + "/sync",
+        method="POST",
+        headers={"Content-Type": "application/json"},
+        body={
+            "api_key": config["api_key"],
+            "entries": entries,
+            "known_keys": list(known_keys),
+        },
+        retries=2,
+    )
+    if result is None:
+        print("\n  [!] Could not reach CDN sync server. Check your internet connection.")
+        return
+    if "error" in result:
+        print(f"\n  [!] Server error: {result['error']}")
+        return
+    print("done!")
+    print()
+
+    # Display results
+    pts_earned = result.get("points_earned", 0)
+    total_pts = result.get("total_points", 0)
+    new_accepted = result.get("new_entries_accepted", 0)
+    dupes = result.get("duplicates_skipped", 0)
+    remote_entries = result.get("remote_entries", [])
+    db_entries = result.get("total_db_entries", 0)
+    db_games = result.get("total_db_games", 0)
+
+    print(f"  Upload Results:")
+    print(f"    New entries contributed:  {new_accepted}")
+    print(f"    Duplicates skipped:      {dupes}")
+    print(f"    Points earned:           +{pts_earned}")
+    print(f"    Total points:            {total_pts}")
+    print()
+    print(f"  Database Stats:")
+    print(f"    Total entries:           {db_entries:,}")
+    print(f"    Total games:             {db_games:,}")
+    print()
+
+    # Mark all uploaded entries as "synced" in metadata
+    sync_meta = {}
+    if os.path.isfile(CDN_SYNC_META_FILE):
+        try:
+            sync_meta = load_json(CDN_SYNC_META_FILE) or {}
+        except Exception:
+            pass
+    for entry in entries:
+        sid = entry.get("storeId")
+        bid = entry.get("buildId")
+        if not sid:
+            continue
+        if sid not in sync_meta:
+            sync_meta[sid] = {"source": "synced"}
+        elif sync_meta[sid].get("source") == "local":
+            sync_meta[sid]["source"] = "synced"
+        # Mark individual versions too
+        if bid and sync_meta[sid].get("source") != "remote":
+            ver_meta = sync_meta[sid].setdefault("versions", {})
+            if bid not in ver_meta:
+                ver_meta[bid] = "synced"
+
+    # Merge remote entries into local CDN.json
+    if remote_entries:
+        print(f"  Downloading {len(remote_entries)} new entries from other contributors...", end=" ", flush=True)
+        _cdn_snapshot(cdn_data)  # backup before merge
+        merged = _cdn_sync_merge_remote(cdn_data, remote_entries)
+        print(f"merged {merged}")
+        _enrich_cdn_titles(cdn_data)
+        save_json(cdn_path, cdn_data)
+        new_total = sum(1 for k in cdn_data if not k.startswith("_content_"))
+        print(f"  CDN.json updated: {new_total} games total")
+    else:
+        print("  No new entries from other contributors (you're up to date!)")
+    print()
+
+    # Save sync metadata (includes both synced + remote markers)
+    try:
+        save_json(CDN_SYNC_META_FILE, sync_meta)
+    except Exception:
+        pass
+
+    # Update config with sync timestamp
+    config["last_sync"] = _dt.datetime.now().isoformat(timespec="seconds")
+    _cdn_sync_save_config(config)
+
+    # Append to sync log
+    try:
+        sync_log = []
+        if os.path.isfile(CDN_SYNC_LOG_FILE):
+            sync_log = load_json(CDN_SYNC_LOG_FILE) or []
+        uploaded_ids = sorted(set(e.get("storeId") for e in entries if e.get("storeId")))
+        received_ids = sorted(set(e.get("storeId") for e in remote_entries if e.get("storeId")))
+        sync_log.insert(0, {
+            "ts": _dt.datetime.now().isoformat(timespec="seconds"),
+            "user": config.get("username", ""),
+            "uploaded": new_accepted,
+            "dupes": dupes,
+            "received": len(remote_entries),
+            "ptsEarned": pts_earned,
+            "totalPts": total_pts,
+            "dbEntries": db_entries,
+            "dbGames": db_games,
+            "uploadedIds": uploaded_ids,
+            "receivedIds": received_ids,
+        })
+        save_json(CDN_SYNC_LOG_FILE, sync_log)
+    except Exception:
+        pass
+
+    # Cache leaderboard for HTML tab
+    print("  Fetching leaderboard...", end=" ", flush=True)
+    lb_result = api_request(CDN_SYNC_API_BASE + "/leaderboard", retries=1)
+    if lb_result and "leaderboard" in lb_result:
+        save_json(CDN_LEADERBOARD_CACHE_FILE, lb_result)
+        board = lb_result["leaderboard"]
+        print(f"{len(board)} contributors")
+        print()
+        # Display top 10
+        if board:
+            medals = ["[1st]", "[2nd]", "[3rd]"]
+            print(f"  {'Rank':<7} {'Contributor':<24} {'Points':>8}")
+            print(f"  {'----':<7} {'-----------':<24} {'------':>8}")
+            for i, entry in enumerate(board[:10]):
+                rank = medals[i] if i < 3 else f" #{i+1}"
+                print(f"  {rank:<7} {entry['username']:<24} {entry['points']:>8,}")
+            if len(board) > 10:
+                print(f"  ... and {len(board) - 10} more contributors")
+        print()
+    else:
+        print("unavailable")
+    print()
+
+    # Offer rebuild
+    rebuild = input("  Rebuild HTML now to apply changes? [Y/n]: ").strip().lower()
+    if rebuild not in ("n", "no"):
+        try:
+            html_file = build_index()
+            if html_file:
+                file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                print(f"[*] Opening in browser: {file_url}")
+                webbrowser.open(file_url)
+        except Exception as e:
+            print(f"  [!] Rebuild failed: {e}")
+    print()
+
+
 def process_gfwl_download():
     """
     Download GFWL (Games for Windows - LIVE) game packages.
@@ -13146,43 +14645,40 @@ def interactive_menu():
             print(f"    [b] Process all")
             print(f"    [c] Add new gamertag")
             print(f"    [d] Refresh token")
-            print(f"    [e] Delete a gamertag")
-            print(f"    [f] Clear cache + rescan all")
+            print(f"    [e] Refresh all tokens")
+            print(f"    [f] Delete a gamertag")
+            print(f"    [g] Clear cache + rescan all")
         else:
             print("  Gamertags:  (none)")
             print("    [c] Add a gamertag to unlock collection features")
         print()
         print("  Scan endpoints:")
-        print("    [g] Collections API only")
-        print("    [h] TitleHub only")
-        print("    [i] Content Access only (Xbox 360)")
-        print()
-        print("  Catalogs:")
-        print("    [j] Game Pass Catalog")
-        print("    [k] Full Marketplace")
-        print("    [l] Full Marketplace (all regions)")
-        print("    [m] Regional Prices (enrich marketplace)")
-        print("    [n] New Games")
-        print("    [o] Coming Soon")
-        print("    [p] Game Demos")
-        print()
-        print("  Discovery:")
-        print("    [q] Web Browse catalog (US only)")
-        print("    [r] Web Browse catalog (all 7 regions)")
-        print("    [s] TitleHub ID scan (coarse, all regions)")
-        print("    [t] Full discovery (Marketplace + Browse + TitleHub, all regions)")
+        print("    [h] Collections API only")
+        print("    [i] TitleHub only")
+        print("    [j] Content Access only (Xbox 360)")
         print()
         print("  Build:")
-        print("    [u] Build/Rebuild Index")
+        print("    [k] Build/Rebuild Index")
         print()
-        print("  Utilities:")
-        print("    [v] Xbox One / Series X|S USB Hard Drive Tool")
-        print("    [w] Xbox One / Series X|S CDN Installer")
-        print("    [x] Xbox One / Series X|S Hard Delist Installer")
-        print("    [y] MS Store (Win8/8.1/10) CDN Installer")
-        print("    [z] Games for Windows Live (GFWL) CDN Installer")
+        print("  XVC CDN Scrape and Sync:")
+        print("    [l] Scrape XVCs from Xbox One / Series X|S USB Hard Drive")
+        print("    [t] Scrape XVCs from Locally Installed Windows Games")
+        print("    [s] Sync CDN.json with Freshdex CDN Database")
+        print()
+        print("  CDN Installers:")
+        print("    [m] Xbox One / Series X|S CDN Installer")
+        print("    [n] MS Store (Win8/8.1/10) CDN Installer")
+        print()
+        print("  GFWL:")
+        print("    [o] GFWL CDN Installer")
+        print("    [p] Recover GFWL Product Keys (by elusiveeagle)")
+        print()
+        print("  Windows/Store:")
+        print("    [q] Windows Gaming Repair Tool")
+        print("    [r] Windows Store Reset Tool")
         print()
         print("    [0] Quit")
+        print("    [?] Credits")
         print()
 
         pick = input("  Pick: ").strip()
@@ -13192,6 +14688,56 @@ def interactive_menu():
 
         if pu == "0":
             break
+        elif pu == "?":
+            W = 62
+            B = "|"
+            def _cr(text=""):
+                return f"  {B}   {text:<{W-6}}{B}"
+            print()
+            print(f"  +{'=' * (W - 2)}+")
+            print(_cr())
+            print(_cr("##   ##  ######  ########"))
+            print(_cr(" ## ##   ##         ##"))
+            print(_cr("  ###    ##         ##"))
+            print(_cr(" ## ##   ##         ##"))
+            print(_cr("##   ##  ######     ##"))
+            print(_cr())
+            print(_cr(f"Xbox Collection Tracker v{VERSION}"))
+            print(_cr())
+            print(_cr("Made with love by"))
+            print(_cr("  Freshdex & Claude Code"))
+            print(_cr())
+            print(f"  +{'-' * (W - 2)}+")
+            print(_cr())
+            print(_cr("Special Thanks"))
+            print(_cr("~~~~~~~~~~~~~~"))
+            print(_cr())
+            print(_cr("elusiveeagle for the recover-gfwl-keys tool"))
+            print(_cr("Jake The Game Collector"))
+            print(_cr("SargeCassidy"))
+            print(_cr("Shadow Kisuragi"))
+            print(_cr("Ahayzo"))
+            print(_cr("Oriole"))
+            print(_cr("Strive"))
+            print(_cr("jondeezie"))
+            print(_cr("larvi"))
+            print(_cr("Omfamna"))
+            print(_cr("RetroChief1969"))
+            print(_cr("Vahliya"))
+            print(_cr("blackboxrory"))
+            print(_cr("BlueyZeal"))
+            print(_cr("D3LTA"))
+            print(_cr("Fool"))
+            print(_cr("MaximizePlus"))
+            print(_cr("Miyamoto Musashi"))
+            print(_cr("NutriWhip"))
+            print(_cr("planchetflaw"))
+            print(_cr("Skelix"))
+            print(_cr())
+            print(f"  +{'=' * (W - 2)}+")
+            print()
+            input("  Press Enter to return...")
+            continue
         elif pu == "a":
             if _no_accts:
                 print("  [!] No gamertags configured. Use [c] to add one first.")
@@ -13223,6 +14769,17 @@ def interactive_menu():
                     print("  Invalid selection.")
             except ValueError:
                 print("  Invalid selection.")
+            continue
+        elif pu == "b":
+            if _no_accts:
+                print("  [!] No gamertags configured. Use [c] to add one first.")
+                continue
+            _t0 = time.time()
+            try:
+                process_all_accounts()
+                _op_summary("Process all gamertags", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("Process all gamertags", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "c":
             cmd_add()
@@ -13270,6 +14827,24 @@ def interactive_menu():
             if _no_accts:
                 print("  [!] No gamertags configured. Use [c] to add one first.")
                 continue
+            _t0 = time.time()
+            try:
+                print(f"\n[*] Refreshing tokens for {len(gamertags)} gamertag(s)...")
+                for gt in gamertags:
+                    try:
+                        print(f"  {gt}...", end=" ", flush=True)
+                        refresh_account_token(gt)
+                        print("OK")
+                    except Exception as _te:
+                        print(f"FAILED: {_te}")
+                _op_summary("Refresh all tokens", detail=f"{len(gamertags)} gamertags", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("Refresh all tokens", success=False, detail=str(_e), elapsed=time.time() - _t0)
+            continue
+        elif pu == "f":
+            if _no_accts:
+                print("  [!] No gamertags configured. Use [c] to add one first.")
+                continue
             gt = None
             if len(gamertags) == 1:
                 gt = gamertags[0]
@@ -13297,18 +14872,24 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Delete gamertag", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "b":
+        elif pu == "g":
             if _no_accts:
                 print("  [!] No gamertags configured. Use [c] to add one first.")
                 continue
-            _t0 = time.time()
-            try:
-                process_all_accounts()
-                _op_summary("Process all gamertags", detail="Done", elapsed=time.time() - _t0)
-            except Exception as _e:
-                _op_summary("Process all gamertags", success=False, detail=str(_e), elapsed=time.time() - _t0)
+            print()
+            print("  This will delete all cached API data and rescan every gamertag.")
+            confirm = input("  Are you sure? [y/N]: ").strip().lower()
+            if confirm in ("y", "yes"):
+                _t0 = time.time()
+                try:
+                    for gt in gamertags:
+                        clear_api_cache(gt)
+                    process_all_accounts()
+                    _op_summary("Clear cache + rescan", detail="All gamertags rescanned", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Clear cache + rescan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "g":
+        elif pu == "h":
             gt = _pick_account(gamertags, "Collections API scan for which account?")
             if gt == "*":
                 _t0 = time.time()
@@ -13333,7 +14914,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Collections API scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "h":
+        elif pu == "i":
             gt = _pick_account(gamertags, "TitleHub scan for which account?")
             if gt == "*":
                 _t0 = time.time()
@@ -13358,7 +14939,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("TitleHub scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "i":
+        elif pu == "j":
             gt = _pick_account(gamertags, "Content Access scan for which account?")
             if gt == "*":
                 _t0 = time.time()
@@ -13387,24 +14968,7 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Content Access scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "f":
-            if _no_accts:
-                print("  [!] No gamertags configured. Use [c] to add one first.")
-                continue
-            print()
-            print("  This will delete all cached API data and rescan every gamertag.")
-            confirm = input("  Are you sure? [y/N]: ").strip().lower()
-            if confirm in ("y", "yes"):
-                _t0 = time.time()
-                try:
-                    for gt in gamertags:
-                        clear_api_cache(gt)
-                    process_all_accounts()
-                    _op_summary("Clear cache + rescan", detail="All gamertags rescanned", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("Clear cache + rescan", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "u":
+        elif pu == "k":
             _t0 = time.time()
             try:
                 html_file = build_index()
@@ -13416,258 +14980,7 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("Build index", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "j":
-            _t0 = time.time()
-            try:
-                process_gamepass_library()
-                _op_summary("Game Pass catalog", detail="Done", elapsed=time.time() - _t0)
-            except Exception as _e:
-                _op_summary("Game Pass catalog", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "k":
-            gt = _pick_account(gamertags, "Marketplace scan using which account?")
-            if gt == "*":
-                gt = gamertags[0]
-            if gt:
-                _t0 = time.time()
-                try:
-                    html_file, _mkt = process_marketplace(gt)
-                    if html_file:
-                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                        webbrowser.open(file_url)
-                    _op_summary("Marketplace scan", detail=f"{gt} — {len(_mkt):,} items", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("Marketplace scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
         elif pu == "l":
-            gt = _pick_account(gamertags, "All-regions marketplace using which account?")
-            if gt == "*":
-                gt = gamertags[0]
-            if gt:
-                _t0 = time.time()
-                try:
-                    html_file, _mkt = process_marketplace_all_regions(gt)
-                    if html_file:
-                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                        webbrowser.open(file_url)
-                    _op_summary("Marketplace (all regions)", detail=f"{gt} — {len(_mkt):,} items", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("Marketplace (all regions)", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "m":
-            gt = _pick_account(gamertags, "Regional prices using which account?")
-            if gt == "*":
-                gt = gamertags[0]
-            if gt:
-                _t0 = time.time()
-                try:
-                    set_account_paths(gt)
-                    if _is_token_expired(gt):
-                        _auto_refresh_token(gt)
-                    acct = account_dir(gt)
-                    auth_token_xl = _read_xl_token()
-                    if not auth_token_xl:
-                        print("[!] auth_token_xl.txt required for regional pricing")
-                        continue
-                    mkt_file = os.path.join(acct, "marketplace.json")
-                    if not os.path.isfile(mkt_file):
-                        print("[!] No marketplace.json found. Run [k] Full Marketplace first.")
-                        continue
-                    mkt_items = load_json(mkt_file)
-                    print(f"[*] Enriching {len(mkt_items)} marketplace items with regional prices...")
-                    mkt_items = enrich_regional_prices(mkt_items, auth_token_xl)
-                    save_json(mkt_file, mkt_items)
-                    # Rebuild data.js and HTML
-                    library = load_json(LIBRARY_FILE) if os.path.isfile(LIBRARY_FILE) else []
-                    play_history = load_json(PLAY_HISTORY_FILE) if os.path.isfile(PLAY_HISTORY_FILE) else []
-                    scan_history = load_all_scans(gt)
-                    acct_meta = collect_account_metadata()
-                    data_js_path = os.path.join(acct, "data.js")
-                    write_data_js(library, _load_gp_details(), scan_history, data_js_path, play_history,
-                                  marketplace=mkt_items, accounts_meta=acct_meta)
-                    html = build_html_template(gamertag=gt)
-                    with open(OUTPUT_HTML_FILE, "w", encoding="utf-8") as f:
-                        f.write(html)
-                    print(f"[+] Done: {OUTPUT_HTML_FILE}")
-                    file_url = "file:///" + OUTPUT_HTML_FILE.replace("\\", "/").replace(" ", "%20")
-                    webbrowser.open(file_url)
-                    _op_summary("Regional prices", detail=f"{gt}", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("Regional prices", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "n":
-            gt = _pick_account(gamertags, "New Games scan using which account?")
-            if gt == "*":
-                gt = gamertags[0]
-            if gt:
-                _t0 = time.time()
-                try:
-                    html_file, _mkt = process_marketplace(gt, channels=["MobileNewGames"])
-                    if html_file:
-                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                        webbrowser.open(file_url)
-                    _op_summary("New Games scan", detail=f"{gt} — {len(_mkt):,} items", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("New Games scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "o":
-            gt = _pick_account(gamertags, "Coming Soon scan using which account?")
-            if gt == "*":
-                gt = gamertags[0]
-            if gt:
-                _t0 = time.time()
-                try:
-                    html_file, _mkt = process_marketplace(gt, channels=["GamesComingSoon"])
-                    if html_file:
-                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                        webbrowser.open(file_url)
-                    _op_summary("Coming Soon scan", detail=f"{gt} — {len(_mkt):,} items", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("Coming Soon scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "p":
-            gt = _pick_account(gamertags, "Game Demos scan using which account?")
-            if gt == "*":
-                gt = gamertags[0]
-            if gt:
-                _t0 = time.time()
-                try:
-                    html_file, _mkt = process_marketplace(gt, channels=["GameDemos"])
-                    if html_file:
-                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                        webbrowser.open(file_url)
-                    _op_summary("Game Demos scan", detail=f"{gt} — {len(_mkt):,} items", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("Game Demos scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "q":
-            gt = _pick_account(gamertags, "Browse catalog using which account?", allow_all=False)
-            if gt:
-                _t0 = time.time()
-                try:
-                    set_account_paths(gt)
-                    if _is_token_expired(gt):
-                        _auto_refresh_token(gt)
-                    # Try both tokens — emerald endpoint RP is unknown
-                    auth = read_auth_token(optional=True)
-                    auth_xl = _read_xl_token()
-                    token = auth_xl or auth
-                    products = None
-                    if not token:
-                        print(f"[!] No auth token for {gt}. Refresh token first.")
-                    else:
-                        print(f"  Using {'xl' if token == auth_xl else 'mp'} token")
-                        products = fetch_browse_all(token)
-                        if products:
-                            browse_items = browse_to_marketplace(products, gt)
-                            # Merge with existing marketplace data (keep old channels)
-                            existing = load_json(MARKETPLACE_FILE) if os.path.isfile(MARKETPLACE_FILE) else []
-                            mkt_items = _merge_marketplace(existing, browse_items)
-                            save_json(MARKETPLACE_FILE, mkt_items)
-                            print(f"[+] Saved {len(mkt_items)} marketplace items")
-                            # Rebuild all HTML (per-account + combined index)
-                            html_file = build_index()
-                            if html_file:
-                                file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                                webbrowser.open(file_url)
-                    _op_summary("Browse catalog (US)", detail=f"{gt} — {len(products):,} products" if products else f"{gt}", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("Browse catalog (US)", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "r":
-            gt = _pick_account(gamertags, "Multi-region browse using which account?", allow_all=False)
-            if gt:
-                _t0 = time.time()
-                try:
-                    set_account_paths(gt)
-                    if _is_token_expired(gt):
-                        _auto_refresh_token(gt)
-                    auth = read_auth_token(optional=True)
-                    auth_xl = _read_xl_token()
-                    token = auth_xl or auth
-                    products = None
-                    if not token:
-                        print(f"[!] No auth token for {gt}. Refresh token first.")
-                    else:
-                        print(f"  Using {'xl' if token == auth_xl else 'mp'} token")
-                        products = fetch_browse_all_regions(token, gt)
-                        if products:
-                            browse_items = browse_to_marketplace_multi(products, gt)
-                            existing = load_json(MARKETPLACE_FILE) if os.path.isfile(MARKETPLACE_FILE) else []
-                            mkt_items = _merge_marketplace(existing, browse_items)
-                            save_json(MARKETPLACE_FILE, mkt_items)
-                            print(f"[+] Saved {len(mkt_items)} marketplace items")
-                            html_file = build_index()
-                            if html_file:
-                                file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                                webbrowser.open(file_url)
-                    _op_summary("Browse catalog (all regions)", detail=f"{gt} — {len(products):,} products" if products else f"{gt}", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("Browse catalog (all regions)", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "t":
-            gt = _pick_account(gamertags, "Full discovery using which account?", allow_all=False)
-            if gt:
-                _t0 = time.time()
-                try:
-                    html_file = None
-
-                    # Step 1: Marketplace channels (bronze endpoint)
-                    print("\n=== Step 1/3: Marketplace channels ===\n")
-                    html_file, _mkt = process_marketplace(gt)
-
-                    # Step 2: Browse catalog all regions (emerald endpoint) + merge
-                    print("\n=== Step 2/3: Browse catalog (all regions) ===\n")
-                    set_account_paths(gt)
-                    auth = read_auth_token(optional=True)
-                    auth_xl = _read_xl_token()
-                    token = auth_xl or auth
-                    if token:
-                        print(f"  Using {'xl' if token == auth_xl else 'mp'} token")
-                        products = fetch_browse_all_regions(token, gt)
-                        if products:
-                            browse_items = browse_to_marketplace_multi(products, gt)
-                            existing = load_json(MARKETPLACE_FILE) if os.path.isfile(MARKETPLACE_FILE) else []
-                            mkt_items = _merge_marketplace(existing, browse_items)
-                            save_json(MARKETPLACE_FILE, mkt_items)
-                            print(f"[+] Saved {len(mkt_items)} marketplace items")
-                    else:
-                        print("[!] No auth token for browse — skipping step 2")
-
-                    # Step 3: TitleHub coarse scan (all regions)
-                    print("\n=== Step 3/3: TitleHub ID scan (all regions) ===\n")
-                    set_account_paths(gt)
-                    xl_token = _read_xl_token()
-                    if xl_token:
-                        scan_titlehub_all_regions(xl_token)
-                    else:
-                        print("[!] No xl token — skipping TitleHub scan")
-
-                    # Final rebuild
-                    html_file = build_index()
-                    if html_file:
-                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                        webbrowser.open(file_url)
-                    _op_summary("Full discovery", detail=f"{gt}", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("Full discovery", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "s":
-            gt = _pick_account(gamertags, "TitleHub scan using which account?", allow_all=False)
-            if gt:
-                _t0 = time.time()
-                try:
-                    set_account_paths(gt)
-                    xl_token = _read_xl_token()
-                    if not xl_token:
-                        print(f"[!] No xl token for {gt}. Refresh token first.")
-                    else:
-                        scan_titlehub_all_regions(xl_token)
-                    _op_summary("TitleHub ID scan", detail=f"{gt}", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("TitleHub ID scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "v":
             _t0 = time.time()
             try:
                 process_xbox_usb_tool()
@@ -13675,15 +14988,19 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("USB Hard Drive Tool", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "w":
+        elif pu == "m":
             print("\n[Xbox One / Series X|S CDN Installer]")
             print("  Coming soon.")
             continue
-        elif pu == "x":
-            print("\n[Xbox One / Series X|S Hard Delist Installer]")
-            print("  Coming soon.")
+        elif pu == "n":
+            _t0 = time.time()
+            try:
+                process_store_packages()
+                _op_summary("MS Store Installer", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("MS Store Installer", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "z":
+        elif pu == "o":
             _t0 = time.time()
             try:
                 process_gfwl_download()
@@ -13691,13 +15008,67 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("GFWL CDN Installer", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "y":
+        elif pu == "p":
+            try:
+                recover_gfwl_keys()
+            except Exception as _e:
+                print(f"  [!] Error: {_e}")
+            continue
+        elif pu == "q":
+            print("\n  [Windows Gaming Repair Tool]\n")
+            print("    [1] Repair Gaming Components (re-register, reset, restart services)")
+            print("    [2] Clear Windows Credential Manager (fix sign-in issues)")
+            print("    [b] Back")
+            print()
+            _xc = input("  Pick: ").strip().lower()
+            try:
+                if _xc == "1":
+                    windows_gaming_repair()
+                elif _xc == "2":
+                    clear_credential_manager()
+            except Exception as _e:
+                print(f"  [!] Error: {_e}")
+            continue
+        elif pu == "r":
+            print("\n  [Windows Store Reset Tool]")
+            print()
+            print("  Clears the Microsoft Store cache without deleting installed")
+            print("  apps or changing account settings. Fixes store download")
+            print("  failures, app not opening, and slow performance.")
+            print()
+            print("  A blank window will appear — do not close it.")
+            print("  It will close automatically and the Store will reopen.")
+            print()
+            confirm = input("  Run wsreset.exe? [y/N]: ").strip().lower()
+            if confirm == "y":
+                try:
+                    wsreset = os.path.join(os.environ.get("SYSTEMROOT", r"C:\Windows"), "System32", "wsreset.exe")
+                    if not os.path.isfile(wsreset):
+                        print(f"  [!] wsreset.exe not found at {wsreset}")
+                    else:
+                        print("  [*] Running wsreset.exe...")
+                        subprocess.Popen([wsreset])
+                        print("  [+] wsreset.exe launched. Wait for it to finish.")
+                except Exception as _e:
+                    print(f"  [!] Error: {_e}")
+            else:
+                print("  Cancelled.")
+            continue
+        elif pu == "s":
             _t0 = time.time()
             try:
-                process_store_packages()
-                _op_summary("MS Store Installer", detail="Done", elapsed=time.time() - _t0)
+                process_cdn_sync()
+                _op_summary("CDN Sync", detail="Done", elapsed=time.time() - _t0)
             except Exception as _e:
-                _op_summary("MS Store Installer", success=False, detail=str(_e), elapsed=time.time() - _t0)
+                _op_summary("CDN Sync", success=False, detail=str(_e), elapsed=time.time() - _t0)
+            continue
+        elif pu == "t":
+            _t0 = time.time()
+            try:
+                process_pc_cdn_scrape()
+                _op_summary("PC CDN Scrape", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("PC CDN Scrape", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         else:
             try:
