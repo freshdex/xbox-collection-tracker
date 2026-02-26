@@ -369,8 +369,84 @@ def _serve_shared_data(key):
 
 @app.route("/api/v1/shared/cdn")
 def shared_cdn():
-    """Serve CDN_DB from shared_data table (imported from enriched CDN.json)."""
-    return _serve_shared_data("cdn")
+    """Build CDN_DB live from cdn_entries table, enriched with titles from shared_data.
+    Automatically includes new entries from CDN Sync without manual import.
+    Cached for SHARED_CACHE_TTL (5 min) via _gzip_json_response."""
+    conn = get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Load enrichment data (title/developer/publisher) from shared_data import
+        enrichment = {}
+        cur.execute("SELECT data FROM shared_data WHERE key = 'cdn'")
+        row = cur.fetchone()
+        if row and isinstance(row["data"], dict):
+            for sid, rec in row["data"].items():
+                t = rec.get("title") or ""
+                if t:
+                    enrichment[sid] = {
+                        "title": t,
+                        "developer": rec.get("developer", ""),
+                        "publisher": rec.get("publisher", ""),
+                    }
+
+        # Fetch all live entries from cdn_entries
+        cur.execute("""
+            SELECT store_id, build_id, content_id, package_name, build_version,
+                   platform, size_bytes, cdn_urls, content_types, devices,
+                   language, plan_id, source, scraped_at,
+                   prior_build_version, prior_build_id
+            FROM cdn_entries
+            WHERE NOT deleted
+            ORDER BY store_id, scraped_at DESC
+        """)
+
+        _VER_KEYS = ("buildVersion", "buildId", "platform", "sizeBytes", "cdnUrls",
+                      "scrapedAt", "priorBuildVersion", "priorBuildId")
+        cdn_db = {}
+        for row in cur:
+            sid = row["store_id"]
+            entry = {
+                "contentId": row["content_id"],
+                "storeId": sid,
+                "packageName": row["package_name"],
+                "buildVersion": row["build_version"],
+                "buildId": row["build_id"],
+                "platform": row["platform"],
+                "sizeBytes": row["size_bytes"],
+                "cdnUrls": row["cdn_urls"] or [],
+                "contentTypes": row["content_types"],
+                "devices": row["devices"],
+                "language": row["language"],
+                "planId": row["plan_id"],
+                "source": row["source"],
+                "scrapedAt": row["scraped_at"].isoformat() if row["scraped_at"] else None,
+                "priorBuildVersion": row["prior_build_version"],
+                "priorBuildId": row["prior_build_id"],
+            }
+            if sid not in cdn_db:
+                cdn_db[sid] = entry
+            else:
+                existing = cdn_db[sid]
+                if existing["buildId"] == entry["buildId"]:
+                    continue
+                versions = existing.get("versions", [])
+                if not versions:
+                    versions.append({k: existing[k] for k in _VER_KEYS if k in existing})
+                if not any(v.get("buildId") == entry["buildId"] for v in versions):
+                    versions.append({k: entry[k] for k in _VER_KEYS if k in entry})
+                existing["versions"] = versions
+
+        # Apply enrichment
+        for sid, rec in cdn_db.items():
+            if sid in enrichment:
+                rec.update(enrichment[sid])
+
+        return _gzip_json_response(cdn_db, cache_key="shared_cdn")
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+    finally:
+        conn.close()
 
 
 @app.route("/api/v1/shared/cdn_meta")
