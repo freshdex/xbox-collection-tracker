@@ -60,7 +60,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "1.8"
+VERSION = "1.8.1"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -2350,6 +2350,11 @@ def extract_catalog_data(product, market="GB"):
     else:
         result["priceUSD"] = best_msrp
         result["currentPriceUSD"] = best_list
+
+    # AlternateIds (normalize v7 PascalCase to v3 camelCase)
+    alt_ids = product.get("AlternateIds", [])
+    result["alternateIds"] = [{"idType": a.get("IdType", ""), "id": a.get("Value", "")}
+                              for a in alt_ids]
 
     return pid, result
 
@@ -4917,7 +4922,9 @@ def build_html_template(gamertag=""):
         "      cid:rec.contentId||'',pkg:rec.packageName||'',src:topSrc,who:who,\n"
         "      ct:rec.contentTypes||'',dev:rec.devices||'',lang:rec.language||'',\n"
         "      planId:rec.planId||'',scrapedAt:rec.scrapedAt||'',\n"
-        "      priorBv:rec.priorBuildVersion||'',priorBid:rec.priorBuildId||'',isVer:false});\n"
+        "      priorBv:rec.priorBuildVersion||'',priorBid:rec.priorBuildId||'',\n"
+        "      tid:rec.xboxTitleId||'',exe:rec.executableName||'',pfn:rec.packageIdentityName||'',\n"
+        "      minOs:rec.minOsVersion||'',pub:rec.publisher||'',isVer:false});\n"
         "    (rec.versions||[]).forEach(v=>{\n"
         "      if(v.buildId===rec.buildId)return;\n"
         "      const vSrc=(meta.versions&&meta.versions[v.buildId])||topSrc;\n"
@@ -4927,7 +4934,9 @@ def build_html_template(gamertag=""):
         "        cid:rec.contentId||'',pkg:rec.packageName||'',src:vSrc,who:vWho,\n"
         "        ct:rec.contentTypes||'',dev:rec.devices||'',lang:rec.language||'',\n"
         "        planId:rec.planId||'',scrapedAt:v.scrapedAt||'',\n"
-        "        priorBv:v.priorBuildVersion||'',priorBid:v.priorBuildId||'',isVer:true});\n"
+        "        priorBv:v.priorBuildVersion||'',priorBid:v.priorBuildId||'',\n"
+        "        tid:rec.xboxTitleId||'',exe:rec.executableName||'',pfn:rec.packageIdentityName||'',\n"
+        "        minOs:rec.minOsVersion||'',pub:rec.publisher||'',isVer:true});\n"
         "    });\n"
         "  });\n"
         "  _cdnSyncFlat.sort((a,b)=>a.name.localeCompare(b.name)||a.bv.localeCompare(b.bv));\n"
@@ -4960,7 +4969,7 @@ def build_html_template(gamertag=""):
         "    if(verF==='multi'&&!_cdnMultiSids.has(e.sid))return false;\n"
         "    if(verF==='single'&&_cdnMultiSids.has(e.sid))return false;\n"
         "    if(_cdnSyncQ){\n"
-        "      const hay=(e.name+' '+e.sid+' '+_xvd(e.bv)+' '+_cdnPlat(e.plat)+' '+e.pkg+' '+e.who).toLowerCase();\n"
+        "      const hay=(e.name+' '+e.sid+' '+_xvd(e.bv)+' '+_cdnPlat(e.plat)+' '+e.pkg+' '+e.who+' '+e.tid+' '+e.pub+' '+e.exe).toLowerCase();\n"
         "      if(!hay.includes(_cdnSyncQ))return false;\n"
         "    }\n"
         "    return true;\n"
@@ -4970,6 +4979,9 @@ def build_html_template(gamertag=""):
         "    sid:(a,b)=>a.sid.localeCompare(b.sid)*d,\n"
         "    bv:(a,b)=>a.bv.localeCompare(b.bv)*d||a.name.localeCompare(b.name),\n"
         "    plat:(a,b)=>a.plat.localeCompare(b.plat)*d||a.name.localeCompare(b.name),\n"
+        "    tid:(a,b)=>(a.tid||'').localeCompare(b.tid||'')*d||a.name.localeCompare(b.name),\n"
+        "    pub:(a,b)=>(a.pub||'').localeCompare(b.pub||'')*d||a.name.localeCompare(b.name),\n"
+        "    exe:(a,b)=>(a.exe||'').localeCompare(b.exe||'')*d||a.name.localeCompare(b.name),\n"
         "    sz:(a,b)=>((a.sz||0)-(b.sz||0))*d||a.name.localeCompare(b.name),\n"
         "    src:(a,b)=>a.src.localeCompare(b.src)*d||a.name.localeCompare(b.name),\n"
         "    who:(a,b)=>a.who.localeCompare(b.who)*d||a.name.localeCompare(b.name),\n"
@@ -4986,6 +4998,7 @@ def build_html_template(gamertag=""):
         "  function _sa(c,l){return '<th class=\"sortable'+(_cdnSortCol===c?(_cdnSortDir==='asc'?' sort-asc':' sort-desc'):'')+'\" onclick=\"_cdnSortBy(\\''+c+'\\')\"'+'>'+l+'</th>'}\n"
         "  let h='<table class=\"gtbl\" style=\"width:100%;font-size:12px\"><thead><tr>'\n"
         "    +_sa('name','Game')+_sa('sid','Store ID')+_sa('bv','Build Version')+_sa('plat','Platform')\n"
+        "    +_sa('tid','Title ID')+_sa('pub','Publisher')+_sa('exe','Executable')\n"
         "    +_sa('sz','Size')+_sa('who','Contributor')+_sa('date','Date Scraped')+'<th>CDN URLs</th>'+_sa('src','Source')+'</tr></thead><tbody>';\n"
         "  display.forEach(e=>{\n"
         "    const ver=_xvd(e.bv);\n"
@@ -4998,7 +5011,11 @@ def build_html_template(gamertag=""):
         "    h+=`<tr${cls}><td>${e.name}${e.isVer?' <span style=\"color:#888;font-size:10px\">(older)</span>':''}</td>`;\n"
         "    h+=`<td class=\"gt-mono\" style=\"font-size:11px\">${e.sid}</td>`;\n"
         "    h+=`<td class=\"gt-mono\" style=\"font-size:11px\" title=\"buildId: ${e.bid}\">${ver||e.bid.slice(0,12)}</td>`;\n"
-        "    h+=`<td>${_cdnPlat(e.plat)}</td><td class=\"num\">${sz}</td>`;\n"
+        "    h+=`<td>${_cdnPlat(e.plat)}</td>`;\n"
+        "    h+=`<td class=\"gt-mono\" style=\"font-size:11px\">${e.tid||'-'}</td>`;\n"
+        "    h+=`<td style=\"font-size:11px\">${e.pub||'-'}</td>`;\n"
+        "    h+=`<td class=\"gt-mono\" style=\"font-size:11px\">${e.exe||'-'}</td>`;\n"
+        "    h+=`<td class=\"num\">${sz}</td>`;\n"
         "    h+=`<td style=\"font-size:11px\">${e.who}</td><td class=\"gt-mono\" style=\"font-size:11px\">${dt}</td>`;\n"
         "    h+=`<td>${urlHtml}</td><td>${srcBadge}</td></tr>`;\n"
         "  });\n"
@@ -12471,6 +12488,11 @@ def _cdn_sync_flatten_entries(cdn_data):
             "scrapedAt": rec.get("scrapedAt"),
             "priorBuildVersion": rec.get("priorBuildVersion"),
             "priorBuildId": rec.get("priorBuildId"),
+            "xboxTitleId": rec.get("xboxTitleId"),
+            "msaAppId": rec.get("msaAppId"),
+            "executableName": rec.get("executableName"),
+            "packageIdentityName": rec.get("packageIdentityName"),
+            "minOsVersion": rec.get("minOsVersion"),
         }
         # Normalize cdnUrls to list
         if isinstance(entry["cdnUrls"], str):
@@ -12499,6 +12521,11 @@ def _cdn_sync_flatten_entries(cdn_data):
                     "scrapedAt": ver.get("scrapedAt"),
                     "priorBuildVersion": ver.get("priorBuildVersion"),
                     "priorBuildId": ver.get("priorBuildId"),
+                    "xboxTitleId": rec.get("xboxTitleId"),
+                    "msaAppId": rec.get("msaAppId"),
+                    "executableName": rec.get("executableName"),
+                    "packageIdentityName": rec.get("packageIdentityName"),
+                    "minOsVersion": rec.get("minOsVersion"),
                 }
                 if isinstance(ventry["cdnUrls"], str):
                     ventry["cdnUrls"] = [ventry["cdnUrls"]]
@@ -12549,6 +12576,11 @@ def _cdn_sync_merge_remote(cdn_data, remote_entries):
             "scrapedAt": entry.get("scrapedAt"),
             "priorBuildVersion": entry.get("priorBuildVersion"),
             "priorBuildId": entry.get("priorBuildId"),
+            "xboxTitleId": entry.get("xboxTitleId"),
+            "msaAppId": entry.get("msaAppId"),
+            "executableName": entry.get("executableName"),
+            "packageIdentityName": entry.get("packageIdentityName"),
+            "minOsVersion": entry.get("minOsVersion"),
         }
 
         existing = cdn_data.get(sid)
@@ -12618,6 +12650,48 @@ def scan_pc_games(base_path):
             xvs_files = [f for f in os.listdir(game_path) if f.endswith('.xvs')]
         except Exception:
             continue
+
+        # Parse MicrosoftGame.Config and appxmanifest.xml for metadata
+        _xbox_title_id = ""
+        _msa_app_id = ""
+        _exe_name = ""
+        _config_title = ""
+        _config_publisher = ""
+        _pkg_identity = ""
+        _min_os = ""
+        content_dir = os.path.join(game_path, "Content")
+        try:
+            import xml.etree.ElementTree as _ET
+            cfg = os.path.join(content_dir, "MicrosoftGame.Config")
+            if os.path.isfile(cfg):
+                _tree = _ET.parse(cfg)
+                for el in _tree.getroot().iter():
+                    ln = el.tag.rsplit('}', 1)[-1] if '}' in el.tag else el.tag
+                    if ln == "TitleId" and el.text:
+                        _xbox_title_id = el.text.strip()
+                    elif ln == "MSAAppId" and el.text:
+                        _msa_app_id = el.text.strip()
+                    elif ln == "ShellVisuals":
+                        _config_title = el.get("DefaultDisplayName", "")
+                        _config_publisher = el.get("PublisherDisplayName", "")
+                    elif ln == "Executable" and not _exe_name:
+                        _exe_name = el.get("Name", "")
+        except Exception:
+            pass
+        try:
+            import xml.etree.ElementTree as _ET
+            mf = os.path.join(content_dir, "appxmanifest.xml")
+            if os.path.isfile(mf):
+                _tree = _ET.parse(mf)
+                for el in _tree.getroot().iter():
+                    ln = el.tag.rsplit('}', 1)[-1] if '}' in el.tag else el.tag
+                    if ln == "Identity":
+                        _pkg_identity = el.get("Name", "")
+                    elif ln == "TargetDeviceFamily":
+                        _min_os = el.get("MinVersion", "")
+        except Exception:
+            pass
+
         for xvs_file in xvs_files:
             content_id = xvs_file[:-4]
             try:
@@ -12665,6 +12739,13 @@ def scan_pc_games(base_path):
                     "fastStartState": fast_start,
                     "priorBuildVersion": prior.get("BuildVersion", ""),
                     "priorBuildId": prior.get("BuildId", ""),
+                    "xboxTitleId": _xbox_title_id,
+                    "msaAppId": _msa_app_id,
+                    "executableName": _exe_name,
+                    "packageIdentityName": _pkg_identity,
+                    "minOsVersion": _min_os,
+                    "title": _config_title,
+                    "publisher": _config_publisher,
                     "source": "pc_xvs",
                     "scrapedAt": _dt.datetime.now().isoformat(),
                 })
@@ -12695,6 +12776,11 @@ def _enrich_cdn_titles(cdn_data):
                         cdn_data[sid]["developer"] = info["developer"]
                     if info.get("publisher"):
                         cdn_data[sid]["publisher"] = info["publisher"]
+                    if not cdn_data[sid].get("xboxTitleId"):
+                        for alt in info.get("alternateIds", []):
+                            if alt.get("idType") in ("XboxTitleId", "XBOXTITLEID"):
+                                cdn_data[sid]["xboxTitleId"] = alt["id"]
+                                break
                     found += 1
         except Exception:
             pass

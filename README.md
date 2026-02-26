@@ -2,6 +2,13 @@
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
 
+## What's New in v1.8.1
+
+- **PC game metadata scraping** — The Windows PC CDN scraper (`[T]`) now reads `MicrosoftGame.Config` and `appxmanifest.xml` from each game's `Content` directory. Extracts Xbox Live Title ID, MSA App ID, executable name, package identity name (PFN prefix), and minimum OS version into CDN.json. Game title and publisher are also pulled from config as local fallbacks, reducing Display Catalog lookups.
+- **CDN Sync tab — Title ID, Publisher, Executable columns** — Three new sortable columns in the CDN Sync HTML tab. Title ID links CDN packages to Xbox Live game data (achievements, TitleHub, play history). All three columns are included in search.
+- **Title ID backfill from Display Catalog** — CDN title enrichment now also extracts `xboxTitleId` from the catalog's `AlternateIds`, backfilling Title IDs for USB-scraped entries that lack `MicrosoftGame.Config`.
+- **New fields synced via CDN Sync** — `xboxTitleId`, `msaAppId`, `executableName`, `packageIdentityName`, and `minOsVersion` are now included in CDN Sync uploads and downloads.
+
 ## What's New in v1.8
 
 - **CDN Sync — Community Package Database `[S]`** — Upload your scraped CDN.json to the Freshdex shared database and download entries from other contributors. Register a username, earn points for every new game version you contribute, and climb the leaderboard. Each sync uploads your local entries, receives new ones from the community, and merges everything into your CDN.json. The more people scrape their drives, the more complete the archive becomes.
