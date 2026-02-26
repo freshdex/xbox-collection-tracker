@@ -60,7 +60,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "1.8.1"
+VERSION = "1.9"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -492,6 +492,28 @@ def register_account(gamertag, uhs):
     save_accounts(accounts)
 
 
+def _pick_folder(title="Select folder"):
+    """Open a folder picker dialog. Returns path or None."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        folder = filedialog.askdirectory(title=title)
+        root.destroy()
+        if folder:
+            print(f"  Selected: {folder}")
+            return folder
+        print("  Cancelled.")
+        return None
+    except Exception as e:
+        debug(f"  folder picker failed: {e}")
+    # Fallback to manual input
+    path = input("  Enter folder path (or blank to cancel): ").strip()
+    return path if path else None
+
+
 def account_dir(gamertag):
     """Return the directory path for a given account."""
     return os.path.join(ACCOUNTS_DIR, gamertag)
@@ -871,6 +893,31 @@ def sisu_auth_for_account(existing_gamertag=None):
     # Try device-bound flow if ecdsa is available
     use_device_bound = HAS_ECDSA
     debug(f"  use_device_bound={use_device_bound} HAS_ECDSA={HAS_ECDSA}")
+
+    if not HAS_ECDSA:
+        print()
+        print("[!] The 'ecdsa' package is not installed.")
+        print("    Without it, the Collections API cannot return your full library.")
+        print("    Only TitleHub data will be available (~1000 items instead of ~5000+).")
+        print()
+        choice = input("  Install ecdsa now? [Y/n]: ").strip().lower()
+        if choice in ("", "y", "yes"):
+            import subprocess
+            print("[*] Running: pip install ecdsa")
+            result = subprocess.run([sys.executable, "-m", "pip", "install", "ecdsa"],
+                                    capture_output=True, text=True)
+            if result.returncode == 0:
+                print("[+] ecdsa installed successfully!")
+                print("[!] Please restart XCT for the change to take effect.")
+                sys.exit(0)
+            else:
+                print(f"[!] pip install failed: {result.stderr.strip()}")
+                print("    Try manually: pip install ecdsa")
+                print("    Continuing without Collections API...")
+                print()
+        else:
+            print("    Continuing without Collections API...")
+            print()
 
     if use_device_bound:
         # Get refresh token if we don't have one
@@ -3164,14 +3211,19 @@ def fetch_gamepass_details(gp_data, existing_catalog_us=None,
 # Step 6: Build HTML
 # ===========================================================================
 
-def build_html_template(gamertag=""):
+def build_html_template(gamertag="", hosted=False):
     """Build the static HTML template. Contains no data — loads from data.js.
 
     All dropdowns are populated dynamically from LIB/GP/HISTORY data by JS.
     Only needs to be written once; subsequent scans only update data.js.
+
+    When hosted=True, generates an API-fetching version for xct.freshdex.app
+    instead of loading data.js. Adds auth UI and progressive loading.
     """
     ls_key = f"xboxLibFlags_{gamertag}" if gamertag else "xboxLibFlags"
     page_title = f"Xbox Collection Tracker v{VERSION} by Freshdex"
+    if hosted:
+        page_title = f"XCT Live v{VERSION} by Freshdex"
 
     html = (
         '<!DOCTYPE html>\n'
@@ -3399,7 +3451,7 @@ def build_html_template(gamertag=""):
         'flex-direction:column;align-items:center;justify-content:center;z-index:9999">'
         '<div style="width:48px;height:48px;border:4px solid #333;border-top-color:#107c10;'
         'border-radius:50%;animation:spin 0.8s linear infinite"></div>'
-        '<div style="color:#888;margin-top:16px;font-size:14px">Loading...</div></div>\n'
+        '<div id="loading-status" style="color:#888;margin-top:16px;font-size:14px">Loading...</div></div>\n'
         '<style>@keyframes spin{to{transform:rotate(360deg)}}</style>\n'
 
         # -- Tabs (counts populated by JS) --
@@ -3411,7 +3463,7 @@ def build_html_template(gamertag=""):
         '<div class="tab" id="tab-hist" onclick="switchTab(\'history\',this)" style="display:none">Scan Log <span class="cnt" id="tab-hist-cnt"></span></div>\n'
         '<div class="tab" id="tab-acct" onclick="switchTab(\'gamertags\',this)" style="display:none">Gamertags <span class="cnt" id="tab-acct-cnt"></span></div>\n'
         '<div class="tab" id="tab-gfwl" onclick="switchTab(\'gfwl\',this)" style="display:none">GFWL <span class="cnt" id="tab-gfwl-cnt"></span></div>\n'
-        '<div class="tab" id="tab-cdnsync" onclick="switchTab(\'cdnsync\',this)" style="display:none">CDN Sync <span class="cnt" id="tab-cdnsync-cnt"></span></div>\n'
+        '<div class="tab" id="tab-cdnsync" onclick="switchTab(\'cdnsync\',this)" style="display:none">XVC Database <span class="cnt" id="tab-cdnsync-cnt"></span></div>\n'
         '<div class="tab" id="tab-imp" onclick="switchTab(\'imports\',this)" style="display:none">Imports <span class="cnt" id="tab-imp-cnt"></span></div>\n'
         '<select id="lib-cur" class="tab-cur" onchange="_onCur()">'
         '<option value="USD" selected>USD $</option>'
@@ -3445,9 +3497,31 @@ def build_html_template(gamertag=""):
         '<option value="ARS">ARS AR$</option>'
         '<option value="PHP">PHP ₱</option>'
         '</select>\n'
-        f'<div style="margin-left:6px;padding:0 8px;color:#555;font-size:11px;white-space:nowrap">XCT v{VERSION}</div>\n'
-        '</div>\n'
+    )
 
+    # -- Auth UI for hosted mode --
+    if hosted:
+        html += (
+            '<div id="xct-auth" style="margin-left:auto;display:flex;align-items:center;gap:8px;padding:0 12px">'
+            '<span id="xct-auth-user" style="color:#888;font-size:12px"></span>'
+            '<button id="xct-upload-btn" onclick="document.getElementById(\'xct-upload-input\').click()" '
+            'style="display:none;padding:4px 12px;background:#333;color:#ccc;border:1px solid #555;border-radius:4px;'
+            'font-size:12px;cursor:pointer">Upload</button>'
+            '<input type="file" id="xct-upload-input" accept=".json" '
+            'style="display:none" onchange="_xctUploadFile(this)">'
+            '<button id="xct-auth-btn" onclick="_xctShowAuth()" '
+            'style="padding:4px 12px;background:#107c10;color:#fff;border:none;border-radius:4px;'
+            'font-size:12px;cursor:pointer">Log In</button>'
+            '</div>\n'
+        )
+
+    html += (
+        f'<div style="margin-left:{"6px" if not hosted else "0"};padding:0 8px;color:#555;font-size:11px;white-space:nowrap">'
+        f'{"XCT Live" if hosted else "XCT"} v{VERSION}</div>\n'
+        '</div>\n'
+    )
+
+    html += (
         # -- Game Pass section --
         '<div class="section" id="gamepass">\n'
         '<h2>Game Pass Catalog</h2>\n'
@@ -3632,20 +3706,24 @@ def build_html_template(gamertag=""):
 
         # -- CDN Sync section (entry browser + leaderboard) --
         '<div class="section" id="cdnsync">\n'
-        '<h2>CDN Sync Database</h2>\n'
+        ''
         '<p class="sub" id="cdnsync-sub"></p>\n'
         '<div style="display:flex;gap:8px;margin:10px 0 14px 0">\n'
-        '<button class="sub-tab active" id="cdnsync-tab-entries" onclick="_cdnSyncTab(\'entries\')">CDN Entries</button>\n'
+        '<button class="sub-tab active" id="cdnsync-tab-entries" onclick="_cdnSyncTab(\'entries\')">Database</button>\n'
         '<button class="sub-tab" id="cdnsync-tab-lb" onclick="_cdnSyncTab(\'lb\')">Leaderboard</button>\n'
         '<button class="sub-tab" id="cdnsync-tab-log" onclick="_cdnSyncTab(\'log\')">Sync Log</button>\n'
         '</div>\n'
         '<div id="cdnsync-entries">\n'
+        '<div id="cdnsync-summary"></div>\n'
         '<div class="search-row"><input type="text" id="cdnsync-search" placeholder="Search by game name, store ID, build version..." oninput="filterCDNSync()"></div>\n'
-        '<div style="display:flex;gap:10px;margin:6px 0 10px 0;flex-wrap:wrap">\n'
-        '<select id="cdnsync-plat" onchange="filterCDNSync()"><option value="">All platforms</option></select>\n'
+        '<div style="display:flex;gap:10px;margin:6px 0 10px 0;flex-wrap:wrap;align-items:center">\n'
+        '<div class="cb-drop" id="cdn-plat-cb"><div class="cb-btn" onclick="toggleCB(this)">Platform &#9662;</div><div class="cb-panel"></div></div>\n'
+        '<div class="cb-drop" id="cdn-pub-cb"><div class="cb-btn" onclick="toggleCB(this)">Publisher &#9662;</div><div class="cb-panel"></div></div>\n'
+        '<div class="cb-drop" id="cdn-dev-cb"><div class="cb-btn" onclick="toggleCB(this)">Developer &#9662;</div><div class="cb-panel"></div></div>\n'
         '<select id="cdnsync-src" onchange="filterCDNSync()"><option value="">All sources</option><option value="local">Local (not synced)</option><option value="synced">Synced (on server)</option><option value="remote">Remote (from others)</option></select>\n'
         '<select id="cdnsync-verfilter" onchange="filterCDNSync()"><option value="">All games</option><option value="multi">Multi-version only</option><option value="single">Single version only</option></select>\n'
         '<select id="cdnsync-who" onchange="filterCDNSync()"><option value="">All contributors</option></select>\n'
+        '<select id="cdnsync-dlc" onchange="filterCDNSync()"><option value="all">Games &amp; DLC</option><option value="games">Games only</option><option value="dlc">DLC only</option><option value="has">Games with DLC</option></select>\n'
         '<label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#aaa"><input type="checkbox" id="cdnsync-ver" checked onchange="filterCDNSync()"> Show all versions</label>\n'
         '</div>\n'
         '<div id="cdnsync-list"></div>\n'
@@ -3665,8 +3743,161 @@ def build_html_template(gamertag=""):
         '<img class="modal-hero" id="modal-hero" src="" alt="">\n'
         '<div class="modal-body" id="modal-body"></div></div></div>\n'
 
-        # -- Load data from data.js, then app logic --
-        '<script src="data.js"></script>\n'
+        # -- Load data from data.js (or API for hosted mode) --
+    )
+
+    if hosted:
+        html += (
+            '<script>\n'
+            "const _API='';\n"
+            "let LIB=[],GP=[],PH=[],MKT=[],HISTORY=[],DEFAULT_FLAGS={},"
+            "ACCOUNTS=[],RATES={},GC_FACTOR=0.81,CDN_DB={},GFWL=[],"
+            "CDN_LEADERBOARD=[],CDN_LB_STATS={},CDN_SYNC_META={},"
+            "CDN_SYNC_USER='',CDN_SYNC_LOG=[];\n"
+            "let _xctApiKey=localStorage.getItem('xct_api_key')||'';\n"
+            "let _xctUser=localStorage.getItem('xct_username')||'';\n"
+            "async function _fetchJSON(url,opts){"
+            "const r=await fetch(url,opts);"
+            "if(!r.ok)throw new Error('HTTP '+r.status);"
+            "return r.json()}\n"
+            "async function _loadShared(){"
+            "const keys=['mkt','gp','rates','flags','gfwl','cdn','cdn_lb','cdn_log'];"
+            "const results=await Promise.allSettled("
+            "keys.map(k=>_fetchJSON(_API+'/api/v1/shared/'+k)));"
+            "const d={};"
+            "keys.forEach((k,i)=>{if(results[i].status==='fulfilled')d[k]=results[i].value});"
+            "if(d.mkt)MKT=d.mkt;"
+            "if(d.gp)GP=d.gp;"
+            "if(d.rates)RATES=d.rates;"
+            "if(d.flags)DEFAULT_FLAGS=d.flags;"
+            "if(d.gfwl)GFWL=d.gfwl;"
+            "if(d.cdn)CDN_DB=d.cdn;"
+            "if(d.cdn_lb){"
+            "CDN_LEADERBOARD=d.cdn_lb.leaderboard||[];"
+            "CDN_LB_STATS={total_contributors:d.cdn_lb.total_contributors,"
+            "total_entries:d.cdn_lb.total_entries,total_games:d.cdn_lb.total_games}}"
+            "if(d.cdn_log)CDN_SYNC_LOG=d.cdn_log.sync_log||[]}\n"
+            "async function _loadCollection(){"
+            "if(!_xctApiKey)return false;"
+            "try{"
+            "const data=await _fetchJSON(_API+'/api/v1/collection',{"
+            "headers:{'Authorization':'Bearer '+_xctApiKey}});"
+            "if(!data.uploaded)return false;"
+            "LIB=data.library||[];"
+            "PH=data.playHistory||[];"
+            "HISTORY=data.history||[];"
+            "ACCOUNTS=data.accounts||[];"
+            "_xctUser=data.username||_xctUser;"
+            "const ownedPids=new Set(LIB.map(x=>x.productId));"
+            "MKT.forEach(x=>{x.owned=ownedPids.has(x.productId)});"
+            "GP.forEach(x=>{x.owned=ownedPids.has(x.productId)});"
+            "return true}catch(e){"
+            "if(e.message.includes('401')){"
+            "localStorage.removeItem('xct_api_key');_xctApiKey=''}"
+            "return false}}\n"
+            # Auth UI functions
+            "function _xctShowAuth(){"
+            "const m=document.createElement('div');"
+            "m.id='xct-auth-modal';"
+            "m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;"
+            "align-items:center;justify-content:center;z-index:10000';"
+            "m.innerHTML='<div style=\"background:#1a1a1a;padding:24px;border-radius:8px;"
+            "border:1px solid #333;width:320px\">"
+            "<h3 style=\"margin:0 0 16px;color:#fff\">Log In to XCT Live</h3>"
+            "<div style=\"color:#888;font-size:12px;margin-bottom:12px\">"
+            "Uses your CDN Sync account. New users will be registered automatically.</div>"
+            "<input id=\"xct-auth-user-input\" placeholder=\"Username\" "
+            "style=\"width:100%;padding:8px;margin-bottom:8px;background:#222;color:#fff;"
+            "border:1px solid #444;border-radius:4px;box-sizing:border-box\">"
+            "<input id=\"xct-auth-pass-input\" type=\"password\" placeholder=\"Passphrase\" "
+            "style=\"width:100%;padding:8px;margin-bottom:12px;background:#222;color:#fff;"
+            "border:1px solid #444;border-radius:4px;box-sizing:border-box\">"
+            "<div id=\"xct-auth-error\" style=\"color:#f44;font-size:12px;margin-bottom:8px;display:none\"></div>"
+            "<div style=\"display:flex;gap:8px;justify-content:flex-end\">"
+            "<button onclick=\"document.getElementById(\\'xct-auth-modal\\').remove()\" "
+            "style=\"padding:6px 16px;background:#333;color:#ccc;border:none;border-radius:4px;cursor:pointer\">Cancel</button>"
+            "<button onclick=\"_xctLogin()\" id=\"xct-auth-submit\" "
+            "style=\"padding:6px 16px;background:#107c10;color:#fff;border:none;border-radius:4px;cursor:pointer\">Log In</button>"
+            "</div></div>';"
+            "document.body.appendChild(m);"
+            "document.getElementById('xct-auth-user-input').focus();"
+            "m.addEventListener('click',e=>{if(e.target===m)m.remove()});"
+            "document.getElementById('xct-auth-pass-input').addEventListener('keydown',e=>{if(e.key==='Enter')_xctLogin()})}\n"
+            "async function _xctLogin(){"
+            "const u=document.getElementById('xct-auth-user-input').value.trim();"
+            "const p=document.getElementById('xct-auth-pass-input').value.trim();"
+            "const errEl=document.getElementById('xct-auth-error');"
+            "if(!u||!p){errEl.textContent='Username and passphrase required';errEl.style.display='block';return}"
+            "const btn=document.getElementById('xct-auth-submit');"
+            "btn.disabled=true;btn.textContent='...';"
+            "try{"
+            "const r=await _fetchJSON(_API+'/api/v1/register',{method:'POST',"
+            "headers:{'Content-Type':'application/json'},"
+            "body:JSON.stringify({username:u,passphrase:p})});"
+            "localStorage.setItem('xct_api_key',r.api_key);"
+            "localStorage.setItem('xct_username',r.username);"
+            "_xctApiKey=r.api_key;_xctUser=r.username;"
+            "document.getElementById('xct-auth-modal').remove();"
+            "await _xctReloadCollection();"
+            "_updateAuthUI();"
+            "}catch(e){"
+            "let msg='Connection error';"
+            "try{const b=await e.response?.json();msg=b?.error||msg}catch{}"
+            "errEl.textContent=msg;errEl.style.display='block';"
+            "btn.disabled=false;btn.textContent='Log In'}}\n"
+            "function _xctLogout(){"
+            "localStorage.removeItem('xct_api_key');"
+            "localStorage.removeItem('xct_username');"
+            "_xctApiKey='';_xctUser='';"
+            "LIB=[];PH=[];HISTORY=[];ACCOUNTS=[];"
+            "MKT.forEach(x=>{delete x.owned});"
+            "GP.forEach(x=>{delete x.owned});"
+            "try{filterLib();filterPH();renderHistory();filterMKT();filterGP()}catch(e){}"
+            "_updateAuthUI()}\n"
+            "function _updateAuthUI(){"
+            "const userEl=document.getElementById('xct-auth-user');"
+            "const btnEl=document.getElementById('xct-auth-btn');"
+            "const uploadBtn=document.getElementById('xct-upload-btn');"
+            "if(_xctApiKey&&_xctUser){"
+            "userEl.textContent=_xctUser;"
+            "btnEl.textContent='Log Out';btnEl.onclick=_xctLogout;"
+            "btnEl.style.background='#333';btnEl.style.border='1px solid #555';btnEl.style.color='#ccc';"
+            "uploadBtn.style.display='inline-block'"
+            "}else{"
+            "userEl.textContent='';"
+            "btnEl.textContent='Log In';btnEl.onclick=_xctShowAuth;"
+            "btnEl.style.background='#107c10';btnEl.style.border='none';btnEl.style.color='#fff';"
+            "uploadBtn.style.display='none'}}\n"
+            "async function _xctUploadFile(input){"
+            "if(!input.files||!input.files[0])return;"
+            "const file=input.files[0];"
+            "if(file.size>20*1024*1024){alert('File too large (max 20MB)');return}"
+            "try{"
+            "const text=await file.text();"
+            "const data=JSON.parse(text);"
+            "if(!data.library&&!Array.isArray(data)){alert('Invalid export file');return}"
+            "const uploadBtn=document.getElementById('xct-upload-btn');"
+            "uploadBtn.disabled=true;uploadBtn.textContent='Uploading...';"
+            "const r=await fetch(_API+'/api/v1/collection/upload',{"
+            "method:'POST',headers:{'Content-Type':'application/json',"
+            "'Authorization':'Bearer '+_xctApiKey},body:text});"
+            "if(!r.ok){const e=await r.json();throw new Error(e.error||'Upload failed')}"
+            "const result=await r.json();"
+            "uploadBtn.disabled=false;uploadBtn.textContent='Upload';"
+            "await _xctReloadCollection();"
+            "}catch(e){alert('Upload error: '+e.message);"
+            "const uploadBtn=document.getElementById('xct-upload-btn');"
+            "uploadBtn.disabled=false;uploadBtn.textContent='Upload'}"
+            "input.value=''}\n"
+            "async function _xctReloadCollection(){"
+            "const ok=await _loadCollection();"
+            "if(ok){try{initDropdowns();filterLib();filterPH();renderHistory();filterMKT();filterGP()}catch(e){console.error(e)}}}\n"
+            '</script>\n'
+        )
+    else:
+        html += '<script src="data.js"></script>\n'
+
+    html += (
         '<script>\n'
         "let gpF='all',mktPage=0;\n"
         "const MKT_PAGE_SIZE=1000;\n"
@@ -3761,8 +3992,7 @@ def build_html_template(gamertag=""):
         "return checked.length===total?null:checked}\n"
         '\n'
 
-        # -- initDropdowns: populate checkbox panels from data --
-        'function initDropdowns(){\n'
+        # -- fill: global helper for checkbox dropdown panels --
         "function fill(id,items,filterFn){const wrap=document.getElementById(id);if(!wrap)return;"
         "const panel=wrap.querySelector('.cb-panel');if(!panel)return;"
         "items.forEach(([v,l])=>{const lbl=document.createElement('label');"
@@ -3778,6 +4008,8 @@ def build_html_template(gamertag=""):
         "const anyOn=[...panel.querySelectorAll('input')].some(x=>x.checked);"
         "clr.textContent=anyOn?'Clear All':'Select All';}));"
         "panel.appendChild(clr);}\n"
+        # -- initDropdowns: populate checkbox panels from data --
+        'function initDropdowns(){\n'
         # Publishers
         "const _all=LIB.concat(_impLib||[]);\n"
         "const pubs={};_all.forEach(x=>{const p=x.publisher||'';if(p)pubs[p]=(pubs[p]||0)+1});\n"
@@ -4890,6 +5122,12 @@ def build_html_template(gamertag=""):
         "let _cdnSyncQ='';\n"
         "let _cdnSortCol='name',_cdnSortDir='asc';\n"
         "let _cdnMultiSids=new Set();\n"
+        "let _cdnDlcParents=new Set(),_cdnDlcChildren=new Set();\n"
+        "let _cdnTidMap={};\n"
+        "const _cdnExpandedTids=new Set();\n"
+        "function toggleCdnDlcGroup(tid,event){event.stopPropagation();"
+        "if(_cdnExpandedTids.has(tid))_cdnExpandedTids.delete(tid);else _cdnExpandedTids.add(tid);"
+        "renderCDNSync()}\n"
         "function _cdnSyncTab(which){\n"
         "  document.getElementById('cdnsync-entries').style.display=which==='entries'?'':'none';\n"
         "  document.getElementById('cdnsync-lb').style.display=which==='lb'?'':'none';\n"
@@ -4899,24 +5137,25 @@ def build_html_template(gamertag=""):
         "  document.getElementById('cdnsync-tab-log').className='sub-tab'+(which==='log'?' active':'');\n"
         "}\n"
         "function _cdnSzFmt(b){if(!b)return'-';if(b>=1e9)return(b/1e9).toFixed(1)+' GB';if(b>=1e6)return(b/1e6).toFixed(0)+' MB';return(b/1024).toFixed(0)+' KB';}\n"
-        "const _CDN_PLAT={'ERA':'Xbox One','Gen8GameCore':'Xbox One / One X','Gen9GameCore':'Xbox Series X|S','PCGameCore':'Windows PC','UWP':'Windows UWP'};\n"
+        "const _CDN_PLAT={'ERA':'Xbox One','Gen8GameCore':'Xbox One / One X','Gen9GameCore':'Xbox Series X|S','PCGameCore':'Windows PC','UWP':'Windows UWP','SRA':'Xbox One App'};\n"
         "function _cdnPlat(p){return _CDN_PLAT[p]?_CDN_PLAT[p]+' ('+p+')':p||'-';}\n"
         "function _cdnSyncBuildFlat(){\n"
-        "  _cdnSyncFlat=[];_cdnMultiSids=new Set();\n"
+        "  _cdnSyncFlat=[];_cdnMultiSids=new Set();_cdnDlcParents=new Set();_cdnDlcChildren=new Set();\n"
         "  if(typeof CDN_DB==='undefined'||!CDN_DB)return;\n"
         "  const syncMeta=typeof CDN_SYNC_META!=='undefined'?CDN_SYNC_META:{};\n"
         "  const syncUser=typeof CDN_SYNC_USER!=='undefined'?CDN_SYNC_USER:'';\n"
-        "  const libMap={};\n"
-        "  if(typeof LIB!=='undefined')LIB.forEach(x=>{libMap[x.productId]=x.title});\n"
+        "  const libMap={},libKindMap={};\n"
+        "  if(typeof LIB!=='undefined')LIB.forEach(x=>{libMap[x.productId]=x.title;libKindMap[x.productId]=x.productKind||'Game'});\n"
         "  Object.keys(CDN_DB).forEach(sid=>{\n"
         "    if(sid.startsWith('_content_'))return;\n"
         "    const rec=CDN_DB[sid];\n"
         "    const name=libMap[sid]||rec.title||rec.packageName||sid;\n"
         "    const meta=syncMeta[sid]||{};\n"
         "    const topSrc=meta.source||'local';\n"
-        "    const who=topSrc==='remote'?'Community':syncUser||'You';\n"
+        "    const who=topSrc==='remote'?(meta.contributor||'Community'):syncUser||'You';\n"
         "    const hasVer=(rec.versions||[]).filter(v=>v.buildId!==rec.buildId).length>0;\n"
         "    if(hasVer)_cdnMultiSids.add(sid);\n"
+        "    const _kind=libKindMap[sid]||'Game';\n"
         "    _cdnSyncFlat.push({sid:sid,name:name,bid:rec.buildId||'',bv:rec.buildVersion||'',\n"
         "      plat:rec.platform||'',sz:rec.sizeBytes||0,urls:rec.cdnUrls||[],\n"
         "      cid:rec.contentId||'',pkg:rec.packageName||'',src:topSrc,who:who,\n"
@@ -4924,11 +5163,12 @@ def build_html_template(gamertag=""):
         "      planId:rec.planId||'',scrapedAt:rec.scrapedAt||'',\n"
         "      priorBv:rec.priorBuildVersion||'',priorBid:rec.priorBuildId||'',\n"
         "      tid:rec.xboxTitleId||'',exe:rec.executableName||'',pfn:rec.packageIdentityName||'',\n"
-        "      minOs:rec.minOsVersion||'',pub:rec.publisher||'',isVer:false});\n"
+        "      minOs:rec.minOsVersion||'',pub:rec.publisher||'',devName:rec.developer||'',kind:_kind,isVer:false});\n"
         "    (rec.versions||[]).forEach(v=>{\n"
         "      if(v.buildId===rec.buildId)return;\n"
-        "      const vSrc=(meta.versions&&meta.versions[v.buildId])||topSrc;\n"
-        "      const vWho=vSrc==='remote'?'Community':syncUser||'You';\n"
+        "      const vMeta=meta.versions&&meta.versions[v.buildId];\n"
+        "      const vSrc=typeof vMeta==='object'?(vMeta.source||'remote'):vMeta||topSrc;\n"
+        "      const vWho=vSrc==='remote'?(typeof vMeta==='object'&&vMeta.contributor?vMeta.contributor:meta.contributor||'Community'):syncUser||'You';\n"
         "      _cdnSyncFlat.push({sid:sid,name:name,bid:v.buildId||'',bv:v.buildVersion||'',\n"
         "        plat:v.platform||rec.platform||'',sz:v.sizeBytes||0,urls:v.cdnUrls||[],\n"
         "        cid:rec.contentId||'',pkg:rec.packageName||'',src:vSrc,who:vWho,\n"
@@ -4936,13 +5176,25 @@ def build_html_template(gamertag=""):
         "        planId:rec.planId||'',scrapedAt:v.scrapedAt||'',\n"
         "        priorBv:v.priorBuildVersion||'',priorBid:v.priorBuildId||'',\n"
         "        tid:rec.xboxTitleId||'',exe:rec.executableName||'',pfn:rec.packageIdentityName||'',\n"
-        "        minOs:rec.minOsVersion||'',pub:rec.publisher||'',isVer:true});\n"
+        "        minOs:rec.minOsVersion||'',pub:rec.publisher||'',devName:rec.developer||'',kind:_kind,isVer:true});\n"
         "    });\n"
         "  });\n"
         "  _cdnSyncFlat.sort((a,b)=>a.name.localeCompare(b.name)||a.bv.localeCompare(b.bv));\n"
-        "  const plats=new Set(_cdnSyncFlat.map(e=>e.plat).filter(Boolean));\n"
-        "  const sel=document.getElementById('cdnsync-plat');\n"
-        "  if(sel)[...plats].sort().forEach(p=>{const o=document.createElement('option');o.value=p;o.textContent=_cdnPlat(p);sel.appendChild(o)});\n"
+        "  _cdnTidMap={};\n"
+        "  _cdnSyncFlat.filter(e=>!e.isVer).forEach(e=>{\n"
+        "    const tid=e.tid;if(!tid)return;\n"
+        "    if(!_cdnTidMap[tid])_cdnTidMap[tid]={games:[],dlc:[]};\n"
+        "    if(e.kind==='Durable')_cdnTidMap[tid].dlc.push(e);else _cdnTidMap[tid].games.push(e);\n"
+        "  });\n"
+        "  Object.values(_cdnTidMap).forEach(g=>{if(g.games.length>0&&g.dlc.length>0){\n"
+        "    g.games.forEach(p=>_cdnDlcParents.add(p.sid));\n"
+        "    g.dlc.forEach(c=>_cdnDlcChildren.add(c.sid))}});\n"
+        "  const _platC={};_cdnSyncFlat.forEach(e=>{if(e.plat)_platC[e.plat]=(_platC[e.plat]||0)+1});\n"
+        "  fill('cdn-plat-cb',Object.entries(_platC).sort((a,b)=>b[1]-a[1]).map(([p,c])=>[p,_cdnPlat(p)+' ('+c+')']),'filterCDNSync');\n"
+        "  const _pubC={};_cdnSyncFlat.forEach(e=>{if(e.pub)_pubC[e.pub]=(_pubC[e.pub]||0)+1});\n"
+        "  fill('cdn-pub-cb',Object.entries(_pubC).sort((a,b)=>b[1]-a[1]).map(([p,c])=>[p,p+' ('+c+')']),'filterCDNSync');\n"
+        "  const _devC={};_cdnSyncFlat.forEach(e=>{if(e.devName)_devC[e.devName]=(_devC[e.devName]||0)+1});\n"
+        "  fill('cdn-dev-cb',Object.entries(_devC).sort((a,b)=>b[1]-a[1]).map(([d,c])=>[d,d+' ('+c+')']),'filterCDNSync');\n"
         "  const whos=new Set(_cdnSyncFlat.map(e=>e.who).filter(Boolean));\n"
         "  const whoSel=document.getElementById('cdnsync-who');\n"
         "  if(whoSel)[...whos].sort().forEach(w=>{const o=document.createElement('option');o.value=w;o.textContent=w;whoSel.appendChild(o)});\n"
@@ -4957,19 +5209,27 @@ def build_html_template(gamertag=""):
         "  const el=document.getElementById('cdnsync-list');\n"
         "  if(!el||!_cdnSyncFlat.length)return;\n"
         "  const showVer=document.getElementById('cdnsync-ver').checked;\n"
-        "  const platF=document.getElementById('cdnsync-plat').value;\n"
+        "  const platVals=getCBVals('cdn-plat-cb');\n"
+        "  const pubVals=getCBVals('cdn-pub-cb');\n"
+        "  const devVals=getCBVals('cdn-dev-cb');\n"
         "  const srcF=document.getElementById('cdnsync-src').value;\n"
         "  const verF=document.getElementById('cdnsync-verfilter').value;\n"
         "  const whoF=document.getElementById('cdnsync-who').value;\n"
+        "  const dlcF=document.getElementById('cdnsync-dlc').value;\n"
         "  let items=_cdnSyncFlat.filter(e=>{\n"
         "    if(!showVer&&e.isVer)return false;\n"
-        "    if(platF&&e.plat!==platF)return false;\n"
+        "    if(platVals&&!platVals.includes(e.plat))return false;\n"
+        "    if(pubVals&&!pubVals.includes(e.pub))return false;\n"
+        "    if(devVals&&!devVals.includes(e.devName))return false;\n"
         "    if(srcF&&e.src!==srcF)return false;\n"
         "    if(whoF&&e.who!==whoF)return false;\n"
         "    if(verF==='multi'&&!_cdnMultiSids.has(e.sid))return false;\n"
         "    if(verF==='single'&&_cdnMultiSids.has(e.sid))return false;\n"
+        "    if(dlcF==='games'&&e.kind==='Durable')return false;\n"
+        "    if(dlcF==='dlc'&&e.kind!=='Durable')return false;\n"
+        "    if(dlcF==='has'&&!_cdnDlcParents.has(e.sid)&&!_cdnDlcChildren.has(e.sid))return false;\n"
         "    if(_cdnSyncQ){\n"
-        "      const hay=(e.name+' '+e.sid+' '+_xvd(e.bv)+' '+_cdnPlat(e.plat)+' '+e.pkg+' '+e.who+' '+e.tid+' '+e.pub+' '+e.exe).toLowerCase();\n"
+        "      const hay=(e.name+' '+e.sid+' '+_xvd(e.bv)+' '+_cdnPlat(e.plat)+' '+e.pkg+' '+e.who+' '+e.tid+' '+e.pub+' '+e.devName).toLowerCase();\n"
         "      if(!hay.includes(_cdnSyncQ))return false;\n"
         "    }\n"
         "    return true;\n"
@@ -4981,15 +5241,36 @@ def build_html_template(gamertag=""):
         "    plat:(a,b)=>a.plat.localeCompare(b.plat)*d||a.name.localeCompare(b.name),\n"
         "    tid:(a,b)=>(a.tid||'').localeCompare(b.tid||'')*d||a.name.localeCompare(b.name),\n"
         "    pub:(a,b)=>(a.pub||'').localeCompare(b.pub||'')*d||a.name.localeCompare(b.name),\n"
-        "    exe:(a,b)=>(a.exe||'').localeCompare(b.exe||'')*d||a.name.localeCompare(b.name),\n"
+        "    devName:(a,b)=>(a.devName||'').localeCompare(b.devName||'')*d||a.name.localeCompare(b.name),\n"
         "    sz:(a,b)=>((a.sz||0)-(b.sz||0))*d||a.name.localeCompare(b.name),\n"
-        "    src:(a,b)=>a.src.localeCompare(b.src)*d||a.name.localeCompare(b.name),\n"
         "    who:(a,b)=>a.who.localeCompare(b.who)*d||a.name.localeCompare(b.name),\n"
         "    date:(a,b)=>(a.scrapedAt||'').localeCompare(b.scrapedAt||'')*d||a.name.localeCompare(b.name)};\n"
         "  if(cmp[_cdnSortCol])items.sort(cmp[_cdnSortCol]);\n"
-        "  const total=_cdnSyncFlat.filter(e=>!e.isVer).length;\n"
-        "  const shown=items.filter(e=>!e.isVer).length;\n"
-        "  document.getElementById('cdnsync-sub').textContent=total+' games · '+_cdnSyncFlat.length+' total entries · '+items.length+' shown';\n"
+        "  const _allNonVer=_cdnSyncFlat.filter(e=>!e.isVer);\n"
+        "  const totalGames=_allNonVer.filter(e=>e.kind!=='Durable').length;\n"
+        "  const totalDlc=_allNonVer.filter(e=>e.kind==='Durable').length;\n"
+        "  const shownItems=items.filter(e=>!e.isVer);\n"
+        "  document.getElementById('cdnsync-sub').textContent=totalGames+' games \\u00B7 '+totalDlc+' DLC \\u00B7 '+_allNonVer.length+' total entries \\u00B7 '+shownItems.length+' shown';\n"
+        # Platform summary table
+        "  const sumEl=document.getElementById('cdnsync-summary');\n"
+        "  if(sumEl){\n"
+        "    const platSum={};\n"
+        "    _allNonVer.forEach(e=>{\n"
+        "      const p=e.plat||'Unknown';\n"
+        "      if(!platSum[p])platSum[p]={games:new Set(),dlc:new Set()};\n"
+        "      if(e.kind==='Durable')platSum[p].dlc.add(e.sid);else platSum[p].games.add(e.sid);\n"
+        "    });\n"
+        "    let sh='<table class=\"stbl\"><thead><tr><th>Platform</th><th>Games</th><th>DLC</th><th>Total</th></tr></thead><tbody>';\n"
+        "    let sg=0,sd=0;\n"
+        "    Object.keys(platSum).sort((a,b)=>((platSum[b].games.size+platSum[b].dlc.size)-(platSum[a].games.size+platSum[a].dlc.size))).forEach(p=>{\n"
+        "      const gc=platSum[p].games.size,dc=platSum[p].dlc.size;\n"
+        "      sg+=gc;sd+=dc;\n"
+        "      sh+=`<tr><td>${_cdnPlat(p)}</td><td class=\"cnt\">${gc}</td><td>${dc||'-'}</td><td>${gc+dc}</td></tr>`;\n"
+        "    });\n"
+        "    sh+=`<tr style=\"border-top:1px solid #444;font-weight:600\"><td>Total</td><td class=\"cnt\">${sg}</td><td>${sd||'-'}</td><td>${sg+sd}</td></tr>`;\n"
+        "    sh+='</tbody></table>';\n"
+        "    sumEl.innerHTML=sh;\n"
+        "  }\n"
         "  const PAGE=500;\n"
         "  const pages=Math.ceil(items.length/PAGE)||1;\n"
         "  if(_cdnPage>=pages)_cdnPage=pages-1;\n"
@@ -4998,26 +5279,40 @@ def build_html_template(gamertag=""):
         "  function _sa(c,l){return '<th class=\"sortable'+(_cdnSortCol===c?(_cdnSortDir==='asc'?' sort-asc':' sort-desc'):'')+'\" onclick=\"_cdnSortBy(\\''+c+'\\')\"'+'>'+l+'</th>'}\n"
         "  let h='<table class=\"gtbl\" style=\"width:100%;font-size:12px\"><thead><tr>'\n"
         "    +_sa('name','Game')+_sa('sid','Store ID')+_sa('bv','Build Version')+_sa('plat','Platform')\n"
-        "    +_sa('tid','Title ID')+_sa('pub','Publisher')+_sa('exe','Executable')\n"
-        "    +_sa('sz','Size')+_sa('who','Contributor')+_sa('date','Date Scraped')+'<th>CDN URLs</th>'+_sa('src','Source')+'</tr></thead><tbody>';\n"
-        "  display.forEach(e=>{\n"
+        "    +_sa('tid','Title ID')+_sa('pub','Publisher')+_sa('devName','Developer')\n"
+        "    +_sa('sz','Size')+_sa('who','Contributor')+_sa('date','Date Scraped')+'<th>CDN URLs</th></tr></thead><tbody>';\n"
+        "  const _cdnItemSids=new Set(items.map(e=>e.sid));\n"
+        "  function _cdnRow(e,extraCls,dlcCount){\n"
         "    const ver=_xvd(e.bv);\n"
         "    const sz=_cdnSzFmt(e.sz);\n"
-        "    const srcBadge=e.src==='remote'?'<span style=\"color:#4fc3f7\">remote</span>':e.src==='synced'?'<span style=\"color:#81c784\">synced</span>':'<span style=\"color:#888\">local</span>';\n"
         "    const urlList=Array.isArray(e.urls)?e.urls:(e.urls?[e.urls]:[]);\n"
         "    const urlHtml=urlList.length?urlList.slice(0,2).map(u=>`<a href=\"${u}\" target=\"_blank\" style=\"color:#81c784;font-size:11px;word-break:break-all\">${u.length>60?u.slice(0,60)+'...':u}</a>`).join('<br>')+(urlList.length>2?`<br><span style=\"color:#888\">+${urlList.length-2} more</span>`:''):'<span style=\"color:#555\">-</span>';\n"
         "    const cls=e.isVer?' style=\"opacity:0.65\"':'';\n"
         "    const dt=e.scrapedAt?e.scrapedAt.substring(0,10):'-';\n"
-        "    h+=`<tr${cls}><td>${e.name}${e.isVer?' <span style=\"color:#888;font-size:10px\">(older)</span>':''}</td>`;\n"
-        "    h+=`<td class=\"gt-mono\" style=\"font-size:11px\">${e.sid}</td>`;\n"
-        "    h+=`<td class=\"gt-mono\" style=\"font-size:11px\" title=\"buildId: ${e.bid}\">${ver||e.bid.slice(0,12)}</td>`;\n"
-        "    h+=`<td>${_cdnPlat(e.plat)}</td>`;\n"
-        "    h+=`<td class=\"gt-mono\" style=\"font-size:11px\">${e.tid||'-'}</td>`;\n"
-        "    h+=`<td style=\"font-size:11px\">${e.pub||'-'}</td>`;\n"
-        "    h+=`<td class=\"gt-mono\" style=\"font-size:11px\">${e.exe||'-'}</td>`;\n"
-        "    h+=`<td class=\"num\">${sz}</td>`;\n"
-        "    h+=`<td style=\"font-size:11px\">${e.who}</td><td class=\"gt-mono\" style=\"font-size:11px\">${dt}</td>`;\n"
-        "    h+=`<td>${urlHtml}</td><td>${srcBadge}</td></tr>`;\n"
+        "    const dlcBadge=dlcCount>0?`<span class=\"dlc-count\">${dlcCount} DLC</span>`:'';\n"
+        "    const dlcToggle=dlcCount>0?`<button style=\"background:#222;border:1px solid #444;color:#aaa;border-radius:3px;cursor:pointer;font-size:10px;padding:0 4px;margin-right:4px\" onclick=\"toggleCdnDlcGroup('${e.tid}',event)\">${_cdnExpandedTids.has(e.tid)?'\\u2212':'+'}</button>`:'';\n"
+        "    let r=`<tr class=\"${extraCls}\"${cls}><td>${dlcToggle}${e.name}${e.isVer?' <span style=\"color:#888;font-size:10px\">(older)</span>':''}${dlcBadge}</td>`;\n"
+        "    r+=`<td class=\"gt-mono\" style=\"font-size:11px\">${e.sid}</td>`;\n"
+        "    r+=`<td class=\"gt-mono\" style=\"font-size:11px\" title=\"buildId: ${e.bid}\">${ver||e.bid.slice(0,12)}</td>`;\n"
+        "    r+=`<td>${_cdnPlat(e.plat)}</td>`;\n"
+        "    r+=`<td class=\"gt-mono\" style=\"font-size:11px\">${e.tid||'-'}</td>`;\n"
+        "    r+=`<td style=\"font-size:11px\">${e.pub||'-'}</td>`;\n"
+        "    r+=`<td style=\"font-size:11px\">${e.devName||'-'}</td>`;\n"
+        "    r+=`<td class=\"num\">${sz}</td>`;\n"
+        "    r+=`<td style=\"font-size:11px\">${e.who}</td><td class=\"gt-mono\" style=\"font-size:11px\">${dt}</td>`;\n"
+        "    r+=`<td>${urlHtml}</td></tr>`;return r}\n"
+        "  const _cdnRenderedDlc=new Set();\n"
+        "  display.forEach(e=>{\n"
+        "    if(_cdnRenderedDlc.has(e.sid))return;\n"
+        "    const isParent=_cdnDlcParents.has(e.sid)&&!e.isVer;\n"
+        "    const tid=e.tid;\n"
+        "    const dlcGroup=isParent&&tid&&_cdnTidMap[tid]?_cdnTidMap[tid].dlc.filter(d=>_cdnItemSids.has(d.sid)):[];\n"
+        "    if(isParent&&dlcGroup.length>0){\n"
+        "      h+=_cdnRow(e,'',dlcGroup.length);\n"
+        "      if(_cdnExpandedTids.has(tid)){\n"
+        "        dlcGroup.forEach(d=>{h+=_cdnRow(d,'dlc-child',0);_cdnRenderedDlc.add(d.sid)});\n"
+        "      }else{dlcGroup.forEach(d=>_cdnRenderedDlc.add(d.sid))}\n"
+        "    }else{h+=_cdnRow(e,'',0)}\n"
         "  });\n"
         "  h+='</tbody></table>';\n"
         "  if(pages>1){\n"
@@ -5034,7 +5329,7 @@ def build_html_template(gamertag=""):
         "  const hasCdn=_cdnSyncFlat.length>0;\n"
         "  if(!hasLb&&!hasCdn)return;\n"
         "  document.getElementById('tab-cdnsync').style.display='';\n"
-        "  const games=_cdnSyncFlat.filter(e=>!e.isVer).length;\n"
+        "  const games=_cdnSyncFlat.filter(e=>!e.isVer&&e.kind!=='Durable').length;\n"
         "  document.getElementById('tab-cdnsync-cnt').textContent=games||'';\n"
         "  if(!hasLb){el.innerHTML='<p style=\"color:#888\">No leaderboard data. Run [s] Sync to fetch.</p>';return;}\n"
         "  const s=typeof CDN_LB_STATS!=='undefined'?CDN_LB_STATS:{};\n"
@@ -5060,29 +5355,39 @@ def build_html_template(gamertag=""):
         "  function _gn(sid){return libMap[sid]||(cdnMap[sid]&&(cdnMap[sid].title||cdnMap[sid].packageName))||sid;}\n"
         "  let h='<p style=\"color:#aaa;margin-bottom:14px\">'+log.length+' sync operation'+(log.length!==1?'s':'')+' logged</p>';\n"
         "  log.forEach((e,i)=>{\n"
-        "    const d=e.ts?new Date(e.ts).toLocaleString():'-';\n"
+        "    const ts=e.syncedAt||e.ts||null;\n"
+        "    const d=ts?new Date(ts).toLocaleString():'-';\n"
+        "    const user=e.username||e.user||'anonymous';\n"
+        "    const uploaded=e.newEntries||e.uploaded||0;\n"
+        "    const received=e.received||0;\n"
+        "    const pts=e.pointsEarned||e.ptsEarned||0;\n"
+        "    const totalPts=e.totalPoints||e.totalPts||0;\n"
+        "    const dupes=e.duplicatesSkipped||e.dupes||0;\n"
+        "    const dbEntries=e.dbEntries||0;\n"
+        "    const dbGames=e.dbGames||0;\n"
         "    const uGames=(e.uploadedIds||[]).map(s=>_gn(s)).sort();\n"
         "    const rGames=(e.receivedIds||[]).map(s=>_gn(s)).sort();\n"
+        "    const hasDetail=uGames.length+rGames.length>0||dupes||dbEntries;\n"
         "    const rid='cdnlog-d'+i;\n"
-        "    const hasGames=uGames.length+rGames.length>0;\n"
         "    h+='<div style=\"border:1px solid #333;border-radius:8px;margin-bottom:12px;background:#111\">';\n"
-        "    h+='<div style=\"display:flex;align-items:center;justify-content:space-between;padding:12px 16px;cursor:pointer\" onclick=\"var d=document.getElementById(\\''+rid+'\\');var a=this.querySelector(\\'span.cdnlog-arrow\\');if(d.style.display===\\'none\\'){d.style.display=\\'\\';a.textContent=\\'\\u25BC\\'}else{d.style.display=\\'none\\';a.textContent=\\'\\u25B6\\'}\">';\n"
+        "    h+='<div style=\"display:flex;align-items:center;justify-content:space-between;padding:12px 16px'+(hasDetail?';cursor:pointer':'')+'\"'+(hasDetail?' onclick=\"var d=document.getElementById(\\''+rid+'\\');var a=this.querySelector(\\'span.cdnlog-arrow\\');if(d.style.display===\\'none\\'){d.style.display=\\'\\';a.textContent=\\'\\u25BC\\'}else{d.style.display=\\'none\\';a.textContent=\\'\\u25B6\\'}\"':'')+'>';\n"
         "    h+='<div style=\"display:flex;align-items:center;gap:12px;flex-wrap:wrap\">';\n"
-        "    h+=`<span style=\"color:#e0e0e0;font-weight:600\">${e.user||'anonymous'}</span>`;\n"
+        "    h+=`<span style=\"color:#e0e0e0;font-weight:600\">${user}</span>`;\n"
         "    h+=`<span style=\"color:#888;font-size:12px\">${d}</span>`;\n"
         "    h+='</div>';\n"
         "    h+='<div style=\"display:flex;align-items:center;gap:16px;font-size:13px\">';\n"
-        "    if(e.uploaded)h+=`<span style=\"color:#81c784\">\\u2191 ${e.uploaded} uploaded</span>`;\n"
-        "    if(e.received)h+=`<span style=\"color:#4fc3f7\">\\u2193 ${e.received} received</span>`;\n"
-        "    h+=`<span style=\"color:#ffd740\">+${e.ptsEarned||0} pts</span>`;\n"
-        "    h+=`<span style=\"color:#888\">(${(e.totalPts||0).toLocaleString()} total)</span>`;\n"
-        "    h+='<span class=\"cdnlog-arrow\" style=\"color:#888;font-size:11px\">\\u25B6</span>';\n"
+        "    if(uploaded)h+=`<span style=\"color:#81c784\">\\u2191 ${uploaded} uploaded</span>`;\n"
+        "    if(received)h+=`<span style=\"color:#4fc3f7\">\\u2193 ${received} received</span>`;\n"
+        "    h+=`<span style=\"color:#ffd740\">+${pts} pts</span>`;\n"
+        "    h+=`<span style=\"color:#888\">(${totalPts.toLocaleString()} total)</span>`;\n"
+        "    if(hasDetail)h+='<span class=\"cdnlog-arrow\" style=\"color:#888;font-size:11px\">\\u25B6</span>';\n"
         "    h+='</div></div>';\n"
+        "    if(hasDetail){\n"
         "    h+=`<div id=\"${rid}\" style=\"display:none;padding:0 16px 14px 16px;border-top:1px solid #222\">`;\n"
         "    h+='<div style=\"display:flex;gap:24px;flex-wrap:wrap;margin-top:10px;font-size:12px;color:#888\">';\n"
-        "    h+=`<div>Dupes skipped: <span style=\"color:#ccc\">${(e.dupes||0).toLocaleString()}</span></div>`;\n"
-        "    h+=`<div>DB entries: <span style=\"color:#ccc\">${(e.dbEntries||0).toLocaleString()}</span></div>`;\n"
-        "    h+=`<div>DB games: <span style=\"color:#ccc\">${(e.dbGames||0).toLocaleString()}</span></div>`;\n"
+        "    if(dupes)h+=`<div>Dupes skipped: <span style=\"color:#ccc\">${dupes.toLocaleString()}</span></div>`;\n"
+        "    if(dbEntries)h+=`<div>DB entries: <span style=\"color:#ccc\">${dbEntries.toLocaleString()}</span></div>`;\n"
+        "    if(dbGames)h+=`<div>DB games: <span style=\"color:#ccc\">${dbGames.toLocaleString()}</span></div>`;\n"
         "    h+='</div>';\n"
         "    if(uGames.length){\n"
         "      h+='<div style=\"margin-top:12px\"><div style=\"color:#81c784;font-size:12px;margin-bottom:6px\">\\u2191 Uploaded ('+uGames.length+')</div>';\n"
@@ -5096,20 +5401,45 @@ def build_html_template(gamertag=""):
         "      rGames.forEach(g=>{h+=`<span style=\"display:inline-block;padding:2px 8px;background:#0a1a2f;border:1px solid #0d47a1;border-radius:4px;font-size:11px;color:#90caf9\">${g}</span>`;});\n"
         "      h+='</div></div>';\n"
         "    }\n"
-        "    if(!hasGames)h+='<div style=\"margin-top:10px;color:#555;font-size:12px\">No game details recorded for this sync.</div>';\n"
-        "    h+='</div></div>';\n"
+        "    h+='</div>';\n"
+        "    }\n"
+        "    h+='</div>';\n"
         "  });\n"
         "  el.innerHTML=h;\n"
         "}\n"
 
-        '_loadImports().catch(()=>{}).then(()=>{\n'
-        'try{initDropdowns();filterLib();filterPH();filterGP();filterMKT();renderHistory();renderImports();}catch(e){console.error("init error",e)}\n'
-        'renderGFWL();\n'
-        '_cdnSyncBuildFlat();renderCDNSync();renderCDNLeaderboard();renderCDNSyncLog();\n'
-        "document.getElementById('loading-overlay').style.display='none';\n"
-        '});\n'
-        '</script></body></html>'
     )
+
+    if hosted:
+        html += (
+            "(async function(){\n"
+            "const ls=document.getElementById('loading-status');\n"
+            "if(ls)ls.textContent='Loading shared data...';\n"
+            "await _loadShared();\n"
+            "try{initDropdowns();filterMKT();filterGP()}catch(e){console.error(e)}\n"
+            "renderGFWL();\n"
+            "_cdnSyncBuildFlat();renderCDNSync();renderCDNLeaderboard();renderCDNSyncLog();\n"
+            "if(_xctApiKey){\n"
+            "if(ls)ls.textContent='Loading collection...';\n"
+            "const ok=await _loadCollection();\n"
+            "if(ok){try{initDropdowns();filterLib();filterPH();renderHistory()}catch(e){console.error(e)}}\n"
+            "_updateAuthUI()}\n"
+            "_loadImports().catch(()=>{}).then(()=>{\n"
+            "renderImports();\n"
+            "document.getElementById('loading-overlay').style.display='none'});\n"
+            "})();\n"
+            '</script></body></html>'
+        )
+    else:
+        html += (
+            '_loadImports().catch(()=>{}).then(()=>{\n'
+            'try{initDropdowns();filterLib();filterPH();filterGP();filterMKT();renderHistory();renderImports();}catch(e){console.error("init error",e)}\n'
+            'renderGFWL();\n'
+            '_cdnSyncBuildFlat();renderCDNSync();renderCDNLeaderboard();renderCDNSyncLog();\n'
+            "document.getElementById('loading-overlay').style.display='none';\n"
+            '});\n'
+            '</script></body></html>'
+        )
 
     return html
 
@@ -5224,11 +5554,17 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
         except Exception:
             pass
 
-    # Load CDN sync log (history of sync operations)
+    # Load CDN sync log — prefer server log from leaderboard cache, fall back to local
     cdn_sync_log = []
-    if os.path.isfile(CDN_SYNC_LOG_FILE):
+    if os.path.isfile(CDN_LEADERBOARD_CACHE_FILE):
         try:
-            cdn_sync_log = load_json(CDN_SYNC_LOG_FILE) or []
+            cdn_sync_log = (load_json(CDN_LEADERBOARD_CACHE_FILE) or {}).get("sync_log", [])
+        except Exception:
+            pass
+    if not cdn_sync_log and os.path.isfile(CDN_SYNC_LOG_FILE):
+        try:
+            local_log = load_json(CDN_SYNC_LOG_FILE) or []
+            cdn_sync_log = [e for e in local_log if e.get("ptsEarned", 0) > 0]
         except Exception:
             pass
 
@@ -5983,6 +6319,215 @@ def build_index():
 
     print(f"\n[+] Index rebuilt: {len(combined_library)} items across {len(gamertags)} gamertags")
     return combined_html
+
+
+# ===========================================================================
+# Export for XCT Live (xct.freshdex.app)
+# ===========================================================================
+
+XCT_LIVE_API_BASE = "https://xct.freshdex.app/api/v1"
+
+
+def cmd_export():
+    """Export combined collection data to xct_export.json for XCT Live upload.
+
+    Loads all accounts' cached data (no network calls), strips bulky fields,
+    and writes a compact JSON file. Optionally uploads directly using CDN Sync
+    credentials.
+    """
+    print("\n  [XCT Live Export]\n")
+
+    accounts = load_accounts()
+    if not accounts:
+        print("  [!] No gamertags found. Add a gamertag first.")
+        return
+
+    gamertags = list(accounts.keys())
+    combined_library = []
+    combined_ph = []
+    combined_history = []
+
+    for gt in gamertags:
+        set_account_paths(gt)
+        acct = account_dir(gt)
+
+        # Load cached entitlements
+        ent_file = os.path.join(acct, "entitlements.json")
+        if not os.path.isfile(ent_file):
+            print(f"  [{gt}] No cached entitlements — skipping")
+            continue
+
+        entitlements = load_json(ent_file)
+
+        # Load cached catalog
+        cat_v3_file = os.path.join(acct, "catalog_v3_us.json")
+        cat_legacy_file = os.path.join(acct, "catalog_us.json")
+        catalog = {}
+        if os.path.isfile(cat_v3_file):
+            catalog = load_json(cat_v3_file)
+        if os.path.isfile(cat_legacy_file):
+            legacy = load_json(cat_legacy_file)
+            for pid, data in legacy.items():
+                if data.get("title") and (pid not in catalog or not catalog[pid].get("title")):
+                    catalog[pid] = data
+
+        library, play_hist = merge_library(entitlements, catalog, gamertag=gt)
+        print(f"  [{gt}] {len(library)} items, {len(play_hist)} play history")
+
+        combined_library.extend(library)
+        combined_ph.extend(play_hist)
+
+        scan_history = load_all_scans(gt)
+        combined_history.extend(scan_history)
+
+    if not combined_library:
+        print("  [!] No collection data found. Run a scan first.")
+        return
+
+    # Strip bulky fields from library items
+    strip_fields = {"description", "heroImage"}
+    for item in combined_library:
+        for f in strip_fields:
+            item.pop(f, None)
+
+    # Sort and cap history
+    combined_history.sort(key=lambda s: s.get("timestamp", ""), reverse=True)
+    combined_history = combined_history[:100]
+
+    # Build accounts meta (gamertag only — no uhs/xuid/deviceId/tokenAge)
+    safe_accounts = [{"gamertag": gt} for gt in gamertags]
+
+    import datetime as _dt_export
+    export_data = {
+        "xct": 2,
+        "date": _dt_export.date.today().isoformat(),
+        "gamertags": gamertags,
+        "library": combined_library,
+        "playHistory": combined_ph,
+        "history": combined_history,
+        "accounts": safe_accounts,
+    }
+
+    export_path = os.path.join(SCRIPT_DIR, "xct_export.json")
+    with open(export_path, "w", encoding="utf-8") as f:
+        json.dump(export_data, f, ensure_ascii=False, separators=(",", ":"))
+
+    size_kb = os.path.getsize(export_path) / 1024
+    print(f"\n  [+] Export written: xct_export.json ({size_kb:.0f} KB)")
+    print(f"      {len(combined_library)} items, {len(combined_ph)} play history, "
+          f"{len(combined_history)} scan log entries")
+    print(f"      Gamertags: {', '.join(gamertags)}")
+
+    # Offer direct upload
+    print()
+    upload = input("  [U] Upload to xct.freshdex.app? [y/N] ").strip()
+    if upload.lower() in ("y", "u"):
+        _export_upload(export_data)
+
+
+def _export_upload(export_data):
+    """Upload export data to XCT Live server using CDN Sync credentials."""
+    # Load CDN Sync config for api_key
+    config = {}
+    if os.path.isfile(CDN_SYNC_CONFIG_FILE):
+        try:
+            config = load_json(CDN_SYNC_CONFIG_FILE) or {}
+        except Exception:
+            pass
+
+    api_key = config.get("api_key", "")
+    username = config.get("username", "")
+
+    if not api_key:
+        print("\n  [!] No CDN Sync credentials found.")
+        print("      Run [s] CDN Sync first to register, or enter credentials now.\n")
+        username = input("  Username: ").strip()
+        if not username:
+            print("  Cancelled.")
+            return
+        passphrase = input("  Passphrase: ").strip()
+        if not passphrase:
+            print("  Cancelled.")
+            return
+
+        # Register with XCT Live server
+        print("  Registering...")
+        payload = json.dumps({
+            "username": username,
+            "passphrase": passphrase,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            XCT_LIVE_API_BASE + "/register",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST")
+        try:
+            with urllib.request.urlopen(req, context=SSL_CTX, timeout=30) as resp:
+                result = json.loads(resp.read())
+            api_key = result.get("api_key", "")
+            username = result.get("username", username)
+            if api_key:
+                # Save to CDN Sync config so it persists
+                config["api_key"] = api_key
+                config["username"] = username
+                _cdn_sync_save_config(config)
+                print(f"  Registered as: {username}")
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            try:
+                err = json.loads(body).get("error", f"HTTP {e.code}")
+            except Exception:
+                err = f"HTTP {e.code}"
+            print(f"  [!] Registration failed: {err}")
+            return
+        except Exception as e:
+            print(f"  [!] Connection error: {e}")
+            return
+    else:
+        print(f"\n  Uploading as: {username}")
+
+    # Upload collection
+    upload_payload = json.dumps({
+        "library": export_data["library"],
+        "playHistory": export_data.get("playHistory", []),
+        "history": export_data.get("history", []),
+        "accounts": export_data.get("accounts", []),
+    }, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    req = urllib.request.Request(
+        XCT_LIVE_API_BASE + "/collection/upload",
+        data=upload_payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST")
+
+    try:
+        with urllib.request.urlopen(req, context=SSL_CTX, timeout=60) as resp:
+            result = json.loads(resp.read())
+        if result.get("status") == "ok":
+            print(f"  [+] Upload successful: {result.get('items', 0)} items")
+            print(f"      View at: https://xct.freshdex.app")
+        else:
+            print(f"  [!] Upload response: {result}")
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        try:
+            err = json.loads(body).get("error", f"HTTP {e.code}")
+        except Exception:
+            err = f"HTTP {e.code}"
+        print(f"  [!] Upload failed: {err}")
+    except Exception as e:
+        print(f"  [!] Connection error: {e}")
 
 
 # ===========================================================================
@@ -12433,19 +12978,37 @@ def _cdn_sync_save_config(config):
     save_json(CDN_SYNC_CONFIG_FILE, config)
 
 
-def _cdn_sync_register(username, existing_api_key=None):
+def _cdn_sync_register(username, existing_api_key=None, passphrase=None):
     """Register or reclaim a username with the CDN sync server.
     Returns (api_key, total_points, created) or raises on error."""
     payload = {"username": username}
     if existing_api_key:
         payload["api_key"] = existing_api_key
-    result = api_request(
-        CDN_SYNC_API_BASE + "/register",
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        body=payload,
-        retries=2,
-    )
+    if passphrase:
+        payload["passphrase"] = passphrase
+    url = CDN_SYNC_API_BASE + "/register"
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data,
+                                headers={"Content-Type": "application/json"},
+                                method="POST")
+    try:
+        with urllib.request.urlopen(req, context=SSL_CTX, timeout=30) as resp:
+            result = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        try:
+            result = json.loads(body)
+        except Exception:
+            result = None
+        if result and "error" in result:
+            raise ValueError(result["error"])
+        raise ConnectionError(f"Server returned HTTP {e.code}")
+    except urllib.error.URLError:
+        raise ConnectionError("Could not reach CDN sync server. Check your internet connection.")
     if result is None:
         raise ConnectionError("Could not reach CDN sync server. Check your internet connection.")
     if "error" in result:
@@ -12583,13 +13146,15 @@ def _cdn_sync_merge_remote(cdn_data, remote_entries):
             "minOsVersion": entry.get("minOsVersion"),
         }
 
+        contributor = entry.get("contributor") or "Community"
+
         existing = cdn_data.get(sid)
         if not existing:
             # New game — add directly
             cdn_data[sid] = rec
             # Mark as remote in sync metadata
             if sid not in sync_meta:
-                sync_meta[sid] = {"source": "remote"}
+                sync_meta[sid] = {"source": "remote", "contributor": contributor}
             merged += 1
         elif existing.get("buildId") != bid:
             # Different build — add to versions array (same logic as _hd_scrape_cdn_links)
@@ -12604,7 +13169,7 @@ def _cdn_sync_merge_remote(cdn_data, remote_entries):
                 if sid not in sync_meta:
                     sync_meta[sid] = {"source": "local"}
                 ver_meta = sync_meta[sid].setdefault("versions", {})
-                ver_meta[bid] = "remote"
+                ver_meta[bid] = {"source": "remote", "contributor": contributor}
                 merged += 1
         # Same buildId — skip (we already have it)
 
@@ -12808,15 +13373,32 @@ def process_pc_cdn_scrape():
         for path, count in found:
             print(f"    {path}  ({count} game folders)")
         print()
-        ans = input("  Scan these locations? [Y/n/custom path] ").strip()
-        if ans.lower() == 'n':
+        print("    [Y] Scan these locations")
+        print("    [C] Choose a custom folder")
+        print("    [B] Back")
+        print()
+        ans = input("  Pick: ").strip().lower()
+        if ans == 'b':
             print("  Cancelled.")
             return
-        if ans and ans.lower() != 'y':
-            found = [(ans, 0)]
+        if ans == 'c':
+            custom = _pick_folder("Select game folder to scan")
+            if not custom:
+                return
+            found.append((custom, 0))
+        elif ans not in ('', 'y'):
+            print("  [!] Invalid choice.")
+            return
     else:
         print("  [!] No XboxGames directories found on any drive.")
-        custom = input("  Enter path to scan (or blank to cancel): ").strip()
+        print()
+        print("    [C] Choose a custom folder")
+        print("    [B] Back")
+        print()
+        ans = input("  Pick: ").strip().lower()
+        if ans != 'c':
+            return
+        custom = _pick_folder("Select game folder to scan")
         if not custom:
             return
         found = [(custom, 0)]
@@ -12916,12 +13498,27 @@ def process_cdn_sync():
         print(f"  Logged in as: {config.get('username', '(unknown)')}")
         if config.get("last_sync"):
             print(f"  Last sync: {config['last_sync']}")
+        if not config.get("passphrase_set"):
+            print("  Passphrase: not set (needed to sync from other machines)")
         print()
-        change = input("  Continue as this user? [Y/n/c=change user]: ").strip().lower()
+        change = input("  Continue as this user? [Y/n/c=change user/p=set passphrase]: ").strip().lower()
         if change == "n":
             return
         if change == "c":
             config = {}  # force re-registration below
+        if change == "p":
+            passphrase = input("  New passphrase: ").strip()
+            if passphrase:
+                try:
+                    _cdn_sync_register(config["username"], existing_api_key=config["api_key"], passphrase=passphrase)
+                    config["passphrase_set"] = True
+                    _cdn_sync_save_config(config)
+                    print("  [+] Passphrase saved. Use this to reclaim your username on other machines.")
+                except Exception as e:
+                    print(f"  [!] Failed to save passphrase: {e}")
+            else:
+                print("  Skipped.")
+            print()
     if not config.get("api_key"):
         print("  Register a username to track your contributions on the leaderboard.")
         print("  Or press Enter for anonymous sync (no points tracked).\n")
@@ -12935,8 +13532,56 @@ def process_cdn_sync():
             _cdn_sync_save_config(config)
             if created:
                 print(f"  [+] Registered as '{username}'")
+                print("  Set a passphrase to sync from other machines (or Enter to skip):")
+                passphrase = input("  Passphrase: ").strip()
+                if passphrase:
+                    try:
+                        _cdn_sync_register(username, existing_api_key=api_key, passphrase=passphrase)
+                        config["passphrase_set"] = True
+                        print("  [+] Passphrase saved. Use this to reclaim your username on other machines.")
+                    except Exception as e:
+                        print(f"  [!] Failed to save passphrase: {e}")
             else:
                 print(f"  [+] Welcome back, '{username}' ({points} points)")
+        except ValueError as e:
+            err = str(e)
+            if "already taken" in err.lower():
+                print(f"  [!] Username '{username}' is already registered.")
+                print()
+                print("    [P] Enter passphrase to reclaim")
+                print("    [K] Enter API key to reclaim (from cdn_sync_config.json on another machine)")
+                print("    [B] Back")
+                print()
+                reclaim = input("  Pick: ").strip().lower()
+                if reclaim == 'p':
+                    passphrase = input("  Passphrase: ").strip()
+                    if not passphrase:
+                        return
+                    try:
+                        api_key, points, _ = _cdn_sync_register(username, passphrase=passphrase)
+                        config = {"username": username, "api_key": api_key, "passphrase_set": True}
+                        _cdn_sync_save_config(config)
+                        print(f"  [+] Welcome back, '{username}' ({points} points)")
+                    except Exception as e2:
+                        print(f"  [!] Reclaim failed: {e2}")
+                        return
+                elif reclaim == 'k':
+                    api_key = input("  API key: ").strip()
+                    if not api_key:
+                        return
+                    try:
+                        _, points, _ = _cdn_sync_register(username, existing_api_key=api_key)
+                        config = {"username": username, "api_key": api_key}
+                        _cdn_sync_save_config(config)
+                        print(f"  [+] Welcome back, '{username}' ({points} points)")
+                    except Exception as e2:
+                        print(f"  [!] Reclaim failed: {e2}")
+                        return
+                else:
+                    return
+            else:
+                print(f"  [!] Registration failed: {err}")
+                return
         except Exception as e:
             print(f"  [!] Registration failed: {e}")
             return
@@ -13025,6 +13670,32 @@ def process_cdn_sync():
         print("  No new entries from other contributors (you're up to date!)")
     print()
 
+    # Backfill contributor names from server's contributor_map
+    contributor_map = result.get("contributor_map") or {}
+    if contributor_map:
+        username = config.get("username", "")
+        for key, who in contributor_map.items():
+            if ":" not in key:
+                continue
+            sid, bid = key.split(":", 1)
+            if sid not in sync_meta:
+                continue
+            meta = sync_meta[sid]
+            # Set contributor on top-level remote entries
+            if meta.get("source") == "remote" and who != username:
+                meta["contributor"] = who
+            # Set contributor on synced entries (own contributions)
+            elif meta.get("source") == "synced" and who == username:
+                meta.setdefault("contributor", who)
+            # Set contributor on versioned entries
+            ver_meta = meta.get("versions", {})
+            if bid in ver_meta:
+                v = ver_meta[bid]
+                if isinstance(v, dict) and v.get("source") == "remote" and who != username:
+                    v["contributor"] = who
+                elif isinstance(v, str) and v == "remote" and who != username:
+                    ver_meta[bid] = {"source": "remote", "contributor": who}
+
     # Save sync metadata (includes both synced + remote markers)
     try:
         save_json(CDN_SYNC_META_FILE, sync_meta)
@@ -13059,10 +13730,14 @@ def process_cdn_sync():
     except Exception:
         pass
 
-    # Cache leaderboard for HTML tab
+    # Cache leaderboard + sync log for HTML tab
     print("  Fetching leaderboard...", end=" ", flush=True)
     lb_result = api_request(CDN_SYNC_API_BASE + "/leaderboard", retries=1)
     if lb_result and "leaderboard" in lb_result:
+        # Fetch server sync log and merge into leaderboard cache
+        sl_result = api_request(CDN_SYNC_API_BASE + "/sync_log", retries=1)
+        if sl_result and "sync_log" in sl_result:
+            lb_result["sync_log"] = sl_result["sync_log"]
         save_json(CDN_LEADERBOARD_CACHE_FILE, lb_result)
         board = lb_result["leaderboard"]
         print(f"{len(board)} contributors")
@@ -14745,6 +15420,7 @@ def interactive_menu():
         print()
         print("  Build:")
         print("    [k] Build/Rebuild Index")
+        print("    [x] Export for XCT Live (xct.freshdex.app)")
         print()
         print("  XVC CDN Scrape and Sync:")
         print("    [l] Scrape XVCs from Xbox One / Series X|S USB Hard Drive")
@@ -15066,6 +15742,14 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("Build index", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
+        elif pu == "x":
+            _t0 = time.time()
+            try:
+                cmd_export()
+                _op_summary("XCT Live Export", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("XCT Live Export", success=False, detail=str(_e), elapsed=time.time() - _t0)
+            continue
         elif pu == "l":
             _t0 = time.time()
             try:
@@ -15225,6 +15909,8 @@ def main():
                 file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
                 print(f"[*] Opening in browser: {file_url}")
                 webbrowser.open(file_url)
+        elif args[0] == "export":
+            cmd_export()
         else:
             # Treat as gamertag
             gamertag = args[0]

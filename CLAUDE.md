@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Xbox Collection Tracker (XCT) — single-file Python tool (`XCT.py`, ~13,600 lines) that authenticates with Xbox Live, fetches game library data via multiple Microsoft APIs, enriches with catalog metadata, and generates a self-contained HTML explorer page. Supports multiple Xbox accounts. Also includes Xbox hard drive tools, CDN download/install utilities, and GFWL game downloading.
+Xbox Collection Tracker (XCT) — single-file Python tool (`XCT.py`, ~15,300 lines) that authenticates with Xbox Live, fetches game library data via multiple Microsoft APIs, enriches with catalog metadata, and generates a self-contained HTML explorer page. Supports multiple Xbox accounts. Also includes Xbox hard drive tools, CDN scraping/sync, CDN download/install utilities, GFWL game downloading, and Windows gaming repair tools.
 
 ## Dependencies & Running
 
@@ -76,8 +76,20 @@ Probes Xbox CDN (`assets.xboxlive.com`) for game package versions. Includes snap
 ### MS Store CDN Installer (`process_store_packages`, menu `[y]`)
 Fetches direct CDN links from `fe3cr.delivery.mp.microsoft.com` (Windows Update SOAP API). Accepts ProductId, CategoryId, PackageFamilyName, or store URL. Supports RP/Retail/WIF/WIS rings. Downloads and optionally installs `.appx`/`.msixbundle` packages.
 
-### GFWL Downloader (`process_gfwl_download`, menu `[z]`)
+### CDN Sync (`process_cdn_sync`, menu `[S]`)
+Community CDN package database. Uploads local `CDN.json` entries to the Freshdex shared database, downloads entries from other contributors, merges into local `CDN.json`. Points system rewards new unique game+version contributions. Config in `cdn_sync_config.json`, per-entry source tracking in `cdn_sync_meta.json`, operation history in `cdn_sync_log.json`.
+
+### PC CDN Scraper (`process_pc_cdn_scrape` / `scan_pc_games`, menu `[T]`)
+Scrapes CDN links from locally installed Windows PC games. Auto-detects drives with `\XboxGames\` directories, reads `.xvs` package metadata. Also reads `MicrosoftGame.Config` and `appxmanifest.xml` for Title ID, publisher, executable name. Merges into `CDN.json`.
+
+### GFWL Downloader (`process_gfwl_download`, menu `[O]`)
 Downloads Games for Windows - LIVE packages from `download-ssl.xbox.com`. Uses `gfwl_links.json` (244 titles, 1,775 packages). Extracts with 7-Zip and launches installer.
+
+### GFWL Key Recovery (`recover_gfwl_keys`, menu `[P]`)
+Recovers GFWL product keys from `Token.bin` files using Windows DPAPI decryption. Includes 312 GFWL title name mappings.
+
+### Windows Gaming Repair (`menu [Q]`) / Store Reset (`menu [R]`)
+PowerShell-based repair tools: re-register Xbox app packages, reset Gaming Services, restart Xbox services. Store reset launches `wsreset.exe`.
 
 ### Regional Pricing
 Price comparison across 10 regions (AR, BR, TR, IS, NG, TW, NZ, CO, HK, US). Exchange rates convert to "Gift Card USD" using `GC_FACTOR = 0.81`.
@@ -87,9 +99,10 @@ Price comparison across 10 regions (AR, BR, TR, IS, NG, TW, NZ, CO, HK, US). Exc
 - **Global path state**: `set_account_paths(gamertag)` sets module-level path globals (`AUTH_TOKEN_FILE`, `ENTITLEMENTS_FILE`, etc.) to the current account's directory. Must be called before any per-account operations.
 - **HTTP helpers**: `api_request()` handles retries with exponential backoff on 429/5xx. `msa_request()` handles MSA auth calls. `_signed_request()` adds EC P-256 ProofOfPossession signatures.
 - **Caching**: All API responses cached as JSON with 1-hour TTL (`CACHE_MAX_AGE = 3600`). `is_cache_fresh()` checks file age.
-- **HTML output**: `build_html_template()` (line ~3156) returns a ~1700-line Python string containing all HTML, CSS, and JS — no separate template files. Data is loaded from a separate `data.js` file via `<script src>`. Edit the frontend entirely within this function.
+- **HTML output**: `build_html_template()` (line ~3167) returns a large Python string containing all HTML, CSS, and JS — no separate template files. Data is loaded from a separate `data.js` file via `<script src>`. Edit the frontend entirely within this function.
+- **Data output**: `write_data_js()` (line ~5117) writes library data as JS constants to `data.js`. Includes `LIB`, `GP`, `PH`, `MKT`, `HISTORY`, `DEFAULT_FLAGS`, `ACCOUNTS`, `RATES`, `GC_FACTOR`, plus CDN sync data (`CDN_DB`, `CDN_LEADERBOARD`, `CDN_SYNC_LOG`, `CDN_SYNC_META`).
 - **Community tags**: `tags.json` maps product IDs to flags (delisted/indie/demo). Loaded at startup into `DEFAULT_FLAGS` dict, embedded in `data.js` output.
-- **Interactive menu**: `interactive_menu()` (line ~12964) is the main loop. Uses single-letter keys `[a]`–`[z]` plus `[0]` to quit.
+- **Interactive menu**: `interactive_menu()` (line ~14721) is the main loop. Uses single-letter keys `[a]`–`[z]` plus `[0]` to quit.
 - **Raw disk I/O**: `_hd_open_read`/`_hd_open_write` use `CreateFileW` via `ctypes` for direct sector access. Requires admin.
 - **GUID encoding**: Xbox GPT uses mixed-endian GUID format. `_hd_encode_guid()`/`_hd_format_guid()` handle conversion.
 - **Windows Update SOAP**: `_fe3_get_cookie`, `_fe3_sync_updates`, `_fe3_get_url` implement the WU SOAP protocol for package resolution.
@@ -104,31 +117,37 @@ Price comparison across 10 regions (AR, BR, TR, IS, NG, TW, NZ, CO, HK, US). Exc
 - **WU Delivery** (`fe3cr.delivery.mp.microsoft.com`) — MS Store package CDN links via SOAP
 - **Xbox CDN** (`assets{N}.xboxlive.com`) — Game package downloads
 - **GFWL CDN** (`download-ssl.xbox.com`) — GFWL package downloads
+- **Freshdex CDN Sync** (`cdn.freshdex.app/api/v1`) — Community CDN package database
 
 ## File Layout
 
 ```
-XCT.py                  # Everything: auth, API calls, HTML generation, disk tools (~13,600 lines)
-xbox_auth.py            # Standalone auth helper (legacy, not used by main flow)
-tags.json               # Community game tags (delisted, indie, demo flags)
-gfwl_links.json         # GFWL package database (244 titles, 1,775 packages)
-requirements.txt        # Python deps (ecdsa, pip_system_certs)
-accounts.json           # Account registry: gamertag → {uhs} (auto-generated)
-exchange_rates.json     # Cached exchange rates (auto-generated)
-usb_db.json             # Xbox USB drive scan data (auto-generated)
-version.txt             # Current version string; checked against GitHub on startup
-endpoints.json          # API reference doc (documentation only, not loaded by XCT.py)
-debug.log               # Auto-written each run
+XCT.py                     # Everything: auth, API calls, HTML generation, disk tools (~15,300 lines)
+xbox_auth.py               # Standalone auth helper (legacy, not used by main flow)
+tags.json                  # Community game tags (delisted, indie, demo flags)
+gfwl_links.json            # GFWL package database (244 titles, 1,775 packages)
+requirements.txt           # Python deps (ecdsa, pip_system_certs)
+accounts.json              # Account registry: gamertag → {uhs} (auto-generated)
+exchange_rates.json        # Cached exchange rates (auto-generated)
+usb_db.json                # Xbox USB drive scan data (auto-generated)
+CDN.json                   # Scraped CDN package data (auto-generated)
+cdn_sync_config.json       # CDN sync username + API key (auto-generated)
+cdn_sync_meta.json         # Per-entry source tracking (auto-generated)
+cdn_sync_log.json          # Sync operation history (auto-generated)
+cdn_leaderboard_cache.json # Leaderboard cache (auto-generated)
+version.txt                # Current version string; checked against GitHub on startup
+endpoints.json             # API reference doc (documentation only, not loaded by XCT.py)
+debug.log                  # Auto-written each run
 accounts/
-  XCT.html + data.js    # Combined (all accounts)
+  XCT.html + data.js       # Combined (all accounts)
   {gamertag}/
-    XCT.html + data.js  # Per-account
-    auth_token.txt       # XBL3.0 token (mp.microsoft.com RP)
-    auth_token_xl.txt    # XBL3.0 token (xboxlive.com RP)
-    xuid.txt             # Xbox User ID
-    xbox_auth_state.json # MSA refresh token + EC P-256 key + device ID
-    *.json               # Cached API responses (1-hour TTL)
-    history/             # Timestamped scan snapshots for changelog
+    XCT.html + data.js     # Per-account
+    auth_token.txt          # XBL3.0 token (mp.microsoft.com RP)
+    auth_token_xl.txt       # XBL3.0 token (xboxlive.com RP)
+    xuid.txt                # Xbox User ID
+    xbox_auth_state.json    # MSA refresh token + EC P-256 key + device ID
+    *.json                  # Cached API responses (1-hour TTL)
+    history/                # Timestamped scan snapshots for changelog
 ```
 
 ## Key Constants

@@ -2,6 +2,12 @@
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
 
+## What's New in v1.9
+
+- **XCT Live — Hosted Collection Viewer at [xct.freshdex.app](https://xct.freshdex.app)** — A hosted version of the XCT HTML explorer that runs in your browser with no local install. Shared data (Marketplace, Game Pass, GFWL, XVC Database, CDN Leaderboard) is loaded from the server and available to everyone immediately. Log in with your CDN Sync username+passphrase to upload your personal collection and get the full experience — your library, play history, scan log, and "owned" badges on Marketplace/GP items.
+- **Export command `[X]` / `python XCT.py export`** — Exports your combined collection data to `xct_export.json` for upload to XCT Live. Strips credential and bulky fields (descriptions, hero images), caps scan history to 100 entries, and keeps only gamertag names in account metadata. Offers direct upload to xct.freshdex.app using your existing CDN Sync API key.
+- **XCT Live server (`xct_server.py`)** — Flask app serving the hosted version. Shares the same PostgreSQL database as the CDN Sync server. Reuses the CDN Sync `contributors` table for authentication. Shared data endpoints serve gzipped JSON with ETag caching. Collection upload/download/delete endpoints with Bearer token auth. Operator imports shared data via `flask import-shared` CLI command.
+
 ## What's New in v1.8.1
 
 - **PC game metadata scraping** — The Windows PC CDN scraper (`[T]`) now reads `MicrosoftGame.Config` and `appxmanifest.xml` from each game's `Content` directory. Extracts Xbox Live Title ID, MSA App ID, executable name, package identity name (PFN prefix), and minimum OS version into CDN.json. Game title and publisher are also pulled from config as local fallbacks, reducing Display Catalog lookups.

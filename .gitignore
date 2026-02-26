@@ -23,6 +23,9 @@ exchange_rates.json
 *.log
 debug.log
 
+# Environment
+.env
+
 # Python
 __pycache__/
 *.pyc
