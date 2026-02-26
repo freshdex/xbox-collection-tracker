@@ -2,6 +2,12 @@
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
 
+## What's New in v1.9.1
+
+- **Raw NTFS scraper picks up GUID.GUID CDN URL files** — The Xbox hard drive scraper (`[L]`) and USB drive scanner now detect a second file format alongside `.xvs` files: plain binary files named `{contentId-guid}.{suffix-guid}` containing null-terminated CDN URLs in UTF-16LE. These appear on some Xbox drives and contain the same CDN download links as `.xvs` files but in a non-JSON format. The scraper auto-detects the format, extracts all mirror URLs, and parses build version, build ID, and package name from the URL path structure.
+- **Package name regex now matches URLs without .xvc extension** — All three CDN scrapers (raw NTFS, USB drive, PC games) now extract package names from CDN URLs that don't end in `.xvc`, covering the URL format used by GUID.GUID files.
+- **XCT Live — CDN contributor names fixed** — The hosted viewer at [xct.freshdex.app](https://xct.freshdex.app) now shows actual contributor usernames in the CDN Sync tab instead of displaying "You" for every entry. A new server endpoint serves the contributor map from the CDN database, and the client defaults all entries to "remote" source in hosted mode.
+
 ## What's New in v1.9
 
 - **XCT Live — Hosted Collection Viewer at [xct.freshdex.app](https://xct.freshdex.app)** — A hosted version of the XCT HTML explorer that runs in your browser with no local install. Shared data (Marketplace, Game Pass, GFWL, XVC Database, CDN Leaderboard) is loaded from the server and available to everyone immediately. Log in with your CDN Sync username+passphrase to upload your personal collection and get the full experience — your library, play history, scan log, and "owned" badges on Marketplace/GP items.

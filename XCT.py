@@ -60,7 +60,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "1.9"
+VERSION = "1.9.1"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -3753,7 +3753,7 @@ def build_html_template(gamertag="", hosted=False):
             "let LIB=[],GP=[],PH=[],MKT=[],HISTORY=[],DEFAULT_FLAGS={},"
             "ACCOUNTS=[],RATES={},GC_FACTOR=0.81,CDN_DB={},GFWL=[],"
             "CDN_LEADERBOARD=[],CDN_LB_STATS={},CDN_SYNC_META={},"
-            "CDN_SYNC_USER='',CDN_SYNC_LOG=[];\n"
+            "CDN_SYNC_USER='',CDN_SYNC_LOG=[],CDN_CONTRIBUTOR_MAP={};\n"
             "let _xctApiKey=localStorage.getItem('xct_api_key')||'';\n"
             "let _xctUser=localStorage.getItem('xct_username')||'';\n"
             "async function _fetchJSON(url,opts){"
@@ -3761,7 +3761,7 @@ def build_html_template(gamertag="", hosted=False):
             "if(!r.ok)throw new Error('HTTP '+r.status);"
             "return r.json()}\n"
             "async function _loadShared(){"
-            "const keys=['mkt','gp','rates','flags','gfwl','cdn','cdn_lb','cdn_log'];"
+            "const keys=['mkt','gp','rates','flags','gfwl','cdn','cdn_lb','cdn_log','cdn_meta'];"
             "const results=await Promise.allSettled("
             "keys.map(k=>_fetchJSON(_API+'/api/v1/shared/'+k)));"
             "const d={};"
@@ -3776,7 +3776,8 @@ def build_html_template(gamertag="", hosted=False):
             "CDN_LEADERBOARD=d.cdn_lb.leaderboard||[];"
             "CDN_LB_STATS={total_contributors:d.cdn_lb.total_contributors,"
             "total_entries:d.cdn_lb.total_entries,total_games:d.cdn_lb.total_games}}"
-            "if(d.cdn_log)CDN_SYNC_LOG=d.cdn_log.sync_log||[]}\n"
+            "if(d.cdn_log)CDN_SYNC_LOG=d.cdn_log.sync_log||[];"
+            "if(d.cdn_meta)CDN_CONTRIBUTOR_MAP=d.cdn_meta}\n"
             "async function _loadCollection(){"
             "if(!_xctApiKey)return false;"
             "try{"
@@ -5144,6 +5145,7 @@ def build_html_template(gamertag="", hosted=False):
         "  if(typeof CDN_DB==='undefined'||!CDN_DB)return;\n"
         "  const syncMeta=typeof CDN_SYNC_META!=='undefined'?CDN_SYNC_META:{};\n"
         "  const syncUser=typeof CDN_SYNC_USER!=='undefined'?CDN_SYNC_USER:'';\n"
+        "  const _cmap=typeof CDN_CONTRIBUTOR_MAP!=='undefined'?CDN_CONTRIBUTOR_MAP:{};\n"
         "  const libMap={},libKindMap={};\n"
         "  if(typeof LIB!=='undefined')LIB.forEach(x=>{libMap[x.productId]=x.title;libKindMap[x.productId]=x.productKind||'Game'});\n"
         "  Object.keys(CDN_DB).forEach(sid=>{\n"
@@ -5151,8 +5153,8 @@ def build_html_template(gamertag="", hosted=False):
         "    const rec=CDN_DB[sid];\n"
         "    const name=libMap[sid]||rec.title||rec.packageName||sid;\n"
         "    const meta=syncMeta[sid]||{};\n"
-        "    const topSrc=meta.source||'local';\n"
-        "    const who=topSrc==='remote'?(meta.contributor||'Community'):syncUser||'You';\n"
+        "    const topSrc=meta.source||(syncUser?'local':'remote');\n"
+        "    const who=topSrc==='remote'?(meta.contributor||_cmap[sid+':'+(rec.buildId||'')]||'Community'):syncUser||'You';\n"
         "    const hasVer=(rec.versions||[]).filter(v=>v.buildId!==rec.buildId).length>0;\n"
         "    if(hasVer)_cdnMultiSids.add(sid);\n"
         "    const _kind=libKindMap[sid]||'Game';\n"
@@ -5168,7 +5170,7 @@ def build_html_template(gamertag="", hosted=False):
         "      if(v.buildId===rec.buildId)return;\n"
         "      const vMeta=meta.versions&&meta.versions[v.buildId];\n"
         "      const vSrc=typeof vMeta==='object'?(vMeta.source||'remote'):vMeta||topSrc;\n"
-        "      const vWho=vSrc==='remote'?(typeof vMeta==='object'&&vMeta.contributor?vMeta.contributor:meta.contributor||'Community'):syncUser||'You';\n"
+        "      const vWho=vSrc==='remote'?(typeof vMeta==='object'&&vMeta.contributor?vMeta.contributor:meta.contributor||_cmap[sid+':'+v.buildId]||'Community'):syncUser||'You';\n"
         "      _cdnSyncFlat.push({sid:sid,name:name,bid:v.buildId||'',bv:v.buildVersion||'',\n"
         "        plat:v.platform||rec.platform||'',sz:v.sizeBytes||0,urls:v.cdnUrls||[],\n"
         "        cid:rec.contentId||'',pkg:rec.packageName||'',src:vSrc,who:vWho,\n"
@@ -10409,6 +10411,59 @@ def _hd_scrape_cdn_links(disk_num=None, device_id=None):
                 u = u[7:]
             return u.split(",")[0]
 
+        _GUID_RE = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+        _GUID_DOT_GUID_RE = re.compile('^' + _GUID_RE + r'\.' + _GUID_RE + '$')
+
+        def _parse_cdn_url_file(file_data, content_id):
+            """Parse a binary CDN URL file (GUID.GUID format).
+            UTF-16LE with null-terminated URL strings and binary data mixed in.
+            Returns item dict or None."""
+            try:
+                text = file_data.decode("utf-16-le", errors="replace")
+            except Exception:
+                return None
+            cdn_urls = []
+            for segment in text.split('\x00'):
+                segment = segment.strip()
+                if not segment:
+                    continue
+                clean = _clean_cdn_url(segment)
+                if clean.startswith("http") and clean not in cdn_urls:
+                    cdn_urls.append(clean)
+            if not cdn_urls:
+                return None
+            pkg_name = ""
+            build_version = ""
+            build_id = ""
+            first_url = cdn_urls[0]
+            m = re.search(r'/(\d+\.\d+\.\d+\.\d+)\.(' + _GUID_RE + r')/', first_url)
+            if m:
+                build_version = m.group(1)
+                build_id = m.group(2)
+            m = re.search(r'/([A-Za-z][^/]+?)_[\d.]+_[^/]*$', first_url)
+            if m:
+                pkg_name = m.group(1)
+            return {
+                "contentId": content_id,
+                "storeId": "",
+                "packageName": pkg_name,
+                "buildVersion": build_version,
+                "buildId": build_id,
+                "platform": "",
+                "sizeBytes": 0,
+                "cdnUrls": cdn_urls,
+                "contentTypes": "",
+                "devices": "",
+                "language": "",
+                "planId": "",
+                "operation": "",
+                "fastStartState": "",
+                "priorBuildVersion": "",
+                "priorBuildId": "",
+                "source": "xbox_xvs",
+                "scrapedAt": _dt.datetime.now().isoformat(),
+            }
+
         batch_records = 64
         batch_size = batch_records * record_size
         batch_sectors = (batch_size + _HD_SECTOR - 1) // _HD_SECTOR
@@ -10462,13 +10517,15 @@ def _hd_scrape_cdn_links(disk_num=None, device_id=None):
                     if fname and len(all_filenames) < 50:
                         all_filenames.append(("D " if is_dir else "F ") + fname)
 
-                    # Determine if this record could be a .xvs file
+                    # Determine if this record could be a .xvs or CDN URL file
                     fname_lc = fname.lower() if fname else ""
                     is_xvs_name = fname_lc.endswith(".xvs")
                     # Content-ID pattern: 8hex.8hex.8hex.8hex (possibly truncated .xvs name)
                     _cid_pat = re.match(r'^[0-9a-f]{8}\.[0-9a-f]{8}\.[0-9a-f]{8}\.[0-9a-f]{8}$', fname_lc) if fname else None
-                    # Candidates: named .xvs, content-ID pattern, or unnamed non-dir file
-                    if not is_xvs_name and not _cid_pat and not (not fname and not is_dir):
+                    # GUID.GUID pattern: full GUID.full GUID (binary CDN URL files)
+                    _guid_dot_guid = _GUID_DOT_GUID_RE.match(fname_lc) if fname else None
+                    # Candidates: named .xvs, content-ID pattern, GUID.GUID, or unnamed non-dir file
+                    if not is_xvs_name and not _cid_pat and not _guid_dot_guid and not (not fname and not is_dir):
                         continue
                     if is_dir:
                         continue
@@ -10488,76 +10545,83 @@ def _hd_scrape_cdn_links(disk_num=None, device_id=None):
                             print(f"\n  [!] Could not read data for {label}")
                         continue
 
-                    # Parse .xvs JSON (UTF-16LE)
+                    # Try .xvs JSON (UTF-16LE) first
+                    obj = None
                     try:
                         text = file_data.decode("utf-16-le")
                         # Strip BOM if present
                         if text and text[0] == '\ufeff':
                             text = text[1:]
                         obj = json.loads(text)
+                        if "Request" not in obj:
+                            obj = None
                     except Exception:
+                        pass
+
+                    if obj:
+                        # Standard .xvs JSON format
+                        # Derive content_id
                         if is_xvs_name:
-                            print(f"\n  [!] Failed to parse {label}")
-                        continue
+                            content_id = fname[:-4]  # strip .xvs
+                        elif _cid_pat:
+                            content_id = fname  # name was truncated, missing .xvs
+                        else:
+                            content_id = fname or "unknown"
+                        req = obj.get("Request", {})
+                        store_id = req.get("StoreId", "")
+                        sources = req.get("Sources", {})
+                        pkg_name = ""
+                        cdn_urls = []
+                        fg_paths = sources.get("ForegroundCrdPaths", [])
+                        for u in fg_paths:
+                            clean = _clean_cdn_url(u)
+                            if clean.startswith("http") and clean not in cdn_urls:
+                                cdn_urls.append(clean)
+                            if not pkg_name:
+                                m = re.search(r'/([A-Za-z][^/]+?_[\d.]+_[^/]+?)(?:\.xvc)?$', clean)
+                                if m:
+                                    pkg_name = m.group(1).split('_')[0]
+                        status = obj.get("Status", {})
+                        source = status.get("Source", {})
+                        current = source.get("Current", {})
+                        prior = source.get("Prior", {})
+                        build_version = current.get("BuildVersion", "")
+                        build_id = current.get("BuildId", "")
+                        platform = current.get("Platform", "")
+                        total_bytes = status.get("Progress", {}).get("Package", {}).get("TotalBytes", 0)
+                        specifiers = sources.get("Specifiers", {})
+                        content_types = specifiers.get("ContentTypes", "")
+                        plan_id = specifiers.get("PlanId", "")
 
-                    # Validate: must have Request.StoreId to be an .xvs file
-                    if "Request" not in obj:
-                        continue
-
-                    # Derive content_id
-                    if is_xvs_name:
-                        content_id = fname[:-4]  # strip .xvs
-                    elif _cid_pat:
-                        content_id = fname  # name was truncated, missing .xvs
+                        _item = {
+                            "contentId": content_id,
+                            "storeId": store_id,
+                            "packageName": pkg_name,
+                            "buildVersion": build_version,
+                            "buildId": build_id,
+                            "platform": platform,
+                            "sizeBytes": total_bytes,
+                            "cdnUrls": cdn_urls,
+                            "contentTypes": content_types,
+                            "devices": specifiers.get("Devices", ""),
+                            "language": specifiers.get("Languages", ""),
+                            "planId": plan_id,
+                            "operation": specifiers.get("Operation", ""),
+                            "fastStartState": status.get("FastStartState", ""),
+                            "priorBuildVersion": prior.get("BuildVersion", ""),
+                            "priorBuildId": prior.get("BuildId", ""),
+                            "source": "xbox_xvs",
+                            "scrapedAt": _dt.datetime.now().isoformat(),
+                        }
                     else:
-                        content_id = fname or "unknown"
-                    req = obj.get("Request", {})
-                    store_id = req.get("StoreId", "")
-                    sources = req.get("Sources", {})
-                    pkg_name = ""
-                    cdn_urls = []
-                    fg_paths = sources.get("ForegroundCrdPaths", [])
-                    for u in fg_paths:
-                        clean = _clean_cdn_url(u)
-                        if clean.startswith("http") and clean not in cdn_urls:
-                            cdn_urls.append(clean)
-                        if not pkg_name:
-                            import re as _re
-                            m = _re.search(r'/([A-Za-z][^/]+?_[\d.]+_[^/]+\.xvc)', clean)
-                            if m:
-                                pkg_name = m.group(1).split('_')[0]
-                    status = obj.get("Status", {})
-                    source = status.get("Source", {})
-                    current = source.get("Current", {})
-                    prior = source.get("Prior", {})
-                    build_version = current.get("BuildVersion", "")
-                    build_id = current.get("BuildId", "")
-                    platform = current.get("Platform", "")
-                    total_bytes = status.get("Progress", {}).get("Package", {}).get("TotalBytes", 0)
-                    specifiers = sources.get("Specifiers", {})
-                    content_types = specifiers.get("ContentTypes", "")
-                    plan_id = specifiers.get("PlanId", "")
+                        # Try binary CDN URL file format (GUID.GUID files)
+                        _cid = fname[:36] if fname and len(fname) >= 36 else (fname or "unknown")
+                        _item = _parse_cdn_url_file(file_data, _cid)
+                        if _item is None:
+                            if is_xvs_name:
+                                print(f"\n  [!] Failed to parse {label}")
+                            continue
 
-                    _item = {
-                        "contentId": content_id,
-                        "storeId": store_id,
-                        "packageName": pkg_name,
-                        "buildVersion": build_version,
-                        "buildId": build_id,
-                        "platform": platform,
-                        "sizeBytes": total_bytes,
-                        "cdnUrls": cdn_urls,
-                        "contentTypes": content_types,
-                        "devices": specifiers.get("Devices", ""),
-                        "language": specifiers.get("Languages", ""),
-                        "planId": plan_id,
-                        "operation": specifiers.get("Operation", ""),
-                        "fastStartState": status.get("FastStartState", ""),
-                        "priorBuildVersion": prior.get("BuildVersion", ""),
-                        "priorBuildId": prior.get("BuildId", ""),
-                        "source": "xbox_xvs",
-                        "scrapedAt": _dt.datetime.now().isoformat(),
-                    }
                     if not _is_in_use:
                         _item["deleted"] = True
                         deleted_xvs_count += 1
@@ -11135,12 +11199,22 @@ def scan_usb_drive(drive_letter="E"):
         print(f"[!] Cannot list {drive_path}: {e}")
         return []
 
-    xvs_files = [f for f in all_files if f.endswith('.xvs')]
-    if not xvs_files:
-        print(f"[!] No .xvs files found on {drive_path}. Is this an Xbox external drive?")
+    _GUID_RE = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+    _GUID_DOT_GUID_RE = re.compile('^' + _GUID_RE + r'\.' + _GUID_RE + '$')
+
+    xvs_files = []
+    cdn_url_files = []
+    for f in all_files:
+        f_lc = f.lower()
+        if f_lc.endswith('.xvs'):
+            xvs_files.append(f)
+        elif _GUID_DOT_GUID_RE.match(f_lc):
+            cdn_url_files.append(f)
+    if not xvs_files and not cdn_url_files:
+        print(f"[!] No .xvs or CDN URL files found on {drive_path}. Is this an Xbox external drive?")
         return []
 
-    print(f"[*] Scanning {drive_path}: {len(xvs_files)} package(s) found")
+    print(f"[*] Scanning {drive_path}: {len(xvs_files)} .xvs + {len(cdn_url_files)} CDN URL file(s) found")
     results = []
     _XBL_PREFIX = "[XBL:]" + chr(92)  # "[XBL:]\"
 
@@ -11170,7 +11244,7 @@ def scan_usb_drive(drive_letter="E"):
                     cdn_urls.append(clean)
                 if not pkg_name:
                     import re as _re
-                    m = _re.search(r'/([A-Za-z][^/]+?_[\d.]+_[^/]+\.xvc)', clean)
+                    m = _re.search(r'/([A-Za-z][^/]+?_[\d.]+_[^/]+?)(?:\.xvc)?$', clean)
                     if m:
                         pkg_name = m.group(1).split('_')[0]
             status = obj.get("Status", {})
@@ -11210,6 +11284,57 @@ def scan_usb_drive(drive_letter="E"):
             results.append({"contentId": content_id, "storeId": "", "packageName": "",
                             "buildVersion": "", "platform": "", "sizeBytes": 0,
                             "cdnUrls": [], "error": str(e)})
+
+    # Parse GUID.GUID CDN URL files (binary format with embedded URLs)
+    for cdn_file in sorted(cdn_url_files):
+        content_id = cdn_file[:36]  # first GUID is the content ID
+        try:
+            raw = open(drive_path + cdn_file, 'rb').read()
+            text = raw.decode("utf-16-le", errors="replace")
+            cdn_urls = []
+            for segment in text.split('\x00'):
+                segment = segment.strip()
+                if not segment:
+                    continue
+                clean = _clean_cdn_url(segment)
+                if clean.startswith("http") and clean not in cdn_urls:
+                    cdn_urls.append(clean)
+            if not cdn_urls:
+                continue
+            pkg_name = ""
+            build_version = ""
+            build_id = ""
+            first_url = cdn_urls[0]
+            m = re.search(r'/(\d+\.\d+\.\d+\.\d+)\.(' + _GUID_RE + r')/', first_url)
+            if m:
+                build_version = m.group(1)
+                build_id = m.group(2)
+            m = re.search(r'/([A-Za-z][^/]+?)_[\d.]+_[^/]*$', first_url)
+            if m:
+                pkg_name = m.group(1)
+            results.append({
+                "contentId": content_id,
+                "storeId": "",
+                "packageName": pkg_name,
+                "buildVersion": build_version,
+                "buildId": build_id,
+                "platform": "",
+                "sizeBytes": 0,
+                "cdnUrls": cdn_urls,
+                "contentTypes": "",
+                "devices": "",
+                "language": "",
+                "planId": "",
+                "operation": "",
+                "fastStartState": "",
+                "priorBuildVersion": "",
+                "priorBuildId": "",
+            })
+        except Exception as e:
+            results.append({"contentId": content_id, "storeId": "", "packageName": "",
+                            "buildVersion": "", "platform": "", "sizeBytes": 0,
+                            "cdnUrls": [], "error": str(e)})
+
     return results
 
 
@@ -13274,7 +13399,7 @@ def scan_pc_games(base_path):
                         cdn_urls.append(clean)
                     if not pkg_name:
                         import re as _re
-                        m = _re.search(r'/([A-Za-z][^/]+?_[\d.]+_[^/]+\.xvc)', clean)
+                        m = _re.search(r'/([A-Za-z][^/]+?_[\d.]+_[^/]+?)(?:\.xvc)?$', clean)
                         if m:
                             pkg_name = m.group(1).split('_')[0]
                 status = obj.get("Status", {})

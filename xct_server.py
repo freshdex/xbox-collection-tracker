@@ -373,6 +373,31 @@ def shared_cdn():
     return _serve_shared_data("cdn")
 
 
+@app.route("/api/v1/shared/cdn_meta")
+def shared_cdn_meta():
+    """Serve contributor map from cdn_entries for the hosted viewer.
+    Returns {storeId:buildId: username, ...} so the frontend can show
+    who contributed each CDN entry."""
+    conn = get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT e.store_id, e.build_id, c2.username
+            FROM cdn_entries e
+            JOIN contributions c ON c.cdn_entry_id = e.id
+            JOIN contributors c2 ON c2.id = c.contributor_id
+            WHERE NOT e.deleted
+        """)
+        contributor_map = {}
+        for row in cur:
+            contributor_map[f"{row['store_id']}:{row['build_id']}"] = row["username"]
+        return _gzip_json_response(contributor_map, cache_key="shared_cdn_meta")
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+    finally:
+        conn.close()
+
+
 @app.route("/api/v1/shared/cdn_lb")
 def shared_cdn_lb():
     """CDN leaderboard + stats (same shape as CDN Sync leaderboard endpoint)."""
