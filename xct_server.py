@@ -369,57 +369,8 @@ def _serve_shared_data(key):
 
 @app.route("/api/v1/shared/cdn")
 def shared_cdn():
-    """Build CDN_DB dict from cdn_entries table (same shape the frontend expects)."""
-    conn = get_db()
-    try:
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("""
-            SELECT e.store_id, e.build_id, e.content_id, e.package_name,
-                   e.build_version, e.platform, e.size_bytes, e.cdn_urls,
-                   e.content_types, e.devices, e.language, e.plan_id,
-                   e.source, e.scraped_at,
-                   e.prior_build_version, e.prior_build_id,
-                   c2.username AS contributor
-            FROM cdn_entries e
-            LEFT JOIN contributions c ON c.cdn_entry_id = e.id
-            LEFT JOIN contributors c2 ON c2.id = c.contributor_id
-            WHERE NOT e.deleted
-            ORDER BY e.store_id, e.scraped_at DESC
-        """)
-        rows = cur.fetchall()
-
-        # Group by store_id to produce CDN_DB dict
-        cdn_db = {}
-        for row in rows:
-            sid = row["store_id"]
-            entry = {
-                "buildId": row["build_id"],
-                "contentId": row["content_id"],
-                "packageName": row["package_name"],
-                "buildVersion": row["build_version"],
-                "platform": row["platform"],
-                "sizeBytes": row["size_bytes"],
-                "cdnUrls": row["cdn_urls"] or [],
-                "contentTypes": row["content_types"],
-                "devices": row["devices"],
-                "language": row["language"],
-                "planId": row["plan_id"],
-                "source": row["source"],
-                "scrapedAt": row["scraped_at"].isoformat() if row["scraped_at"] else None,
-                "priorBuildVersion": row["prior_build_version"],
-                "priorBuildId": row["prior_build_id"],
-                "contributor": row["contributor"],
-            }
-            if sid not in cdn_db:
-                cdn_db[sid] = {"versions": [entry]}
-            else:
-                cdn_db[sid]["versions"].append(entry)
-
-        return _gzip_json_response(cdn_db, cache_key="shared_cdn")
-    except Exception as e:
-        return jsonify(error=str(e)), 500
-    finally:
-        conn.close()
+    """Serve CDN_DB from shared_data table (imported from enriched CDN.json)."""
+    return _serve_shared_data("cdn")
 
 
 @app.route("/api/v1/shared/cdn_lb")
@@ -648,7 +599,7 @@ def collection_delete(conn=None, cur=None, contributor=None, api_key=None):
 # ---------------------------------------------------------------------------
 
 @app.cli.command("import-shared")
-@click.argument("key", type=click.Choice(["mkt", "gp", "rates", "flags", "gfwl"]))
+@click.argument("key", type=click.Choice(["mkt", "gp", "rates", "flags", "gfwl", "cdn"]))
 @click.argument("filepath", type=click.Path(exists=True))
 def import_shared(key, filepath):
     """Import a JSON file into the shared_data table.
