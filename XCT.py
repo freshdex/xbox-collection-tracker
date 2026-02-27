@@ -1370,6 +1370,72 @@ def get_xbl_tokens_device_bound(refresh_token, signer=None, device_id=None):
     return xbl3_xl, xbl3_mp, xuid, gamertag, new_refresh, signer, device_id
 
 
+def _get_update_xsts_token():
+    """Get an XBL3.0 token for http://update.xboxlive.com relying party.
+
+    Loads auth state from the first available account, performs the full
+    device-bound auth flow (MSA refresh → device token → SISU → XSTS),
+    and returns (xbl3_token, signer) for packagespc.xboxlive.com.
+    The signer is needed because the endpoint requires signed requests.
+    """
+    accounts = load_accounts()
+    if not accounts:
+        raise RuntimeError("No accounts configured. Add a gamertag first.")
+
+    # Find first account with saved auth state
+    auth_state = None
+    chosen_gt = None
+    for gt in accounts:
+        state_path = account_path(gt, "xbox_auth_state.json")
+        if os.path.isfile(state_path):
+            auth_state = load_json(state_path)
+            chosen_gt = gt
+            break
+
+    if not auth_state or "refresh_token" not in auth_state:
+        raise RuntimeError("No account with saved auth state found. Run a collection scan first.")
+
+    print(f"[*] Authenticating as {chosen_gt} for update.xboxlive.com...")
+
+    signer = RequestSigner.from_state(auth_state.get("ec_key"))
+    if not signer:
+        raise RuntimeError("Could not restore EC P-256 key from auth state.")
+
+    # Refresh MSA token
+    print("[*] Refreshing MSA token...")
+    msa_resp = msa_request("https://login.live.com/oauth20_token.srf", {
+        "client_id": CLIENT_ID,
+        "scope": SCOPE,
+        "grant_type": "refresh_token",
+        "refresh_token": auth_state["refresh_token"],
+    })
+    msa_token = msa_resp["access_token"]
+    print("[+] MSA token refreshed")
+
+    # Device token
+    print("[*] Registering device...")
+    device_id = auth_state.get("device_id")
+    device_token, device_id = get_device_token(signer, device_id)
+    print("[+] Device token acquired")
+
+    # SISU authorize
+    print("[*] SISU authorization...")
+    sisu_result = sisu_authorize(signer, msa_token, device_token)
+    user_token = sisu_result["user_token"]
+    title_token = sisu_result["title_token"]
+    print(f"[+] Authorized as {sisu_result.get('gamertag', chosen_gt)}")
+
+    # XSTS for update.xboxlive.com
+    print("[*] Getting XSTS token (update.xboxlive.com)...")
+    upd_token, upd_uhs = get_xsts_token_device_bound(
+        signer, user_token, device_token, title_token,
+        "http://update.xboxlive.com"
+    )
+    xbl3 = build_xbl3_token(upd_token, upd_uhs)
+    print(f"[+] Update token ready ({len(xbl3)} chars)")
+    return xbl3, signer
+
+
 def fetch_account_profile(auth_token_xl):
     """Fetch the current user's account profile using xboxlive.com RP token.
 
@@ -3384,8 +3450,9 @@ def build_html_template(gamertag="", hosted=False):
         '.dlc-count{font-size:9px;margin-left:4px;background:#1a2e1a;color:#4caf50;padding:1px 5px;border-radius:8px;vertical-align:middle}\n'
         '.gp-list .lv-head{grid-template-columns:50px 1fr 160px 120px 90px 80px}\n'
         '.gp-list .lv-row{grid-template-columns:50px 1fr 160px 120px 90px 80px}\n'
-        '#mkt-list .lv-head{grid-template-columns:50px 1fr 140px 90px 90px repeat(10,80px) 80px}\n'
-        '#mkt-list .lv-row{grid-template-columns:50px 1fr 140px 90px 90px repeat(10,80px) 80px}\n'
+        '#mkt-list .lv-head,#mkt-list .lv-row,#mkt-list .mkt-alt{grid-template-columns:50px 280px 160px 90px 90px repeat(10,80px) 80px}\n'
+        '#mkt-list .lv-head{position:relative;top:auto;z-index:2}\n'
+        '#mkt-list .lv-title,#mkt-list .lv-pub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n'
         '#mkt-list{overflow-x:auto}\n'
         '.lv-best{text-align:right;line-height:1.2}\n'
         '.lv-reg{text-align:right;font-size:11px;line-height:1.2}\n'
@@ -3465,6 +3532,7 @@ def build_html_template(gamertag="", hosted=False):
         '<div class="tab" id="tab-gfwl" onclick="switchTab(\'gfwl\',this)" style="display:none">GFWL <span class="cnt" id="tab-gfwl-cnt"></span></div>\n'
         '<div class="tab" id="tab-cdnsync" onclick="switchTab(\'cdnsync\',this)" style="display:none">XVC Database <span class="cnt" id="tab-cdnsync-cnt"></span></div>\n'
         '<div class="tab" id="tab-imp" onclick="switchTab(\'imports\',this)" style="display:none">Imports <span class="cnt" id="tab-imp-cnt"></span></div>\n'
+        '<div class="tab" id="tab-ach" onclick="switchTab(\'achievements\',this)" style="display:none">Achievements <span class="cnt" id="tab-ach-cnt"></span></div>\n'
         '<select id="lib-cur" class="tab-cur" onchange="_onCur()">'
         '<option value="USD" selected>USD $</option>'
         '<option value="EUR">EUR €</option>'
@@ -3504,11 +3572,16 @@ def build_html_template(gamertag="", hosted=False):
         html += (
             '<div id="xct-auth" style="margin-left:auto;display:flex;align-items:center;gap:8px;padding:0 12px">'
             '<span id="xct-auth-user" style="color:#888;font-size:12px"></span>'
+            '<span id="xct-xbox-gt" style="color:#107c10;font-size:12px;display:none"></span>'
             '<button id="xct-upload-btn" onclick="document.getElementById(\'xct-upload-input\').click()" '
             'style="display:none;padding:4px 12px;background:#333;color:#ccc;border:1px solid #555;border-radius:4px;'
             'font-size:12px;cursor:pointer">Upload</button>'
             '<input type="file" id="xct-upload-input" accept=".json" '
             'style="display:none" onchange="_xctUploadFile(this)">'
+            '<button id="xct-xbox-btn" onclick="_xctXboxAuth()" '
+            'style="padding:4px 12px;background:#107c10;color:#fff;border:none;border-radius:4px;'
+            'font-size:12px;cursor:pointer;display:none">'
+            '\u2B22 Sign in with Xbox</button>'
             '<button id="xct-auth-btn" onclick="_xctShowAuth()" '
             'style="padding:4px 12px;background:#107c10;color:#fff;border:none;border-radius:4px;'
             'font-size:12px;cursor:pointer">Log In</button>'
@@ -3641,28 +3714,53 @@ def build_html_template(gamertag="", hosted=False):
         # -- Marketplace section --
         '<div class="section" id="marketplace">\n'
         '<h2>Marketplace</h2>\n'
+        '<div id="mkt-scan-banner" style="font-size:11px;color:#888;margin-bottom:6px"></div>\n'
         '<p class="sub" id="mkt-sub"></p>\n'
         '<div class="cbar" id="mkt-cbar"></div>\n'
-        '<div class="search-row"><input type="text" id="mkt-search" placeholder="Search marketplace..." oninput="mktPage=0;filterMKT()"></div>\n'
+        '<div class="search-row"><input type="text" id="mkt-search" placeholder="Search by title, publisher, developer, product ID..." oninput="mktPage=0;filterMKT()"></div>\n'
         '<div class="filters">\n'
         '<div class="cb-drop" id="mkt-channel"><div class="cb-btn" onclick="toggleCB(this)">Channel &#9662;</div><div class="cb-panel"></div></div>\n'
         '<div class="cb-drop" id="mkt-type"><div class="cb-btn" onclick="toggleCB(this)">Type &#9662;</div><div class="cb-panel"></div></div>\n'
         '<div class="cb-drop" id="mkt-plat"><div class="cb-btn" onclick="toggleCB(this)">Platform &#9662;</div><div class="cb-panel"></div></div>\n'
         '<div class="cb-drop" id="mkt-pub"><div class="cb-btn" onclick="toggleCB(this)">Publisher &#9662;</div><div class="cb-panel"></div></div>\n'
+        '<div class="cb-drop" id="mkt-dev"><div class="cb-btn" onclick="toggleCB(this)">Developer &#9662;</div><div class="cb-panel"></div></div>\n'
+        '<div class="cb-drop" id="mkt-cat"><div class="cb-btn" onclick="toggleCB(this)">Category &#9662;</div><div class="cb-panel"></div></div>\n'
         '<select id="mkt-owned" onchange="mktPage=0;filterMKT()">'
         '<option value="all">All</option>'
         '<option value="owned">Owned</option>'
         '<option value="notowned">Not Owned</option>'
         '</select>\n'
+        '<select id="mkt-sale" onchange="mktPage=0;filterMKT()">'
+        '<option value="all">Sale: All</option>'
+        '<option value="sale">On Sale</option>'
+        '<option value="full">Full Price</option>'
+        '</select>\n'
+        '<select id="mkt-bundle" onchange="mktPage=0;filterMKT()">'
+        '<option value="all">Bundles: All</option>'
+        '<option value="bundles">Bundles Only</option>'
+        '<option value="exclude">Exclude Bundles</option>'
+        '</select>\n'
+        '<select id="mkt-xcloud" onchange="mktPage=0;filterMKT()">'
+        '<option value="all">xCloud: All</option>'
+        '<option value="yes">Streamable</option>'
+        '<option value="no">Not Streamable</option>'
+        '</select>\n'
         '<select id="mkt-sort" onchange="mktPage=0;filterMKT()"><option value="name">Sort: Name</option>'
+        '<option value="pub">Sort: Publisher</option>'
+        '<option value="dev">Sort: Developer</option>'
+        '<option value="cat">Sort: Category</option>'
         '<option value="priceDesc">Sort: Price (High-Low)</option>'
         '<option value="priceAsc">Sort: Price (Low-High)</option>'
         '<option value="bestAsc">Sort: Best Region (Cheapest)</option>'
         '<option value="bestDesc">Sort: Best Region (Priciest)</option>'
         '<option value="relDesc" selected>Sort: Release (Newest)</option>'
-        '<option value="relAsc">Sort: Release (Oldest)</option></select>\n'
-
-
+        '<option value="relAsc">Sort: Release (Oldest)</option>'
+        '<option value="ratingDesc">Sort: Rating (Highest)</option>'
+        '<option value="ratingCntDesc">Sort: Most Rated</option>'
+        '<option value="platCntDesc">Sort: Most Platforms</option>'
+        '</select>\n'
+        '<label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#aaa;cursor:pointer">'
+        '<input type="checkbox" id="mkt-group" onchange="mktPage=0;filterMKT()"> Group editions</label>\n'
         '<div class="view-toggle"><button class="view-btn" onclick="setView(\'mkt\',\'grid\',this)" title="Grid">&#9638;</button>'
         '<button class="view-btn active" onclick="setView(\'mkt\',\'list\',this)" title="List">&#9776;</button></div>\n'
         '</div>\n'
@@ -3736,6 +3834,32 @@ def build_html_template(gamertag="", hosted=False):
         '</div>\n'
         '</div>\n'
 
+        # -- Achievements section (Xbox Live, hosted mode only) --
+        '<div class="section" id="achievements">\n'
+        '<h2>Achievements</h2>\n'
+        '<p class="sub" id="ach-sub"></p>\n'
+        '<div id="ach-stats" style="display:flex;gap:20px;margin:8px 0 12px;flex-wrap:wrap"></div>\n'
+        '<div class="filters">\n'
+        '<input type="text" id="ach-search" placeholder="Search by title..." oninput="filterAch()">\n'
+        '<div class="pill active" onclick="setAchFilter(\'all\',this)">All</div>\n'
+        '<div class="pill" onclick="setAchFilter(\'complete\',this)">100%</div>\n'
+        '<div class="pill" onclick="setAchFilter(\'progress\',this)">In Progress</div>\n'
+        '<div class="pill" onclick="setAchFilter(\'notstarted\',this)">Not Started</div>\n'
+        '<select id="ach-sort" onchange="filterAch()" style="padding:4px 8px;background:#222;color:#ccc;border:1px solid #444;border-radius:4px;font-size:12px">'
+        '<option value="recent">Last Played</option>'
+        '<option value="gs-desc">Gamerscore (High)</option>'
+        '<option value="gs-asc">Gamerscore (Low)</option>'
+        '<option value="pct-desc">Completion % (High)</option>'
+        '<option value="pct-asc">Completion % (Low)</option>'
+        '<option value="name">Title Name</option>'
+        '</select>\n'
+        '<button id="ach-refresh-btn" onclick="_xctRefreshAch()" '
+        'style="padding:4px 12px;background:#333;color:#ccc;border:1px solid #555;border-radius:4px;'
+        'font-size:12px;cursor:pointer">Refresh</button>\n'
+        '</div>\n'
+        '<div id="ach-list" style="margin-top:8px"></div>\n'
+        '</div>\n'
+
         # -- Context menu + Modal --
         '<div id="ctx-menu"></div>\n'
         '<div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">\n'
@@ -3749,26 +3873,38 @@ def build_html_template(gamertag="", hosted=False):
     if hosted:
         html += (
             '<script>\n'
+            "window._xctHosted=true;\n"
             "const _API='';\n"
             "let LIB=[],GP=[],PH=[],MKT=[],HISTORY=[],DEFAULT_FLAGS={},"
             "ACCOUNTS=[],RATES={},GC_FACTOR=0.81,CDN_DB={},GFWL=[],"
             "CDN_LEADERBOARD=[],CDN_LB_STATS={},CDN_SYNC_META={},"
-            "CDN_SYNC_USER='',CDN_SYNC_LOG=[],CDN_CONTRIBUTOR_MAP={};\n"
+            "CDN_SYNC_USER='',CDN_SYNC_LOG=[],CDN_CONTRIBUTOR_MAP={},"
+            "_MKT_TAGS={},_MKT_LAST_SCAN=null;\n"
             "let _xctApiKey=localStorage.getItem('xct_api_key')||'';\n"
             "let _xctUser=localStorage.getItem('xct_username')||'';\n"
+            "let _xctXboxGt=localStorage.getItem('xct_gamertag')||'';\n"
+            "let _xctXuid=localStorage.getItem('xct_xuid')||'';\n"
+            "let _xctAchSummaries=[];\n"
+            "let _achFilter='all';\n"
             "async function _fetchJSON(url,opts){"
             "const r=await fetch(url,opts);"
             "if(!r.ok)throw new Error('HTTP '+r.status);"
             "return r.json()}\n"
             "async function _loadShared(){"
-            "const keys=['mkt','gp','rates','flags','gfwl','cdn','cdn_lb','cdn_log','cdn_meta'];"
+            "const keys=['gp','flags','gfwl','cdn','cdn_lb','cdn_log','cdn_meta'];"
+            "const mktP=_fetchJSON(_API+'/api/v1/marketplace').catch(()=>null);"
             "const results=await Promise.allSettled("
             "keys.map(k=>_fetchJSON(_API+'/api/v1/shared/'+k)));"
             "const d={};"
             "keys.forEach((k,i)=>{if(results[i].status==='fulfilled')d[k]=results[i].value});"
-            "if(d.mkt)MKT=d.mkt;"
+            "const mktData=await mktP;"
+            "if(mktData&&mktData.products){"
+            "MKT=mktData.products;"
+            "RATES=mktData.exchangeRates||{};"
+            "GC_FACTOR=mktData.gcFactor||0.81;"
+            "_MKT_TAGS=mktData.tags||{};"
+            "_MKT_LAST_SCAN=mktData.lastScan||null}"
             "if(d.gp)GP=d.gp;"
-            "if(d.rates)RATES=d.rates;"
             "if(d.flags)DEFAULT_FLAGS=d.flags;"
             "if(d.gfwl)GFWL=d.gfwl;"
             "if(d.cdn)CDN_DB=d.cdn;"
@@ -3849,26 +3985,48 @@ def build_html_template(gamertag="", hosted=False):
             "function _xctLogout(){"
             "localStorage.removeItem('xct_api_key');"
             "localStorage.removeItem('xct_username');"
-            "_xctApiKey='';_xctUser='';"
+            "localStorage.removeItem('xct_gamertag');"
+            "localStorage.removeItem('xct_xuid');"
+            "_xctApiKey='';_xctUser='';_xctXboxGt='';_xctXuid='';_xctAchSummaries=[];"
             "LIB=[];PH=[];HISTORY=[];ACCOUNTS=[];"
             "MKT.forEach(x=>{delete x.owned});"
             "GP.forEach(x=>{delete x.owned});"
             "try{filterLib();filterPH();renderHistory();filterMKT();filterGP()}catch(e){}"
+            "document.getElementById('tab-ach').style.display='none';"
+            "document.getElementById('ach-list').innerHTML='';"
             "_updateAuthUI()}\n"
             "function _updateAuthUI(){"
             "const userEl=document.getElementById('xct-auth-user');"
             "const btnEl=document.getElementById('xct-auth-btn');"
             "const uploadBtn=document.getElementById('xct-upload-btn');"
+            "const xboxBtn=document.getElementById('xct-xbox-btn');"
+            "const xboxGt=document.getElementById('xct-xbox-gt');"
             "if(_xctApiKey&&_xctUser){"
             "userEl.textContent=_xctUser;"
             "btnEl.textContent='Log Out';btnEl.onclick=_xctLogout;"
             "btnEl.style.background='#333';btnEl.style.border='1px solid #555';btnEl.style.color='#ccc';"
-            "uploadBtn.style.display='inline-block'"
+            "uploadBtn.style.display='inline-block';"
+            "if(_xctXboxGt){"
+            "xboxGt.textContent=_xctXboxGt;"
+            "xboxGt.style.display='';"
+            "xboxBtn.textContent='Disconnect Xbox';"
+            "xboxBtn.style.background='#333';xboxBtn.style.border='1px solid #555';xboxBtn.style.color='#ccc';"
+            "xboxBtn.onclick=_xctXboxDisconnect;"
+            "xboxBtn.style.display=''"
+            "}else{"
+            "xboxGt.style.display='none';"
+            "xboxBtn.textContent='\\u2B22 Sign in with Xbox';"
+            "xboxBtn.style.background='#107c10';xboxBtn.style.border='none';xboxBtn.style.color='#fff';"
+            "xboxBtn.onclick=_xctXboxAuth;"
+            "xboxBtn.style.display=''"
+            "}"
             "}else{"
             "userEl.textContent='';"
             "btnEl.textContent='Log In';btnEl.onclick=_xctShowAuth;"
             "btnEl.style.background='#107c10';btnEl.style.border='none';btnEl.style.color='#fff';"
-            "uploadBtn.style.display='none'}}\n"
+            "uploadBtn.style.display='none';"
+            "xboxBtn.style.display='none';"
+            "xboxGt.style.display='none'}}\n"
             "async function _xctUploadFile(input){"
             "if(!input.files||!input.files[0])return;"
             "const file=input.files[0];"
@@ -3893,6 +4051,167 @@ def build_html_template(gamertag="", hosted=False):
             "async function _xctReloadCollection(){"
             "const ok=await _loadCollection();"
             "if(ok){try{initDropdowns();filterLib();filterPH();renderHistory();filterMKT();filterGP()}catch(e){console.error(e)}}}\n"
+
+            # -- Xbox OAuth helpers --
+            "function _xctXboxAuth(){"
+            "const link=_xctApiKey?'?link='+encodeURIComponent(_xctApiKey):'';"
+            "window.location=_API+'/api/v1/xbox/auth/start'+link}\n"
+            "async function _xctXboxDisconnect(){"
+            "if(!confirm('Disconnect your Xbox account? Achievement data will be removed.'))return;"
+            "try{await fetch(_API+'/api/v1/xbox/auth/disconnect',{"
+            "method:'POST',headers:{'Authorization':'Bearer '+_xctApiKey}});"
+            "localStorage.removeItem('xct_gamertag');localStorage.removeItem('xct_xuid');"
+            "_xctXboxGt='';_xctXuid='';_xctAchSummaries=[];"
+            "document.getElementById('tab-ach').style.display='none';"
+            "document.getElementById('ach-list').innerHTML='';"
+            "_updateAuthUI()}catch(e){alert('Error: '+e.message)}}\n"
+            "function _xctHandleOAuthReturn(){"
+            "const p=new URLSearchParams(location.search);"
+            "if(p.get('xbox_auth')==='success'){"
+            "const ak=p.get('api_key'),gt=p.get('gamertag'),xu=p.get('xuid');"
+            "if(ak){localStorage.setItem('xct_api_key',ak);_xctApiKey=ak}"
+            "if(gt){localStorage.setItem('xct_gamertag',gt);_xctXboxGt=gt;"
+            "if(!_xctUser){_xctUser=gt;localStorage.setItem('xct_username',gt)}}"
+            "if(xu){localStorage.setItem('xct_xuid',xu);_xctXuid=xu}"
+            "history.replaceState(null,'','/');"
+            "return true}"
+            "if(p.get('xbox_auth')==='error'){"
+            "const msg=p.get('message')||'Xbox login failed';"
+            "alert(msg);history.replaceState(null,'/','/');return false}"
+            "return false}\n"
+
+            # -- Achievements loading + rendering --
+            "async function _loadAchievements(){"
+            "if(!_xctApiKey)return false;"
+            "try{"
+            "const data=await _fetchJSON(_API+'/api/v1/xbox/achievements',{"
+            "headers:{'Authorization':'Bearer '+_xctApiKey}});"
+            "if(!data.linked)return false;"
+            "_xctAchSummaries=data.summaries||[];"
+            "_xctXboxGt=data.gamertag||_xctXboxGt;"
+            "localStorage.setItem('xct_gamertag',_xctXboxGt);"
+            "return true}catch(e){return false}}\n"
+            "function _achPct(c,t){return t>0?Math.round(c/t*100):0}\n"
+            "function setAchFilter(f,el){"
+            "_achFilter=f;"
+            "el.parentNode.querySelectorAll('.pill').forEach(p=>p.classList.remove('active'));"
+            "el.classList.add('active');filterAch()}\n"
+            "function filterAch(){"
+            "const q=(document.getElementById('ach-search').value||'').toLowerCase();"
+            "const sort=document.getElementById('ach-sort').value;"
+            "let items=_xctAchSummaries.filter(s=>{"
+            "if(q&&!s.titleName.toLowerCase().includes(q))return false;"
+            "const pct=_achPct(s.currentAchievements,s.totalAchievements);"
+            "if(_achFilter==='complete'&&pct!==100)return false;"
+            "if(_achFilter==='progress'&&(pct===0||pct===100))return false;"
+            "if(_achFilter==='notstarted'&&pct!==0)return false;"
+            "return true});"
+            "items.sort((a,b)=>{"
+            "if(sort==='gs-desc')return b.currentGamerscore-a.currentGamerscore;"
+            "if(sort==='gs-asc')return a.currentGamerscore-b.currentGamerscore;"
+            "if(sort==='pct-desc')return _achPct(b.currentAchievements,b.totalAchievements)-_achPct(a.currentAchievements,a.totalAchievements);"
+            "if(sort==='pct-asc')return _achPct(a.currentAchievements,a.totalAchievements)-_achPct(b.currentAchievements,b.totalAchievements);"
+            "if(sort==='name')return a.titleName.localeCompare(b.titleName);"
+            "const da=a.lastTimePlayed||'',db=b.lastTimePlayed||'';"
+            "return db.localeCompare(da)});"
+            "renderAchList(items)}\n"
+            "function renderAchList(items){"
+            "const el=document.getElementById('ach-list');if(!el)return;"
+            "if(!items.length){el.innerHTML='<div style=\"color:#666;padding:20px\">No titles match your filters.</div>';return}"
+            "let h='';"
+            "items.forEach(s=>{"
+            "const pct=_achPct(s.currentAchievements,s.totalAchievements);"
+            "const pctColor=pct===100?'#107c10':pct>0?'#c89b2a':'#555';"
+            "const img=s.displayImage?'<img src=\"'+s.displayImage"
+            "+'\" style=\"width:40px;height:40px;border-radius:4px;object-fit:cover\" loading=\"lazy\">'"
+            ":'<div style=\"width:40px;height:40px;background:#333;border-radius:4px\"></div>';"
+            "const lastP=s.lastTimePlayed?new Date(s.lastTimePlayed).toLocaleDateString():'';"
+            "h+='<div class=\"ach-row\" data-tid=\"'+s.xboxTitleId+'\" onclick=\"_achToggleDetail(this)\" "
+            "style=\"display:flex;align-items:center;gap:12px;padding:8px 12px;border-bottom:1px solid #222;cursor:pointer;transition:background 0.15s\" "
+            "onmouseenter=\"this.style.background=\\'#1a1a1a\\'\" onmouseleave=\"this.style.background=\\'\\'\">"
+            "'+img+'"
+            "'<div style=\"flex:1;min-width:0\">"
+            "'<div style=\"color:#eee;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">'+s.titleName+'</div>"
+            "'<div style=\"color:#888;font-size:11px\">'+s.platforms.join(', ')+(lastP?' \\u00B7 '+lastP:'')+'</div>"
+            "'</div>"
+            "'<div style=\"text-align:right;white-space:nowrap\">"
+            "'<div style=\"color:#eee;font-size:13px\">'+s.currentGamerscore+'/'+s.totalGamerscore+' G</div>"
+            "'<div style=\"color:#888;font-size:11px\">'+s.currentAchievements+'/'+s.totalAchievements+' Ach</div>"
+            "'</div>"
+            "'<div style=\"width:80px\">"
+            "'<div style=\"background:#333;border-radius:3px;height:6px;overflow:hidden\">"
+            "'<div style=\"background:'+pctColor+';width:'+pct+'%;height:100%\"></div></div>"
+            "'<div style=\"color:'+pctColor+';font-size:11px;text-align:center;margin-top:2px\">'+pct+'%</div>"
+            "'</div>"
+            "'<div class=\"ach-chevron\" style=\"color:#555;font-size:14px\">\\u25B6</div>"
+            "'</div>';"
+            "h+='<div class=\"ach-detail\" data-tid=\"'+s.xboxTitleId+'\" style=\"display:none;padding:0 12px 8px 64px;background:#0d0d0d;border-bottom:1px solid #222\">"
+            "'<div style=\"padding:8px 0;color:#666;font-size:12px\">Loading...</div></div>'"
+            "});"
+            "el.innerHTML=h}\n"
+            "async function _achToggleDetail(rowEl){"
+            "const tid=rowEl.dataset.tid;"
+            "const detailEl=rowEl.nextElementSibling;"
+            "if(!detailEl)return;"
+            "const chev=rowEl.querySelector('.ach-chevron');"
+            "if(detailEl.style.display!=='none'){"
+            "detailEl.style.display='none';"
+            "if(chev)chev.textContent='\\u25B6';return}"
+            "detailEl.style.display='block';"
+            "if(chev)chev.textContent='\\u25BC';"
+            "if(detailEl.dataset.loaded)return;"
+            "try{"
+            "const data=await _fetchJSON(_API+'/api/v1/xbox/achievements/'+tid,{"
+            "headers:{'Authorization':'Bearer '+_xctApiKey}});"
+            "detailEl.dataset.loaded='1';"
+            "const achs=data.achievements||[];"
+            "if(!achs.length){detailEl.innerHTML='<div style=\"padding:8px 0;color:#666;font-size:12px\">No achievements found.</div>';return}"
+            "let h='<div style=\"display:grid;gap:1px;margin-top:4px\">';"
+            "achs.forEach(a=>{"
+            "const lockIcon=a.unlocked?'\\u2705':'\\u274C';"
+            "const timeStr=a.unlockTime?new Date(a.unlockTime).toLocaleString():'';"
+            "const rarityStr=a.rarityPct>0?a.rarityPct.toFixed(1)+'%':'';"
+            "const icon=a.mediaUrl?'<img src=\"'+a.mediaUrl+'\" style=\"width:32px;height:32px;border-radius:3px;object-fit:cover;'+(a.unlocked?'':'filter:grayscale(1);opacity:0.5;')+'\" loading=\"lazy\">':"
+            "'<div style=\"width:32px;height:32px;background:#333;border-radius:3px\"></div>';"
+            "h+='<div style=\"display:flex;align-items:center;gap:10px;padding:6px 8px;background:'+(a.unlocked?'#111':'#0a0a0a')+';border-radius:3px\">"
+            "'+icon+'"
+            "'<div style=\"flex:1;min-width:0\">"
+            "'<div style=\"color:'+(a.unlocked?'#eee':'#777')+';font-size:12px\">'+a.name+(a.isSecret&&!a.unlocked?' (Secret)':'')+'</div>"
+            "'<div style=\"color:#666;font-size:11px\">'+a.description+'</div>"
+            "'</div>"
+            "'<div style=\"text-align:right;white-space:nowrap\">"
+            "'<div style=\"color:'+(a.unlocked?'#107c10':'#555')+';font-size:12px\">'+lockIcon+' '+a.gamerscore+' G</div>"
+            "'<div style=\"color:#666;font-size:10px\">'+(timeStr||rarityStr?timeStr+(rarityStr?' \\u00B7 '+rarityStr:''):'')+'</div>"
+            "'</div></div>'});"
+            "h+='</div>';"
+            "detailEl.innerHTML=h"
+            "}catch(e){detailEl.innerHTML='<div style=\"padding:8px 0;color:#f44;font-size:12px\">Failed to load: '+e.message+'</div>'}}\n"
+            "function renderAchStats(){"
+            "const el=document.getElementById('ach-stats');if(!el)return;"
+            "if(!_xctAchSummaries.length){el.innerHTML='';return}"
+            "const totalGs=_xctAchSummaries.reduce((s,x)=>s+x.currentGamerscore,0);"
+            "const totalMaxGs=_xctAchSummaries.reduce((s,x)=>s+x.totalGamerscore,0);"
+            "const totalAch=_xctAchSummaries.reduce((s,x)=>s+x.currentAchievements,0);"
+            "const totalMaxAch=_xctAchSummaries.reduce((s,x)=>s+x.totalAchievements,0);"
+            "const complete=_xctAchSummaries.filter(x=>x.totalAchievements>0&&x.currentAchievements===x.totalAchievements).length;"
+            "const pct=totalMaxAch>0?Math.round(totalAch/totalMaxAch*100):0;"
+            "const box='padding:10px 16px;background:#1a1a1a;border-radius:6px;border:1px solid #333';"
+            "el.innerHTML="
+            "'<div style=\"'+box+'\"><div style=\"color:#107c10;font-size:20px;font-weight:bold\">'+totalGs.toLocaleString()+'</div><div style=\"color:#888;font-size:11px\">Gamerscore</div></div>'"
+            "+'<div style=\"'+box+'\"><div style=\"color:#eee;font-size:20px;font-weight:bold\">'+_xctAchSummaries.length+'</div><div style=\"color:#888;font-size:11px\">Titles Played</div></div>'"
+            "+'<div style=\"'+box+'\"><div style=\"color:#eee;font-size:20px;font-weight:bold\">'+totalAch+'/'+totalMaxAch+'</div><div style=\"color:#888;font-size:11px\">Achievements ('+pct+'%)</div></div>'"
+            "+'<div style=\"'+box+'\"><div style=\"color:#c89b2a;font-size:20px;font-weight:bold\">'+complete+'</div><div style=\"color:#888;font-size:11px\">100% Completed</div></div>'}\n"
+            "async function _xctRefreshAch(){"
+            "const btn=document.getElementById('ach-refresh-btn');if(!btn)return;"
+            "btn.disabled=true;btn.textContent='Refreshing...';"
+            "try{"
+            "await fetch(_API+'/api/v1/xbox/achievements/refresh',{"
+            "method:'POST',headers:{'Authorization':'Bearer '+_xctApiKey}});"
+            "await _loadAchievements();"
+            "renderAchStats();filterAch();"
+            "btn.disabled=false;btn.textContent='Refresh'"
+            "}catch(e){btn.disabled=false;btn.textContent='Refresh';alert('Refresh failed: '+e.message)}}\n"
+
             '</script>\n'
         )
     else:
@@ -3901,7 +4220,7 @@ def build_html_template(gamertag="", hosted=False):
     html += (
         '<script>\n'
         "let gpF='all',mktPage=0;\n"
-        "const MKT_PAGE_SIZE=1000;\n"
+        "const MKT_PAGE_SIZE=100;\n"
         "let views={gp:'list',lib:'list',ph:'list',mkt:'list'};\n"
         "const LS_KEY='" + ls_key + "';\n"
         "let libSortCol=null,libSortDir='asc';\n"
@@ -4103,16 +4422,39 @@ def build_html_template(gamertag="", hosted=False):
         "if(HISTORY.length){document.getElementById('tab-hist').style.display='';document.getElementById('tab-hist-cnt').textContent=HISTORY.length+' scans'}\n"
         # Marketplace dropdowns
         "if(typeof MKT!=='undefined'&&MKT.length){\n"
+        # Map new API fields to legacy field names for compat
+        "MKT.forEach(x=>{"
+        "if(x.imageBoxArt&&!x.boxArt)x.boxArt=x.imageBoxArt;"
+        "if(x.imageHero&&!x.heroImage)x.heroImage=x.imageHero;"
+        "if(!x.priceUSD&&x.regionalPrices&&x.regionalPrices.US)x.priceUSD=x.regionalPrices.US.msrp||0;"
+        "if(!x.currentPriceUSD&&x.regionalPrices&&x.regionalPrices.US){const sp=x.regionalPrices.US.salePrice;if(sp>0)x.currentPriceUSD=sp}"
+        "});\n"
         "const _ownedPids=new Set(LIB.map(x=>x.productId));MKT.forEach(x=>{x.owned=_ownedPids.has(x.productId)});\n"
         "const _gpPids=new Set(GP.map(x=>x.productId));MKT.forEach(x=>{x.onGP=_gpPids.has(x.productId)});\n"
         "const _demoPids=new Set(MKT.filter(x=>(x.channels||[]).includes('Game Demos')).map(x=>x.productId));"
         "LIB.forEach(x=>{if(!x.isDemo&&_demoPids.has(x.productId))x.isDemo=true});\n"
         "MKT.forEach(x=>{const rd=x.releaseDate||'';x.isPreOrder=rd>_today&&rd.slice(0,4)<'2100'});\n"
+        # Determine isBundle from data + tag overrides
+        "MKT.forEach(x=>{"
+        "const tag=(_MKT_TAGS[x.productId]||{});"
+        "if(tag.is_bundle_override==='true')x._isBundle=true;"
+        "else if(tag.is_bundle_override==='false')x._isBundle=false;"
+        "else x._isBundle=!!x.isBundle});\n"
+        # Determine _onSale from any region
+        "MKT.forEach(x=>{x._onSale=false;"
+        "const rp=x.regionalPrices||{};"
+        "for(const m in rp){if(rp[m].salePrice>0&&rp[m].salePrice<rp[m].msrp){x._onSale=true;break}}"
+        "if(!x._onSale&&x.currentPriceUSD>0&&x.currentPriceUSD<x.priceUSD)x._onSale=true});\n"
         "document.getElementById('tab-mkt').style.display='';document.getElementById('tab-mkt-cnt').textContent=MKT.length;\n"
+        # Scan status banner
+        "if(_MKT_LAST_SCAN&&_MKT_LAST_SCAN.completedAt){"
+        "const ago=Math.round((Date.now()-new Date(_MKT_LAST_SCAN.completedAt).getTime())/60000);"
+        "const agoStr=ago<60?ago+' minutes ago':Math.round(ago/60)+' hours ago';"
+        "document.getElementById('mkt-scan-banner').textContent="
+        "'Last scan: '+agoStr+' ('+(_MKT_LAST_SCAN.productsTotal||0).toLocaleString()+' products)'}\n"
         # Channels
         "const mChs={};MKT.forEach(x=>(x.channels||[]).forEach(c=>{mChs[c]=(mChs[c]||0)+1}));\n"
         "fill('mkt-channel',Object.entries(mChs).sort((a,b)=>b[1]-a[1]).map(([c,n])=>[c,c+' ('+n+')']),\'filterMKT\');\n"
-        "document.querySelectorAll('#mkt-channel .cb-panel input').forEach(c=>{c.checked=c.value==='New Games'});\n"
         # Types
         "const mTypes={};MKT.forEach(x=>{let t=x.productKind||'';if(t==='Durable')t='DLC';if(t)mTypes[t]=(mTypes[t]||0)+1});\n"
         "fill('mkt-type',Object.entries(mTypes).sort((a,b)=>b[1]-a[1]).map(([t,n])=>[t,t+' ('+n+')']),\'filterMKT\');\n"
@@ -4123,6 +4465,12 @@ def build_html_template(gamertag="", hosted=False):
         # Publishers
         "const mPubs={};MKT.forEach(x=>{const p=x.publisher||'';if(p)mPubs[p]=(mPubs[p]||0)+1});\n"
         "fill('mkt-pub',Object.entries(mPubs).sort((a,b)=>b[1]-a[1]).map(([p,n])=>[p,p+' ('+n+')']),\'filterMKT\');\n"
+        # Developers
+        "const mDevs={};MKT.forEach(x=>{const d=x.developer||'';if(d)mDevs[d]=(mDevs[d]||0)+1});\n"
+        "fill('mkt-dev',Object.entries(mDevs).sort((a,b)=>b[1]-a[1]).map(([d,n])=>[d,d+' ('+n+')']),\'filterMKT\');\n"
+        # Categories
+        "const mCats={};MKT.forEach(x=>{const c=x.category||'';if(c)mCats[c]=(mCats[c]||0)+1});\n"
+        "fill('mkt-cat',Object.entries(mCats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>[c,c+' ('+n+')']),\'filterMKT\');\n"
         "document.getElementById('mkt-sub').textContent=MKT.length+' products from Xbox Marketplace';\n"
         "}\n"
         "if(typeof ACCOUNTS!=='undefined'&&ACCOUNTS.length>0){"
@@ -4132,7 +4480,13 @@ def build_html_template(gamertag="", hosted=False):
 
         "function switchTab(id,el){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));"
         "document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));"
-        "document.getElementById(id).classList.add('active');el.classList.add('active')}\n"
+        "document.getElementById(id).classList.add('active');el.classList.add('active');"
+        "var _slugMap={library:'library',marketplace:'marketplace',gamepass:'gamepass',"
+        "playhistory:'playhistory',history:'scanlog',gamertags:'gamertags',"
+        "gfwl:'gfwl',cdnsync:'xvcdb',imports:'imports',achievements:'achievements'};"
+        "var slug=_slugMap[id]||id;"
+        "if(window._xctHosted){history.replaceState(null,'','/'+(slug==='library'?'':slug))}"
+        "else{location.hash=slug==='library'?'':slug}}\n"
 
         # -- Import/Export JS (IndexedDB for library data, localStorage for metadata index) --
         "const IMP_DB_NAME='xct_imports_db',IMP_DB_VER=1,IMP_STORE='imports',IMP_IDX_KEY='xct_imp_idx';\n"
@@ -4782,7 +5136,8 @@ def build_html_template(gamertag="", hosted=False):
         "if(!item.regionalPrices||typeof RATES==='undefined')return null;"
         "let best=null;"
         "for(const[mkt,rp]of Object.entries(item.regionalPrices)){"
-        "const p=rp.salePrice>0?rp.salePrice:rp.price;"
+        "const base=rp.msrp||rp.price||0;"
+        "const p=rp.salePrice>0&&rp.salePrice<base?rp.salePrice:base;"
         "const rate=RATES[rp.currency]||1;"
         "const usd=(p/rate)*GC_FACTOR;"
         "if(usd>0&&(!best||usd<best.usd)){best={mkt,usd,local:p,cc:rp.currency}}}"
@@ -4791,7 +5146,8 @@ def build_html_template(gamertag="", hosted=False):
         "if(!item.regionalPrices||typeof RATES==='undefined')return '<div class=\"lv-reg\" style=\"color:#333\">-</div>';"
         "const rp=item.regionalPrices[mkt];"
         "if(!rp)return '<div class=\"lv-reg\" style=\"color:#333\">-</div>';"
-        "const p=rp.salePrice>0?rp.salePrice:rp.price;"
+        "const base=rp.msrp||rp.price||0;"
+        "const p=rp.salePrice>0&&rp.salePrice<base?rp.salePrice:base;"
         "const rate=RATES[rp.currency]||1;"
         "const usd=(p/rate)*GC_FACTOR;"
         "if(usd<=0)return '<div class=\"lv-reg\" style=\"color:#333\">-</div>';"
@@ -4804,7 +5160,8 @@ def build_html_template(gamertag="", hosted=False):
         "if(!item.regionalPrices||typeof RATES==='undefined'||!Object.keys(RATES).length)return '';"
         "let bestUsd=Infinity;"
         "_RORD.forEach(m=>{const rp=item.regionalPrices[m];if(!rp)return;"
-        "const p=rp.salePrice>0?rp.salePrice:rp.price;"
+        "const base=rp.msrp||rp.price||0;"
+        "const p=rp.salePrice>0&&rp.salePrice<base?rp.salePrice:base;"
         "const rate=RATES[rp.currency]||1;const u=(p/rate)*GC_FACTOR;"
         "if(u>0&&u<bestUsd)bestUsd=u});"
         "let h='<table class=\"rp-tbl\"><tr><th style=\"text-align:left\">Region</th>"
@@ -4814,9 +5171,10 @@ def build_html_template(gamertag="", hosted=False):
         "const sym=_RSYM[m]||'';const rate=RATES[rp.currency]||1;"
         "const nd=(['ISK','COP','NGN'].includes(rp.currency))?0:2;"
         "const fmt=v=>sym+v.toLocaleString('en',{minimumFractionDigits:nd,maximumFractionDigits:nd});"
-        "const priceStr=fmt(rp.price);"
-        "const saleStr=rp.salePrice>0?fmt(rp.salePrice):'-';"
-        "const effP=rp.salePrice>0?rp.salePrice:rp.price;"
+        "const baseP=rp.msrp||rp.price||0;"
+        "const priceStr=fmt(baseP);"
+        "const saleStr=rp.salePrice>0&&rp.salePrice<baseP?fmt(rp.salePrice):'-';"
+        "const effP=rp.salePrice>0&&rp.salePrice<baseP?rp.salePrice:baseP;"
         "const gcUsd=(effP/rate)*GC_FACTOR;"
         "const isBest=Math.abs(gcUsd-bestUsd)<0.01&&bestUsd<Infinity;"
         "h+='<tr'+(isBest?' class=\"rp-best\"':'')+'>';"
@@ -4830,6 +5188,36 @@ def build_html_template(gamertag="", hosted=False):
         '\n'
 
         # -- filterMKT (Marketplace) --
+        # -- Bundle grouping helper --
+        "function _mktBuildGroups(items){\n"
+        "const byTid={};\n"
+        "items.forEach(x=>{"
+        "const tid=x.xboxTitleId||'';"
+        "if(!tid){return}"
+        "if(!byTid[tid])byTid[tid]=[];"
+        "byTid[tid].push(x)});\n"
+        "const grouped=[];\n"
+        "const used=new Set();\n"
+        "items.forEach(x=>{"
+        "if(used.has(x.productId))return;"
+        "const tid=x.xboxTitleId||'';"
+        "const grp=tid&&byTid[tid]&&byTid[tid].length>1?byTid[tid]:null;"
+        "if(!grp){grouped.push({primary:x,alts:[]});used.add(x.productId);return}"
+        "const sorted=[...grp].sort((a,b)=>{"
+        "if(a._isBundle&&!b._isBundle)return 1;"
+        "if(!a._isBundle&&b._isBundle)return -1;"
+        "if(a.productKind==='Game'&&b.productKind!=='Game')return -1;"
+        "if(a.productKind!=='Game'&&b.productKind==='Game')return 1;"
+        "return(a.priceUSD||0)-(b.priceUSD||0)});"
+        "const prim=sorted[0];"
+        "if(used.has(prim.productId))return;"
+        "used.add(prim.productId);"
+        "const alts=sorted.slice(1).filter(a=>!used.has(a.productId));"
+        "alts.forEach(a=>used.add(a.productId));"
+        "grouped.push({primary:prim,alts:alts})});"
+        "return grouped}\n"
+        '\n'
+
         'function filterMKT(){\n'
         "if(typeof MKT==='undefined'||!MKT.length)return;\n"
         "const q=document.getElementById('mkt-search').value.toLowerCase();\n"
@@ -4837,24 +5225,41 @@ def build_html_template(gamertag="", hosted=False):
         "const tVals=getCBVals('mkt-type');\n"
         "const platVals=getCBVals('mkt-plat');\n"
         "const pubVals=getCBVals('mkt-pub');\n"
+        "const devVals=getCBVals('mkt-dev');\n"
+        "const catVals=getCBVals('mkt-cat');\n"
         "const ownF=document.getElementById('mkt-owned').value;\n"
+        "const saleF=document.getElementById('mkt-sale').value;\n"
+        "const bundleF=document.getElementById('mkt-bundle').value;\n"
+        "const xcloudF=document.getElementById('mkt-xcloud').value;\n"
         "const so=document.getElementById('mkt-sort').value;\n"
-
+        "const doGroup=document.getElementById('mkt-group')&&document.getElementById('mkt-group').checked;\n"
 
         "const g=document.getElementById('mkt-grid');const l=document.getElementById('mkt-list');\n"
         'let filtered=MKT.filter(item=>{\n'
         "if(q&&!(item.title||'').toLowerCase().includes(q)&&!(item.publisher||'').toLowerCase().includes(q)"
+        "&&!(item.developer||'').toLowerCase().includes(q)"
         "&&!(item.productId||'').toLowerCase().includes(q))return false;\n"
         "if(chVals&&!(item.channels||[]).some(c=>chVals.includes(c)))return false;\n"
         "if(tVals){const tk=item.productKind==='Durable'?'DLC':item.productKind;if(!tVals.includes(tk))return false}\n"
         "if(platVals&&!(item.platforms||[]).some(p=>platVals.includes(p)))return false;\n"
         "if(pubVals&&!pubVals.includes(item.publisher||''))return false;\n"
+        "if(devVals&&!devVals.includes(item.developer||''))return false;\n"
+        "if(catVals&&!catVals.includes(item.category||''))return false;\n"
         "if(ownF==='owned'&&!item.owned)return false;\n"
         "if(ownF==='notowned'&&item.owned)return false;\n"
-
-
+        "if(saleF==='sale'&&!item._onSale)return false;\n"
+        "if(saleF==='full'&&item._onSale)return false;\n"
+        "if(bundleF==='bundles'&&!item._isBundle)return false;\n"
+        "if(bundleF==='exclude'&&item._isBundle)return false;\n"
+        "if(xcloudF==='yes'&&!item.xCloudStreamable)return false;\n"
+        "if(xcloudF==='no'&&item.xCloudStreamable)return false;\n"
         'return true});\n'
+
+        # Sorting
         "if(so==='name')filtered.sort((a,b)=>(a.title||'').localeCompare(b.title||''));\n"
+        "else if(so==='pub')filtered.sort((a,b)=>(a.publisher||'').localeCompare(b.publisher||'')||(a.title||'').localeCompare(b.title||''));\n"
+        "else if(so==='dev')filtered.sort((a,b)=>(a.developer||'').localeCompare(b.developer||'')||(a.title||'').localeCompare(b.title||''));\n"
+        "else if(so==='cat')filtered.sort((a,b)=>(a.category||'').localeCompare(b.category||'')||(a.title||'').localeCompare(b.title||''));\n"
         "else if(so==='priceDesc')filtered.sort((a,b)=>((b.priceUSD||0)-(a.priceUSD||0))||(a.title||'').localeCompare(b.title||''));\n"
         "else if(so==='priceAsc')filtered.sort((a,b)=>{const ap=a.priceUSD||0,bp=b.priceUSD||0;"
         "if(!ap&&bp)return 1;if(ap&&!bp)return -1;return(ap-bp)||(a.title||'').localeCompare(b.title||'')});\n"
@@ -4876,20 +5281,39 @@ def build_html_template(gamertag="", hosted=False):
         "const ab=_bestReg(a),bb=_bestReg(b);"
         "const au=ab?ab.usd:0,bu=bb?bb.usd:0;"
         "return(bu-au)||(a.title||'').localeCompare(b.title||'')});\n"
-        "const totalPages=Math.ceil(filtered.length/MKT_PAGE_SIZE);\n"
+        "else if(so==='ratingDesc')filtered.sort((a,b)=>((b.averageRating||0)-(a.averageRating||0))||(a.title||'').localeCompare(b.title||''));\n"
+        "else if(so==='ratingCntDesc')filtered.sort((a,b)=>((b.ratingCount||0)-(a.ratingCount||0))||(a.title||'').localeCompare(b.title||''));\n"
+        "else if(so==='platCntDesc')filtered.sort((a,b)=>(((b.platforms||[]).length)-((a.platforms||[]).length))||(a.title||'').localeCompare(b.title||''));\n"
+
+        # Bundle grouping
+        "let displayItems=filtered;\n"
+        "let groups=null;\n"
+        "if(doGroup){\n"
+        "groups=_mktBuildGroups(filtered);\n"
+        "displayItems=groups.map(g=>g.primary)}\n"
+
+        # Pagination
+        "const totalPages=Math.ceil(displayItems.length/MKT_PAGE_SIZE);\n"
         "if(mktPage>=totalPages)mktPage=Math.max(0,totalPages-1);\n"
         "const pgStart=mktPage*MKT_PAGE_SIZE;\n"
-        "const pgEnd=Math.min(pgStart+MKT_PAGE_SIZE,filtered.length);\n"
-        "const pageItems=filtered.slice(pgStart,pgEnd);\n"
+        "const pgEnd=Math.min(pgStart+MKT_PAGE_SIZE,displayItems.length);\n"
+        "const pageItems=displayItems.slice(pgStart,pgEnd);\n"
+        "const pageGroups=groups?groups.slice(pgStart,pgEnd):null;\n"
+
+        # Render
         "let gh='',lh='<div class=\"lv-head\"><div></div><div>Title</div><div>Publisher</div>"
         "<div>Release</div><div style=\"text-align:right\">USD</div>"
         "'+_RORD.map(m=>'<div style=\"text-align:right;font-size:10px\">'+m+'</div>').join('')+'"
         "<div style=\"text-align:center\">Status</div></div>';\n"
         'for(let i=0;i<pageItems.length;i++){const item=pageItems[i];\n'
+        "const altCount=pageGroups?pageGroups[i].alts.length:0;\n"
         "const owned=item.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>'"
         ":'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';\n"
         "const gpBadge=item.onGP?'<span class=\"badge gp\" style=\"font-size:9px\">GAME PASS</span>':'';\n"
-        "const chBadges=(item.channels||[]).map(c=>'<span class=\"badge gp\" style=\"font-size:9px\">'+c+'</span>').join('');\n"
+        "const bundleBadge=item._isBundle?'<span class=\"badge\" style=\"font-size:9px;background:#e65100;color:#fff\">BUNDLE</span>':'';\n"
+        "const xcloudBadge=item.xCloudStreamable?'<span class=\"badge\" style=\"font-size:9px;background:#6a1b9a;color:#fff\">xCLOUD</span>':'';\n"
+        "const altBadge=altCount>0?'<span class=\"badge\" style=\"font-size:9px;background:#455a64;color:#fff;cursor:pointer\" onclick=\"event.stopPropagation();_mktToggleAlts(this)\">'+altCount+' edition'+(altCount>1?'s':'')+'</span>':'';\n"
+        "const chBadges=(item.channels||[]).slice(0,3).map(c=>'<span class=\"badge gp\" style=\"font-size:9px\">'+c+'</span>').join('');\n"
         "const img=item.heroImage||item.boxArt||'';\n"
         "const imgTag=img?`<img class=\"card-img\" src=\"${img}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:"
         "'<div class=\"card-img\" style=\"display:flex;align-items:center;justify-content:center;color:#333;font-size:36px\">'+(item.title||'?')[0]+'</div>';\n"
@@ -4901,27 +5325,52 @@ def build_html_template(gamertag="", hosted=False):
         "'<span style=\"color:#555;font-size:11px\">Free</span>';\n"
         "const br=_bestReg(item);\n"
         "const bestCard=br?`<div style=\"margin:2px 0;color:#e91e63;font-weight:600;font-size:11px\">Best: $${br.usd.toFixed(2)} (${br.mkt})</div>`:'';\n"
+        "const ratingStr=item.averageRating>0?`<div style=\"font-size:10px;color:#aaa\">${item.averageRating.toFixed(1)} (${(item.ratingCount||0).toLocaleString()})</div>`:'';\n"
         'gh+=`<div class="card" onclick="showMKTDetail(${MKT.indexOf(item)})">${imgTag}<div class="card-body">'
         '<div class="card-name" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}</div>'
         '<div class="card-meta">${item.publisher||\'\'} | ${(item.releaseDate||\'\').substring(0,10)}</div>'
         '<div style="margin:4px 0">${priceTag}</div>'
-        '${bestCard}'
-        '<div class="card-badges">${owned}${gpBadge}${chBadges}</div></div></div>`;\n'
+        '${bestCard}${ratingStr}'
+        '<div class="card-badges">${owned}${gpBadge}${bundleBadge}${xcloudBadge}${altBadge}${chBadges}</div></div></div>`;\n'
         "const thumbImg=img?`<img src=\"${img}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';\n"
         'lh+=`<div class="lv-row" onclick="showMKTDetail(${MKT.indexOf(item)})">${thumbImg}'
-        '<div class="lv-title" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}</div>'
+        '<div class="lv-title" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}'
+        '${altCount>0?\'<span style="font-size:10px;color:#78909c;margin-left:6px;cursor:pointer" onclick="event.stopPropagation();_mktToggleAlts(this)">\'+altCount+\' ed.</span>\':\'\'}</div>'
         '<div class="lv-pub">${item.publisher||\'\'}</div>'
         '<div class="lv-type">${(item.releaseDate||\'\').substring(0,10)}</div>'
         '<div class="lv-usd">${usd}${saleTag}</div>'
         "${_RORD.map(m=>_regCell(item,m)).join('')}"
-        '<div class="lv-status">${owned}${gpBadge}</div></div>`}\n'
+        '<div class="lv-status">${owned}${gpBadge}${bundleBadge}</div></div>`;\n'
+
+        # Render alt rows (hidden by default) when grouping
+        "if(pageGroups&&pageGroups[i].alts.length>0){"
+        "pageGroups[i].alts.forEach(alt=>{"
+        "const aOwned=alt.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>':'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';"
+        "const aUsd=_p(alt.priceUSD);"
+        "const aSale=alt.currentPriceUSD>0&&alt.currentPriceUSD<alt.priceUSD?"
+        "`<span style=\"color:#4caf50;font-weight:600;margin-left:4px\">${_p(alt.currentPriceUSD)}</span>`:'';"
+        "const aImg=alt.heroImage||alt.boxArt||'';"
+        "const aThumb=aImg?`<img src=\"${aImg}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';"
+        "const aBundleBadge=alt._isBundle?'<span class=\"badge\" style=\"font-size:9px;background:#e65100;color:#fff\">BUNDLE</span>':'';"
+        "lh+=`<div class=\"lv-row mkt-alt\" style=\"display:none;background:#1a1a2e;border-left:3px solid #455a64\" onclick=\"showMKTDetail(${MKT.indexOf(alt)})\">${aThumb}"
+        "<div class=\"lv-title\" style=\"padding-left:12px;font-size:12px\" title=\"${(alt.title||'').replace(/\"/g,'&quot;')}\">${alt.title||'Unknown'}</div>"
+        "<div class=\"lv-pub\">${alt.publisher||''}</div>"
+        "<div class=\"lv-type\">${(alt.releaseDate||'').substring(0,10)}</div>"
+        "<div class=\"lv-usd\">${aUsd}${aSale}</div>"
+        "${_RORD.map(m=>_regCell(alt,m)).join('')}"
+        "<div class=\"lv-status\">${aOwned}${aBundleBadge}</div></div>`})}\n"
+
+        '}\n'
         "g.innerHTML=gh;l.innerHTML=lh;\n"
         "const ownedCnt=filtered.filter(x=>x.owned).length;\n"
         "const gpCnt=filtered.filter(x=>x.onGP).length;\n"
-        "document.getElementById('mkt-cbar').innerHTML=`<span>${filtered.length}</span>"
+        "const saleCnt=filtered.filter(x=>x._onSale).length;\n"
+        "document.getElementById('mkt-cbar').innerHTML=`<span>${doGroup?displayItems.length+' groups':filtered.length}</span>"
         "${totalPages>1?` (page ${mktPage+1}/${totalPages}, showing ${pgStart+1}-${pgEnd})`:''} of ${MKT.length} — "
         "<span style=\"color:#4caf50\">${ownedCnt} owned</span>"
-        "${gpCnt?' — <span style=\"color:#107c10\">'+gpCnt+' on Game Pass</span>':''}`;\n"
+        "${gpCnt?' — <span style=\"color:#107c10\">'+gpCnt+' on Game Pass</span>':''}"
+        "${saleCnt?' — <span style=\"color:#e91e63\">'+saleCnt+' on sale</span>':''}`;\n"
+
         # Pagination controls
         "let pgH='';\n"
         "if(totalPages>1){\n"
@@ -4936,6 +5385,15 @@ def build_html_template(gamertag="", hosted=False):
         "if(hi<totalPages-1)pgH+='<span style=\"color:#666\">...</span><button style=\"padding:6px 10px;background:#222;color:#aaa;border:1px solid #444;border-radius:4px;cursor:pointer\" onclick=\"mktGoPage('+(totalPages-1)+')\">'+totalPages+'</button>';\n"
         "pgH+='<button style=\"padding:6px 12px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;cursor:pointer'+(mktPage>=totalPages-1?';opacity:.4;cursor:default':'')+`\" ${mktPage>=totalPages-1?'disabled':''} onclick=\"mktGoPage(${mktPage+1})\">Next &#9654;</button>`}\n"
         "document.getElementById('mkt-pager').innerHTML=pgH}\n"
+
+        # -- Toggle alt editions --
+        "function _mktToggleAlts(el){"
+        "let row=el.closest('.lv-row')||el.closest('.card');"
+        "if(!row)return;"
+        "let next=row.nextElementSibling;"
+        "while(next&&next.classList.contains('mkt-alt')){"
+        "next.style.display=next.style.display==='none'?'':'none';"
+        "next=next.nextElementSibling}}\n"
         '\n'
 
         # -- showMKTDetail --
@@ -4947,23 +5405,33 @@ def build_html_template(gamertag="", hosted=False):
         "const owned=item.owned?'<span class=\"badge owned\">IN YOUR LIBRARY</span>'"
         ":'<span class=\"badge new\">NOT OWNED</span>';\n"
         "const gpTag=item.onGP?'<span class=\"badge gp\">GAME PASS</span>':'';\n"
+        "const bundleTag=item._isBundle?'<span class=\"badge\" style=\"background:#e65100;color:#fff\">BUNDLE</span>':'';\n"
+        "const xcloudTag=item.xCloudStreamable?'<span class=\"badge\" style=\"background:#6a1b9a;color:#fff\">xCLOUD</span>':'';\n"
+        "const eaTag=item.isEAPlay?'<span class=\"badge\" style=\"background:#ff6f00;color:#fff\">EA PLAY</span>':'';\n"
+        "const saleTag=item._onSale?'<span class=\"badge\" style=\"background:#2e7d32;color:#fff\">ON SALE</span>':'';\n"
         "const chBadges=(item.channels||[]).map(c=>'<span class=\"badge gp\">'+c+'</span>').join(' ');\n"
         "const platBadges=(item.platforms||[]).map(p=>{"
         "const cls=p.includes('Series')?'series':p.includes('360')?'x360':p==='PC'?'pc':p.includes('One')?'one':'mobile';"
         "return '<span class=\"badge '+cls+'\">'+p+'</span>'}).join(' ');\n"
+        "const ratingHtml=item.averageRating>0?"
+        "'<div><span class=\"lbl\">Rating:</span></div><div class=\"val\">'+item.averageRating.toFixed(1)+' / 5 ('+(item.ratingCount||0).toLocaleString()+' ratings)</div>':'';\n"
+        "const descHtml=(item.shortDescription||item.description)?"
+        "'<div style=\"grid-column:1/3;margin-top:6px;padding:8px;background:#1a1a2e;border-radius:6px;font-size:12px;color:#bbb;line-height:1.4\">'+(item.shortDescription||item.description)+'</div>':'';\n"
         "document.getElementById('modal-body').innerHTML=`\n"
         '<div class="modal-title">${item.title||\'Unknown\'}</div>\n'
         '<div class="modal-pub">${item.publisher||\'\'} ${item.developer&&item.developer!==item.publisher?\'/  \'+item.developer:\'\'}</div>\n'
-        '<div style="margin-bottom:10px">${owned} ${gpTag} ${chBadges} ${platBadges}</div>\n'
+        '<div style="margin-bottom:10px">${owned} ${gpTag} ${bundleTag} ${xcloudTag} ${eaTag} ${saleTag} ${chBadges} ${platBadges}</div>\n'
         '<div class="modal-info">\n'
         '<div><span class="lbl">Product ID:</span></div><div class="val">${item.productId}</div>\n'
         "${item.xboxTitleId?'<div><span class=\"lbl\">Xbox Title ID:</span></div><div class=\"val\">'+item.xboxTitleId+'</div>':''}\n"
         '<div><span class="lbl">Release:</span></div><div class="val">${(item.releaseDate||\'\').substring(0,10)}</div>\n'
         '<div><span class="lbl">Type:</span></div><div class="val">${item.productKind||\'\'}</div>\n'
         '<div><span class="lbl">Category:</span></div><div class="val">${item.category||\'\'}</div>\n'
+        "${ratingHtml}\n"
         "${item.priceUSD>0?'<div><span class=\"lbl\">Price:</span></div><div class=\"val\" style=\"color:#42a5f5;font-weight:600\">'+_p(item.priceUSD)+'</div>':''}\n"
         "${item.currentPriceUSD>0&&item.currentPriceUSD<item.priceUSD?'<div><span class=\"lbl\">Sale:</span></div><div class=\"val\" style=\"color:#4caf50;font-weight:600\">'+_p(item.currentPriceUSD)+'</div>':''}\n"
         '<div><span class="lbl">Store:</span></div><div class="val"><a href="https://www.xbox.com/en-GB/games/store/p/${item.productId}" target="_blank">${item.productId}</a></div>\n'
+        "${descHtml}\n"
         "</div>\n"
         "${_regionTbl(item)}`;\n"
         "document.getElementById('modal').classList.add('active')}\n"
@@ -5369,7 +5837,11 @@ def build_html_template(gamertag="", hosted=False):
         "    const dbGames=e.dbGames||0;\n"
         "    const uGames=(e.uploadedIds||[]).map(s=>_gn(s)).sort();\n"
         "    const rGames=(e.receivedIds||[]).map(s=>_gn(s)).sort();\n"
-        "    const hasDetail=uGames.length+rGames.length>0||dupes||dbEntries;\n"
+        "    const accIds=(e.acceptedIds||[]).map(s=>_gn(s)).sort();\n"
+        "    const dupIds=(e.duplicateIds||[]).map(s=>_gn(s)).sort();\n"
+        "    const platCounts=e.platformCounts||{};\n"
+        "    const _platNames={ERA:'Xbox One',Gen8GameCore:'Xbox One / One X',Gen9GameCore:'Xbox Series X|S',PCGameCore:'Windows PC',UWP:'Windows UWP',SRA:'Xbox One App'};\n"
+        "    const hasDetail=accIds.length+dupIds.length+uGames.length+rGames.length>0||Object.keys(platCounts).length||dupes||dbEntries;\n"
         "    const rid='cdnlog-d'+i;\n"
         "    h+='<div style=\"border:1px solid #333;border-radius:8px;margin-bottom:12px;background:#111\">';\n"
         "    h+='<div style=\"display:flex;align-items:center;justify-content:space-between;padding:12px 16px'+(hasDetail?';cursor:pointer':'')+'\"'+(hasDetail?' onclick=\"var d=document.getElementById(\\''+rid+'\\');var a=this.querySelector(\\'span.cdnlog-arrow\\');if(d.style.display===\\'none\\'){d.style.display=\\'\\';a.textContent=\\'\\u25BC\\'}else{d.style.display=\\'none\\';a.textContent=\\'\\u25B6\\'}\"':'')+'>';\n"
@@ -5391,6 +5863,27 @@ def build_html_template(gamertag="", hosted=False):
         "    if(dbEntries)h+=`<div>DB entries: <span style=\"color:#ccc\">${dbEntries.toLocaleString()}</span></div>`;\n"
         "    if(dbGames)h+=`<div>DB games: <span style=\"color:#ccc\">${dbGames.toLocaleString()}</span></div>`;\n"
         "    h+='</div>';\n"
+        "    if(Object.keys(platCounts).length){\n"
+        "      h+='<div style=\"margin-top:12px\"><div style=\"color:#ce93d8;font-size:12px;margin-bottom:6px\">Platform Breakdown</div>';\n"
+        "      h+='<div style=\"display:flex;flex-wrap:wrap;gap:4px\">';\n"
+        "      Object.entries(platCounts).sort((a,b)=>b[1]-a[1]).forEach(([p,c])=>{\n"
+        "        const name=_platNames[p]||p||'Unknown';\n"
+        "        h+=`<span style=\"display:inline-block;padding:2px 8px;background:#1a0a2e;border:1px solid #4a148c;border-radius:4px;font-size:11px;color:#ce93d8\">${name}: ${c}</span>`;\n"
+        "      });\n"
+        "      h+='</div></div>';\n"
+        "    }\n"
+        "    if(accIds.length){\n"
+        "      h+='<div style=\"margin-top:12px\"><div style=\"color:#81c784;font-size:12px;margin-bottom:6px\">New Games Added ('+accIds.length+')</div>';\n"
+        "      h+='<div style=\"display:flex;flex-wrap:wrap;gap:4px\">';\n"
+        "      accIds.forEach(g=>{h+=`<span style=\"display:inline-block;padding:2px 8px;background:#0a1f0a;border:1px solid #1b5e20;border-radius:4px;font-size:11px;color:#a5d6a7\">${g}</span>`;});\n"
+        "      h+='</div></div>';\n"
+        "    }\n"
+        "    if(dupIds.length){\n"
+        "      h+='<div style=\"margin-top:12px\"><div style=\"color:#ffb74d;font-size:12px;margin-bottom:6px\">Duplicates Skipped ('+dupIds.length+')</div>';\n"
+        "      h+='<div style=\"display:flex;flex-wrap:wrap;gap:4px\">';\n"
+        "      dupIds.forEach(g=>{h+=`<span style=\"display:inline-block;padding:2px 8px;background:#1f1a0a;border:1px solid #e65100;border-radius:4px;font-size:11px;color:#ffb74d\">${g}</span>`;});\n"
+        "      h+='</div></div>';\n"
+        "    }\n"
         "    if(uGames.length){\n"
         "      h+='<div style=\"margin-top:12px\"><div style=\"color:#81c784;font-size:12px;margin-bottom:6px\">\\u2191 Uploaded ('+uGames.length+')</div>';\n"
         "      h+='<div style=\"display:flex;flex-wrap:wrap;gap:4px\">';\n"
@@ -5416,6 +5909,8 @@ def build_html_template(gamertag="", hosted=False):
         html += (
             "(async function(){\n"
             "const ls=document.getElementById('loading-status');\n"
+            # Handle Xbox OAuth return (reads URL params, stores in localStorage)
+            "_xctHandleOAuthReturn();\n"
             "if(ls)ls.textContent='Loading shared data...';\n"
             "await _loadShared();\n"
             "try{initDropdowns();filterMKT();filterGP()}catch(e){console.error(e)}\n"
@@ -5425,9 +5920,26 @@ def build_html_template(gamertag="", hosted=False):
             "if(ls)ls.textContent='Loading collection...';\n"
             "const ok=await _loadCollection();\n"
             "if(ok){try{initDropdowns();filterLib();filterPH();renderHistory()}catch(e){console.error(e)}}\n"
+            # Load Xbox achievements if linked
+            "if(ls)ls.textContent='Loading achievements...';\n"
+            "const achOk=await _loadAchievements();\n"
+            "if(achOk){"
+            "document.getElementById('tab-ach').style.display='';"
+            "document.getElementById('tab-ach-cnt').textContent=_xctAchSummaries.length;"
+            "document.getElementById('ach-sub').textContent="
+            "_xctXboxGt+' \\u2022 '+_xctAchSummaries.length+' titles';"
+            "renderAchStats();filterAch()}\n"
             "_updateAuthUI()}\n"
             "_loadImports().catch(()=>{}).then(()=>{\n"
             "renderImports();\n"
+            "var _revSlug={library:'library',marketplace:'marketplace',gamepass:'gamepass',"
+            "playhistory:'playhistory',scanlog:'history',gamertags:'gamertags',"
+            "gfwl:'gfwl',xvcdb:'cdnsync',imports:'imports',achievements:'achievements'};\n"
+            "var _pathSlug=location.pathname.replace(/^\\//, '')||'library';\n"
+            "var _initTab=_revSlug[_pathSlug]||'library';\n"
+            "if(_initTab!=='library'){"
+            "var _te=document.querySelector('.tab[onclick*=\"'+_initTab+'\"]');"
+            "if(_te)switchTab(_initTab,_te)}\n"
             "document.getElementById('loading-overlay').style.display='none'});\n"
             "})();\n"
             '</script></body></html>'
@@ -5438,6 +5950,15 @@ def build_html_template(gamertag="", hosted=False):
             'try{initDropdowns();filterLib();filterPH();filterGP();filterMKT();renderHistory();renderImports();}catch(e){console.error("init error",e)}\n'
             'renderGFWL();\n'
             '_cdnSyncBuildFlat();renderCDNSync();renderCDNLeaderboard();renderCDNSyncLog();\n'
+            "var _revSlug={library:'library',marketplace:'marketplace',gamepass:'gamepass',"
+            "playhistory:'playhistory',scanlog:'history',gamertags:'gamertags',"
+            "gfwl:'gfwl',xvcdb:'cdnsync',imports:'imports',achievements:'achievements'};\n"
+            "function _hashNav(){var s=location.hash.replace('#','')||'library';"
+            "var t=_revSlug[s]||'library';"
+            "var el=document.querySelector('.tab[onclick*=\"'+t+'\"]');"
+            "if(el)switchTab(t,el)}\n"
+            "_hashNav();\n"
+            "window.addEventListener('hashchange',_hashNav);\n"
             "document.getElementById('loading-overlay').style.display='none';\n"
             '});\n'
             '</script></body></html>'
@@ -7866,10 +8387,11 @@ def process_all_accounts():
     results = []
     all_libraries = []
 
-    for gt in gamertags:
+    total = len(gamertags)
+    for idx, gt in enumerate(gamertags, 1):
         print()
         print("=" * 64)
-        print(f"  Processing: {gt}")
+        print(f"  Processing: {gt}  ({idx}/{total})")
         print("=" * 64)
 
         # Refresh token
@@ -12203,8 +12725,8 @@ def _cdn_load_items():
     for item in items:
         sid = item.get("storeId", "")
         item["_title"] = (catalog_map.get(sid, {}).get("title", "")
-                          or item.get("packageName", sid or "?"))
-    items.sort(key=lambda x: x.get("_title", "").lower())
+                          or item.get("packageName") or sid or "?")
+    items.sort(key=lambda x: (x.get("_title") or "").lower())
     return items
 
 
@@ -13717,42 +14239,81 @@ def process_cdn_sync():
     entries, known_keys = _cdn_sync_flatten_entries(cdn_data)
     print(f"{len(entries)} entries, {len(known_keys)} unique versions")
 
-    # Sync with server
-    print("  Syncing with server...", end=" ", flush=True)
-    result = api_request(
-        CDN_SYNC_API_BASE + "/sync",
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        body={
-            "api_key": config["api_key"],
-            "entries": entries,
-            "known_keys": list(known_keys),
-        },
-        retries=2,
-    )
-    if result is None:
-        print("\n  [!] Could not reach CDN sync server. Check your internet connection.")
-        return
-    if "error" in result:
-        print(f"\n  [!] Server error: {result['error']}")
-        return
-    print("done!")
-    print()
+    # Sync with server in chunks (server caps at 5000 entries per request)
+    SYNC_CHUNK = 2000
+    chunks = [entries[i:i + SYNC_CHUNK] for i in range(0, max(len(entries), 1), SYNC_CHUNK)]
+    total_chunks = len(chunks)
 
-    # Display results
-    pts_earned = result.get("points_earned", 0)
-    total_pts = result.get("total_points", 0)
-    new_accepted = result.get("new_entries_accepted", 0)
-    dupes = result.get("duplicates_skipped", 0)
-    remote_entries = result.get("remote_entries", [])
-    db_entries = result.get("total_db_entries", 0)
-    db_games = result.get("total_db_games", 0)
+    pts_earned = 0
+    total_pts = 0
+    new_accepted = 0
+    dupes = 0
+    remote_entries = []
+    db_entries = 0
+    db_games = 0
+    accepted_ids = []
+    duplicate_ids = []
+    platform_counts = {}
+    contributor_map = {}
+
+    for ci, chunk in enumerate(chunks):
+        is_last = (ci == total_chunks - 1)
+        if total_chunks > 1:
+            print(f"  Syncing with server... chunk {ci + 1}/{total_chunks}", end=" ", flush=True)
+        else:
+            print("  Syncing with server...", end=" ", flush=True)
+        body = {
+            "api_key": config["api_key"],
+            "entries": chunk,
+        }
+        # Only request remote entries on the last chunk
+        if is_last:
+            body["known_keys"] = list(known_keys)
+        result = api_request(
+            CDN_SYNC_API_BASE + "/sync",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            body=body,
+            retries=2,
+        )
+        if result is None:
+            print("\n  [!] Could not reach CDN sync server. Check your internet connection.")
+            return
+        if "error" in result:
+            print(f"\n  [!] Server error: {result['error']}")
+            return
+        print("done!")
+
+        # Accumulate results
+        pts_earned += result.get("points_earned", 0)
+        total_pts = result.get("total_points", 0)
+        new_accepted += result.get("new_entries_accepted", 0)
+        dupes += result.get("duplicates_skipped", 0)
+        accepted_ids.extend(result.get("accepted_ids", []))
+        duplicate_ids.extend(result.get("duplicate_ids", []))
+        for plat, cnt in result.get("platform_counts", {}).items():
+            platform_counts[plat] = platform_counts.get(plat, 0) + cnt
+        if is_last:
+            remote_entries = result.get("remote_entries", [])
+            contributor_map = result.get("contributor_map", {})
+            db_entries = result.get("total_db_entries", 0)
+            db_games = result.get("total_db_games", 0)
+
+    print()
 
     print(f"  Upload Results:")
     print(f"    New entries contributed:  {new_accepted}")
     print(f"    Duplicates skipped:      {dupes}")
     print(f"    Points earned:           +{pts_earned}")
     print(f"    Total points:            {total_pts}")
+    if platform_counts:
+        _plat_names = {'ERA': 'Xbox One', 'Gen8GameCore': 'Xbox One / One X',
+                       'Gen9GameCore': 'Xbox Series X|S', 'PCGameCore': 'Windows PC',
+                       'UWP': 'Windows UWP', 'SRA': 'Xbox One App'}
+        print(f"    Platform Breakdown:")
+        for plat, cnt in sorted(platform_counts.items(), key=lambda x: -x[1]):
+            name = _plat_names.get(plat, plat) if plat else 'Unknown'
+            print(f"      {name:<24} {cnt}")
     print()
     print(f"  Database Stats:")
     print(f"    Total entries:           {db_entries:,}")
@@ -13796,7 +14357,6 @@ def process_cdn_sync():
     print()
 
     # Backfill contributor names from server's contributor_map
-    contributor_map = result.get("contributor_map") or {}
     if contributor_map:
         username = config.get("username", "")
         for key, who in contributor_map.items():
@@ -13850,6 +14410,9 @@ def process_cdn_sync():
             "dbGames": db_games,
             "uploadedIds": uploaded_ids,
             "receivedIds": received_ids,
+            "acceptedIds": accepted_ids,
+            "duplicateIds": duplicate_ids,
+            "platformCounts": platform_counts,
         })
         save_json(CDN_SYNC_LOG_FILE, sync_log)
     except Exception:
@@ -15135,6 +15698,1559 @@ def process_store_packages():
                 print(f"  [!] Install error: {e}")
 
 
+# ===========================================================================
+# Game Downgrader — download older versions of Xbox games via CDN
+# ===========================================================================
+
+def _downgrader_search_game():
+    """Fuzzy-search CDN.json for a game. Returns selected item dict or None."""
+    items = _cdn_load_items()
+    if not items:
+        return None
+
+    # Deduplicate by contentId (keep first occurrence after sort)
+    seen_cids = set()
+    deduped = []
+    for item in items:
+        cid = item.get("contentId", "")
+        if cid and cid not in seen_cids:
+            seen_cids.add(cid)
+            deduped.append(item)
+
+    PAGE = 20
+    while True:
+        query = input("\n  Search game name (or 0=back): ").strip()
+        if query == "0" or not query:
+            return None
+
+        q_lower = query.lower()
+        matches = [it for it in deduped if q_lower in (it.get("_title") or "").lower()]
+
+        if not matches:
+            print(f"  No matches for '{query}'.")
+            continue
+
+        # Paginated display
+        page = 0
+        while True:
+            start = page * PAGE
+            end = min(start + PAGE, len(matches))
+            batch = matches[start:end]
+
+            print(f"\n  {'#':>3}  {'ContentId':<38}  {'Platform':<8}  Title")
+            print("  " + "-" * 90)
+            for i, it in enumerate(batch, start + 1):
+                cid = it.get("contentId", "?")
+                plat = it.get("platform", "")
+                title = (it.get("_title") or "?")[:50]
+                print(f"  {i:>3}  {cid:<38}  {plat:<8}  {title}")
+
+            remaining = len(matches) - end
+            print()
+            if remaining > 0:
+                prompt = f"  Pick # (or Enter=next {min(remaining, PAGE)}, S=search again, 0=back): "
+            else:
+                prompt = "  Pick # (or S=search again, 0=back): "
+
+            sel = input(prompt).strip()
+            if sel == "0":
+                return None
+            if sel.upper() == "S" or sel == "":
+                if sel == "" and remaining > 0:
+                    page += 1
+                    continue
+                break  # new search
+            try:
+                idx = int(sel) - 1
+                if 0 <= idx < len(matches):
+                    return matches[idx]
+                print("  Invalid number.")
+            except ValueError:
+                print("  Invalid input.")
+
+
+def _downgrader_api_get(url, xbl3_token):
+    """GET request to packagespc.xboxlive.com. Returns parsed JSON."""
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", xbl3_token)
+    req.add_header("User-Agent", "Microsoft-Delivery-Optimization/10.0")
+    req.add_header("Accept", "application/json")
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _downgrader_discover_versions(content_id, xbl3_token):
+    """Discover all available versions for a content ID via packagespc.xboxlive.com.
+
+    Calls GetBasePackage to get the latest version and all XSP patch filenames,
+    then calls GetSpecificBasePackage for each historical version to check
+    availability and get CDN download URLs.
+
+    Returns (versions, cdn_info) where versions is a list of dicts sorted newest-first:
+        {version, buildId, versionId, url, available, size, latest, filename, date}
+    and cdn_info has {cdn_roots, rel_url, filename, latest_ver, latest_bid} from the
+    latest version's base package (empty dict on error).
+    """
+    import re
+
+    base_url = f"https://packagespc.xboxlive.com/GetBasePackage/{content_id}"
+
+    print(f"\n[*] Fetching latest package info...")
+    try:
+        data = _downgrader_api_get(base_url, xbl3_token)
+    except urllib.error.HTTPError as e:
+        err = e.read().decode("utf-8", errors="replace")[:500]
+        debug(f"GetBasePackage failed: HTTP {e.code} {err}")
+        print(f"[!] GetBasePackage failed: HTTP {e.code}")
+        print(f"    {err[:200]}")
+        return [], {}
+    except Exception as e:
+        print(f"[!] GetBasePackage failed: {e}")
+        return [], {}
+
+    if not data.get("PackageFound"):
+        print("[!] Package not found on CDN.")
+        return [], {}
+
+    latest_vid = data.get("VersionId", "")
+    files = data.get("PackageFiles", [])
+
+    # Find the main base package (not .xsp) for the latest version
+    base_pkg = None
+    for f in files:
+        if not f.get("FileName", "").endswith(".xsp"):
+            base_pkg = f
+            break
+
+    if not base_pkg:
+        print("[!] No base package found in response.")
+        return [], {}
+
+    # Build latest version entry
+    versions = []
+    latest_size = base_pkg.get("FileSize", 0)
+    latest_cdn_roots = base_pkg.get("CdnRootPaths", [])
+    latest_rel = base_pkg.get("RelativeUrl", "")
+    latest_url = (latest_cdn_roots[0] + latest_rel) if latest_cdn_roots and latest_rel else ""
+
+    # Parse latest versionId: "1.0.0.8.423dc5b4-e829-4700-ba11-5c2ae78a57fe"
+    vid_parts = latest_vid.rsplit(".", 1) if latest_vid.count(".") >= 4 else None
+    if vid_parts and len(vid_parts) == 2:
+        # Split "1.0.0.8" from the trailing GUID part
+        # Actually versionId is "major.minor.build.rev.guid" so we need to split at 4th dot
+        dot_positions = [i for i, c in enumerate(latest_vid) if c == "."]
+        if len(dot_positions) >= 4:
+            latest_ver = latest_vid[:dot_positions[3]]
+            latest_bid = latest_vid[dot_positions[3] + 1:]
+        else:
+            latest_ver = latest_vid
+            latest_bid = ""
+    else:
+        latest_ver = latest_vid
+        latest_bid = ""
+
+    cdn_info = {
+        "cdn_roots": latest_cdn_roots,
+        "rel_url": latest_rel,
+        "filename": base_pkg.get("FileName", ""),
+        "latest_ver": latest_ver,
+        "latest_bid": latest_bid,
+    }
+
+    versions.append({
+        "version": latest_ver,
+        "buildId": latest_bid,
+        "versionId": latest_vid,
+        "url": latest_url,
+        "available": True,
+        "size": latest_size,
+        "latest": True,
+        "filename": base_pkg.get("FileName", ""),
+        "date": base_pkg.get("ModifiedDate", ""),
+    })
+
+    # Parse XSP filenames to find older version IDs
+    xsp_pattern = re.compile(r"update-(\d+\.\d+\.\d+\.\d+)\.([0-9a-fA-F-]{36})\.xsp")
+    older_versions = []
+    for f in files:
+        fname = f.get("FileName", "")
+        m = xsp_pattern.match(fname)
+        if m:
+            ver = m.group(1)
+            bid = m.group(2)
+            vid = f"{ver}.{bid}"
+            if vid != latest_vid:
+                older_versions.append({"version": ver, "buildId": bid, "versionId": vid})
+
+    if not older_versions:
+        print("[*] No older versions found (this game has only one version).")
+        return versions, cdn_info
+
+    print(f"[*] Found {len(older_versions)} older version(s), checking availability...")
+
+    # Probe each older version
+    for i, ov in enumerate(older_versions):
+        vid = ov["versionId"]
+        url = f"https://packagespc.xboxlive.com/GetSpecificBasePackage/{content_id}/{vid}"
+        print(f"    Checking v{ov['version']}... ", end="", flush=True)
+
+        try:
+            vdata = _downgrader_api_get(url, xbl3_token)
+        except Exception as e:
+            debug(f"GetSpecificBasePackage failed for {vid}: {e}")
+            print("error")
+            versions.append({
+                "version": ov["version"],
+                "buildId": ov["buildId"],
+                "versionId": vid,
+                "url": "",
+                "available": False,
+                "size": 0,
+                "latest": False,
+                "filename": "",
+                "date": "",
+            })
+            continue
+
+        if vdata.get("PackageFound"):
+            # Find the base package file (not .xsp)
+            vpkg = None
+            for vf in vdata.get("PackageFiles", []):
+                if not vf.get("FileName", "").endswith(".xsp"):
+                    vpkg = vf
+                    break
+            if vpkg:
+                cdn_roots = vpkg.get("CdnRootPaths", [])
+                rel = vpkg.get("RelativeUrl", "")
+                dl_url = (cdn_roots[0] + rel) if cdn_roots and rel else ""
+                sz = vpkg.get("FileSize", 0)
+                print(f"available ({sz / 1e9:.2f} GB)")
+                versions.append({
+                    "version": ov["version"],
+                    "buildId": ov["buildId"],
+                    "versionId": vid,
+                    "url": dl_url,
+                    "available": True,
+                    "size": sz,
+                    "latest": False,
+                    "filename": vpkg.get("FileName", ""),
+                    "date": vdata.get("AvailabilityDate", ""),
+                })
+            else:
+                print("no base package")
+                versions.append({
+                    "version": ov["version"],
+                    "buildId": ov["buildId"],
+                    "versionId": vid,
+                    "url": "",
+                    "available": False,
+                    "size": 0,
+                    "latest": False,
+                    "filename": "",
+                    "date": "",
+                })
+        else:
+            print("purged")
+            versions.append({
+                "version": ov["version"],
+                "buildId": ov["buildId"],
+                "versionId": vid,
+                "url": "",
+                "available": False,
+                "size": 0,
+                "latest": False,
+                "filename": "",
+                "date": "",
+            })
+
+    # Sort newest-first by version string (lexicographic works for dotted versions with same depth)
+    def ver_key(v):
+        try:
+            return tuple(int(x) for x in v["version"].split("."))
+        except (ValueError, AttributeError):
+            return (0,)
+    versions.sort(key=ver_key, reverse=True)
+    return versions, cdn_info
+
+
+def _downgrader_recover_purged(purged, content_id, xbl3_token, cdn_info, store_id):
+    """Try to recover download URLs for purged game versions.
+
+    Runs four strategies in order for each purged version:
+      1. Console endpoint probe (packages.xboxlive.com)
+      2. CDN URL reconstruction + multi-domain HEAD probe (HTTP)
+      3. FE3 SOAP delivery API across all rings (for .appx/.msix apps)
+      4. WU Catalog website fallback (requires store_id)
+
+    Modifies version dicts in-place on success (available, url, size, recovery_method).
+    Returns number of versions recovered.
+    """
+    if not purged:
+        return 0
+
+    CDN_PROBE_DOMAINS = [
+        "assets1.xboxlive.com", "assets2.xboxlive.com",
+        "d1.xboxlive.com", "d2.xboxlive.com",
+        "xvcf1.xboxlive.com", "xvcf2.xboxlive.com",
+    ]
+
+    recovered = 0
+    wu_data = None      # lazy: FE3 SOAP results across all rings
+    wu_wuid = None      # cached WuCategoryId from Strategy 3
+    wu_cat_links = None  # lazy: WU Catalog website links (Strategy 4)
+
+    for v in purged:
+        ver = v["version"]
+        bid = v["buildId"]
+        vid = v["versionId"]
+        print(f"      v{ver}: ", end="", flush=True)
+
+        # --- Strategy 1: Console endpoint probe ---
+        print("console endpoint... ", end="", flush=True)
+        try:
+            console_url = (f"https://packages.xboxlive.com"
+                           f"/GetSpecificBasePackage/{content_id}/{vid}")
+            vdata = _downgrader_api_get(console_url, xbl3_token)
+            if vdata.get("PackageFound"):
+                vpkg = None
+                for vf in vdata.get("PackageFiles", []):
+                    if not vf.get("FileName", "").endswith(".xsp"):
+                        vpkg = vf
+                        break
+                if vpkg:
+                    roots = vpkg.get("CdnRootPaths", [])
+                    rel = vpkg.get("RelativeUrl", "")
+                    dl_url = (roots[0] + rel) if roots and rel else ""
+                    if dl_url:
+                        v["url"] = dl_url
+                        v["size"] = vpkg.get("FileSize", 0)
+                        v["available"] = True
+                        v["filename"] = vpkg.get("FileName", "")
+                        v["recovery_method"] = "console"
+                        recovered += 1
+                        print(f"found ({v['size'] / 1e9:.2f} GB)")
+                        continue
+            print("no  ", end="", flush=True)
+        except Exception:
+            print("no  ", end="", flush=True)
+
+        # --- Strategy 2: CDN URL reconstruction + multi-domain HEAD ---
+        if cdn_info and cdn_info.get("rel_url") and cdn_info.get("latest_ver"):
+            latest_ver_s = cdn_info["latest_ver"]
+            latest_bid_s = cdn_info["latest_bid"]
+            rel_url = cdn_info["rel_url"]
+            latest_fname = cdn_info["filename"]
+
+            latest_seg = (f"{latest_ver_s}.{latest_bid_s}"
+                          if latest_bid_s else latest_ver_s)
+            purged_seg = f"{ver}.{bid}" if bid else ver
+
+            new_rel = rel_url.replace(latest_seg, purged_seg)
+            if latest_fname and latest_ver_s in latest_fname:
+                new_fname = latest_fname.replace(latest_ver_s, ver)
+                new_rel = new_rel.replace(latest_fname, new_fname)
+
+            if new_rel != rel_url:
+                # Build probe list: API-returned CDN roots + hardcoded domains
+                probe_urls = []
+                from urllib.parse import urlparse as _urlparse
+                for root in cdn_info.get("cdn_roots", []):
+                    probe_urls.append(root.rstrip("/") + new_rel)
+                for domain in CDN_PROBE_DOMAINS:
+                    u = f"http://{domain}{new_rel}"
+                    if u not in probe_urls:
+                        probe_urls.append(u)
+                print(f"CDN probe ({len(probe_urls)} URLs)... ",
+                      end="", flush=True)
+                found = False
+                for probe_url in probe_urls:
+                    hit = _cdn_head(probe_url)
+                    if hit:
+                        cl = 0
+                        try:
+                            req = urllib.request.Request(probe_url, method="HEAD")
+                            req.add_header("User-Agent",
+                                           "Microsoft-Delivery-Optimization/10.0")
+                            with urllib.request.urlopen(req, timeout=8) as r:
+                                cl = int(r.headers.get("Content-Length", 0))
+                        except Exception:
+                            pass
+                        v["url"] = probe_url
+                        v["size"] = cl
+                        v["available"] = True
+                        v["recovery_method"] = "cdn_probe"
+                        recovered += 1
+                        found = True
+                        sz_str = f" ({cl / 1e9:.2f} GB)" if cl else ""
+                        try:
+                            hit_host = _urlparse(probe_url).hostname
+                        except Exception:
+                            hit_host = probe_url[:60]
+                        print(f"found on {hit_host}{sz_str}")
+                        break
+                if not found:
+                    print("no  ", end="", flush=True)
+            else:
+                print("skip  ", end="", flush=True)
+        else:
+            print("CDN probe skip  ", end="", flush=True)
+
+        if v["available"]:
+            continue
+
+        # --- Strategy 3: FE3 SOAP delivery API (all rings) ---
+        if store_id:
+            print("WU delivery API", end="", flush=True)
+            if wu_data is None:
+                wu_data = []  # [(filename, {update_id, revision, size, _ring})]
+                try:
+                    wuid = _display_catalog_get_wuid(store_id, timeout=10)
+                    wu_wuid = wuid  # cache for Strategy 4
+                    if wuid:
+                        cookie = _fe3_get_cookie(timeout=15)
+                        for ring in ("Retail", "RP", "WIF", "WIS"):
+                            print(".", end="", flush=True)
+                            try:
+                                updates = _fe3_sync_updates(
+                                    cookie, wuid, ring, timeout=15)
+                                for fname, info in updates.items():
+                                    info["_ring"] = ring
+                                    wu_data.append((fname, info))
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+            print("... ", end="", flush=True)
+            # Find packages matching this purged version
+            matches = [(f, i) for f, i in wu_data
+                       if f"_{ver}_" in f or f"_{ver}." in f]
+            if matches:
+                # Resolve download URLs for matches
+                all_urls = []
+                best_url = None
+                best_size = 0
+                best_ring = "?"
+                for mfname, minfo in matches:
+                    ring = minfo.get("_ring", "Retail")
+                    try:
+                        dl_url = _fe3_get_url(
+                            minfo["update_id"], minfo["revision"], ring)
+                        if dl_url:
+                            all_urls.append(dl_url)
+                            if not best_url:
+                                best_url = dl_url
+                                best_size = minfo.get("size", 0)
+                                best_ring = ring
+                    except Exception:
+                        pass
+                if best_url:
+                    v["url"] = best_url
+                    v["size"] = best_size
+                    v["available"] = True
+                    v["recovery_method"] = "wu_delivery"
+                    if len(all_urls) > 1:
+                        v["wu_links"] = all_urls
+                    recovered += 1
+                    print(f"found v{ver} (ring: {best_ring}"
+                          f", {best_size / 1e9:.2f} GB)")
+                    continue
+                else:
+                    print("matched but URL resolution failed")
+            else:
+                if wu_data:
+                    print(f"no v{ver} ({len(wu_data)} other packages)")
+                else:
+                    print("no packages found")
+        else:
+            print("(no storeId, WU delivery skipped)")
+
+        if v["available"]:
+            continue
+
+        # --- Strategy 4: WU Catalog website fallback ---
+        if store_id:
+            print("WU Catalog... ", end="", flush=True)
+            if wu_cat_links is None:
+                wu_cat_links = []
+                try:
+                    wuid = wu_wuid or _display_catalog_get_wuid(
+                        store_id, timeout=10)
+                    if wuid:
+                        wu_results = _wu_catalog_search(wuid, timeout=15)
+                        if wu_results:
+                            uid_infos = [r["uid_info"] for r in wu_results]
+                            wu_cat_links = _wu_catalog_get_links(
+                                uid_infos, timeout=15)
+                except Exception:
+                    pass
+            if wu_cat_links:
+                v["url"] = wu_cat_links[0]
+                v["available"] = True
+                v["recovery_method"] = "wu_catalog"
+                v["wu_links"] = wu_cat_links
+                recovered += 1
+                print(f"found {len(wu_cat_links)} link(s)")
+            else:
+                print("no")
+        else:
+            print("")  # newline after strategy chain
+
+    return recovered
+
+
+def _downgrader_search_store(query):
+    """Search the Microsoft Store catalog by name. Returns (product_id, title) or None."""
+    from urllib.parse import quote
+    url = (f"https://displaycatalog.md.mp.microsoft.com/v7.0/productFamilies/autosuggest"
+           f"?query={quote(query)}&market=US&languages=en-US"
+           f"&platformdependencyname=Windows.Desktop"
+           f"&productFamilyNames=Games,Apps&topProducts=25")
+    try:
+        data = api_request(url, method="GET", headers={
+            "User-Agent": "okhttp/4.12.0",
+            "Accept": "application/json",
+        })
+    except Exception as e:
+        debug(f"Autosuggest search failed: {e}")
+        print(f"[!] Search failed: {e}")
+        return None
+
+    if not data:
+        return None
+
+    # Flatten results — each entry has a Products array with one item
+    hits = []
+    seen = set()
+    for entry in data.get("Results", []):
+        for prod in entry.get("Products", []):
+            pid = prod.get("ProductId", "")
+            title = prod.get("Title", "")
+            if pid and pid not in seen:
+                seen.add(pid)
+                hits.append((pid, title))
+
+    if not hits:
+        print(f"  No results for '{query}'.")
+        return None
+
+    print(f"\n  {'#':>3}  {'ProductId':<14}  Title")
+    print("  " + "-" * 60)
+    for i, (pid, title) in enumerate(hits, 1):
+        print(f"  {i:>3}  {pid:<14}  {title[:44]}")
+    print()
+
+    sel = input(f"  Pick # [1-{len(hits)} / 0=back]: ").strip()
+    if sel == "0" or not sel:
+        return None
+    try:
+        idx = int(sel) - 1
+        if 0 <= idx < len(hits):
+            return hits[idx]
+    except ValueError:
+        pass
+    print("  Invalid selection.")
+    return None
+
+
+def _resolve_product_to_content_ids(product_id):
+    """Resolve a store Product ID to Content IDs via Display Catalog.
+
+    Handles bundles: if the product has BundledSkus but no Packages,
+    resolves the primary bundled product to find Content IDs.
+
+    Returns list of (content_id, package_name) tuples, or empty list on failure.
+    """
+    dc_headers = {
+        "User-Agent": "okhttp/4.12.0",
+        "Accept": "application/json",
+    }
+    url = (f"https://displaycatalog.md.mp.microsoft.com/v7.0/products"
+           f"?bigIds={product_id}&market=US&languages=en-us")
+    try:
+        data = api_request(url, method="GET", headers=dc_headers)
+    except Exception as e:
+        debug(f"Display Catalog lookup failed: {e}")
+        return []
+
+    if not data:
+        return []
+
+    results = []
+    seen = set()
+    bundle_children = []  # (bigId, isPrimary)
+    for product in data.get("Products", []):
+        title = product.get("LocalizedProperties", [{}])[0].get("ProductTitle", "")
+        for sku_entry in (product.get("DisplaySkuAvailabilities") or []):
+            sku_props = sku_entry.get("Sku", {}).get("Properties", {})
+            for pkg in (sku_props.get("Packages") or []):
+                cid = pkg.get("ContentId", "")
+                pfn = pkg.get("PackageFamilyName", "")
+                if cid and cid not in seen:
+                    seen.add(cid)
+                    results.append((cid, pfn or title))
+            # Track bundled children for fallback
+            for bs in (sku_props.get("BundledSkus") or []):
+                bid = bs.get("BigId", "")
+                if bid:
+                    bundle_children.append(
+                        (bid, bs.get("IsPrimary", False)))
+
+    if results:
+        return results
+
+    # No direct packages — try resolving bundled children (primary first)
+    if bundle_children:
+        bundle_children.sort(key=lambda x: (not x[1], x[0]))
+        child_ids = [bid for bid, _ in bundle_children]
+        # Batch-resolve up to 20 children in one call
+        batch = ",".join(child_ids[:20])
+        child_url = (
+            f"https://displaycatalog.md.mp.microsoft.com/v7.0/products"
+            f"?bigIds={batch}&market=US&languages=en-us")
+        try:
+            child_data = api_request(
+                child_url, method="GET", headers=dc_headers)
+        except Exception as e:
+            debug(f"Bundle child lookup failed: {e}")
+            return []
+        if child_data:
+            for product in child_data.get("Products", []):
+                ctitle = product.get(
+                    "LocalizedProperties", [{}])[0].get(
+                    "ProductTitle", "")
+                for sku_entry in (
+                        product.get("DisplaySkuAvailabilities") or []):
+                    sku_props = (sku_entry.get("Sku", {})
+                                 .get("Properties", {}))
+                    for pkg in (sku_props.get("Packages") or []):
+                        cid = pkg.get("ContentId", "")
+                        pfn = pkg.get("PackageFamilyName", "")
+                        if cid and cid not in seen:
+                            seen.add(cid)
+                            results.append((cid, pfn or ctitle))
+
+    return results
+
+
+def process_game_downgrader():
+    """Interactive Game Downgrader — download older versions of Xbox games from CDN."""
+    print("\n[Game Downgrader — Download Older Versions]")
+
+    print()
+    print("  Input:")
+    print("    [1] Search Xbox Store by name")
+    print("    [2] Search CDN.json by name (local)")
+    print("    [3] Enter Content ID directly (GUID)")
+    print("    [4] Enter Product ID or Store URL")
+    print("    [0] Back")
+    print()
+    mode = input("  Choice [1]: ").strip() or "1"
+    if mode == "0":
+        return
+
+    # --- Resolve input to a content_id ---
+    content_id = None
+    title = ""
+    product_id = None  # set when we need to resolve via Display Catalog
+    store_id = ""
+
+    if mode == "1":
+        # Search Xbox Store by name → pick product → resolve content ID
+        query = input("\n  Search game name: ").strip()
+        if not query:
+            return
+        result = _downgrader_search_store(query)
+        if not result:
+            return
+        product_id, title = result
+        store_id = product_id
+
+    elif mode == "2":
+        # Search local CDN.json
+        game = _downgrader_search_game()
+        if not game:
+            return
+        content_id = game.get("contentId", "")
+        title = game.get("_title", content_id)
+        platform = game.get("platform", "?")
+        store_id = game.get("storeId", "")
+        cur_ver = _xbox_ver_decode(game.get("buildVersion", "")) if game.get("buildVersion") else "?"
+        print()
+        print(f"  Game:       {title}")
+        print(f"  ContentId:  {content_id}")
+        if store_id:
+            print(f"  StoreId:    {store_id}")
+        print(f"  Platform:   {platform}")
+        print(f"  Local ver:  {cur_ver}")
+
+    elif mode == "3":
+        cid_input = input("\n  Content ID (GUID): ").strip().strip('"').strip("'")
+        if not cid_input:
+            return
+        content_id = cid_input
+        title = content_id
+        print(f"\n  ContentId:  {content_id}")
+
+    elif mode == "4":
+        pid_input = input("\n  Product ID or Store URL: ").strip().strip('"').strip("'")
+        if not pid_input:
+            return
+        import re as _re
+        # Extract product ID or content ID from store URLs
+        # e.g. https://apps.microsoft.com/detail/9PPPM5Q2JWF7?hl=en-GB
+        #      https://www.microsoft.com/store/productId/9PPPM5Q2JWF7
+        #      https://www.microsoft.com/en-us/p/game-name/9PPPM5Q2JWF7
+        #      https://www.xbox.com/en-US/games/store/game-name/C3MPWS9W61S7
+        #      https://store.xbox.com/Xbox-One/Games/name/GUID (legacy, GUID = Content ID)
+        if "microsoft.com" in pid_input.lower() or "xbox.com" in pid_input.lower():
+            # Check for GUID in URL path (legacy store.xbox.com format)
+            guid_m = _re.search(
+                r'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}'
+                r'-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})',
+                pid_input)
+            if guid_m:
+                content_id = guid_m.group(1).lower()
+                title = content_id
+                print(f"  Extracted Content ID: {content_id}")
+            else:
+                # Try /detail/{id}, /productId/{id}, /p/name/{id},
+                # or /games/store/name/{id} patterns
+                m = _re.search(
+                    r'(?:/detail/|/productId/|/p/[^/]+/|/games/store/[^/]+/)'
+                    r'([A-Za-z0-9]{12})',
+                    pid_input)
+                if m:
+                    pid_input = m.group(1).upper()
+                    print(f"  Extracted Product ID: {pid_input}")
+                else:
+                    # Last path segment before query string
+                    from urllib.parse import urlparse
+                    path = urlparse(pid_input).path.rstrip("/")
+                    last_seg = path.rsplit("/", 1)[-1] if "/" in path else path
+                    if last_seg and len(last_seg) == 12 and last_seg.isalnum():
+                        pid_input = last_seg.upper()
+                        print(f"  Extracted Product ID: {pid_input}")
+        if not content_id:
+            product_id = pid_input
+            title = pid_input
+            store_id = product_id
+
+    else:
+        return
+
+    # If we have a product_id but no content_id yet, resolve via Display Catalog
+    if product_id and not content_id:
+        print(f"\n[*] Looking up {product_id} in Display Catalog...")
+        cid_list = _resolve_product_to_content_ids(product_id)
+        if not cid_list:
+            print("[!] No Content IDs found for this Product ID.")
+            print("    This product may be a console bundle, placeholder,")
+            print("    or listing with no downloadable game packages.")
+            return
+        if len(cid_list) == 1:
+            content_id, pkg_name = cid_list[0]
+            if pkg_name:
+                title = pkg_name
+            print(f"  Found: {content_id}  ({title})")
+        else:
+            print(f"\n  {'#':>3}  {'ContentId':<38}  Package")
+            print("  " + "-" * 80)
+            for i, (cid, pname) in enumerate(cid_list, 1):
+                print(f"  {i:>3}  {cid:<38}  {pname[:40]}")
+            print()
+            sel = input(f"  Pick # [1-{len(cid_list)}]: ").strip()
+            try:
+                idx = int(sel) - 1
+                if not (0 <= idx < len(cid_list)):
+                    print("  Invalid selection.")
+                    return
+            except ValueError:
+                print("  Invalid input.")
+                return
+            content_id, pkg_name = cid_list[idx]
+            if pkg_name:
+                title = pkg_name
+        print(f"\n  ContentId:  {content_id}")
+
+    if not content_id:
+        print("[!] No contentId.")
+        return
+
+    # Step 2: Authenticate
+    try:
+        xbl3_token, _signer = _get_update_xsts_token()
+    except Exception as e:
+        print(f"[!] Authentication failed: {e}")
+        return
+
+    # Step 3: Discover versions
+    versions, cdn_info = _downgrader_discover_versions(content_id, xbl3_token)
+    if not versions:
+        print("[!] No version information available.")
+        return
+
+    # Step 4: Display version table
+    avail = [v for v in versions if v["available"]]
+    purged = [v for v in versions if not v["available"]]
+
+    print(f"\n  {'#':>3}  {'Version':<16}  {'Size':>10}  {'Status':<12}  Date")
+    print("  " + "-" * 65)
+    for i, v in enumerate(versions, 1):
+        sz = f"{v['size'] / 1e9:.2f} GB" if v["size"] else "-"
+        if v["latest"]:
+            status = "LATEST"
+        elif v["available"]:
+            status = "Available"
+        else:
+            status = "Purged"
+        date = v.get("date", "")[:10] if v.get("date") else ""
+        print(f"  {i:>3}  {v['version']:<16}  {sz:>10}  {status:<12}  {date}")
+
+    print(f"\n  {len(avail)} available, {len(purged)} purged")
+
+    # Step 4b: Attempt recovery of purged versions
+    if purged:
+        print(f"\n  [*] Attempting to recover {len(purged)} purged version(s)...")
+        num_recovered = _downgrader_recover_purged(
+            purged, content_id, xbl3_token, cdn_info, store_id)
+        if num_recovered:
+            avail = [v for v in versions if v["available"]]
+            purged = [v for v in versions if not v["available"]]
+            print(f"\n  {'#':>3}  {'Version':<16}  {'Size':>10}  {'Status':<12}  Date")
+            print("  " + "-" * 65)
+            for i, v in enumerate(versions, 1):
+                sz = f"{v['size'] / 1e9:.2f} GB" if v["size"] else "-"
+                if v["latest"]:
+                    status = "LATEST"
+                elif v.get("recovery_method"):
+                    status = "Recovered"
+                elif v["available"]:
+                    status = "Available"
+                else:
+                    status = "Purged"
+                date = v.get("date", "")[:10] if v.get("date") else ""
+                print(f"  {i:>3}  {v['version']:<16}  {sz:>10}  {status:<12}  {date}")
+            print(f"\n  {len(avail)} available, {len(purged)} purged"
+                  f" ({num_recovered} recovered)")
+
+    downloadable = [v for v in versions if v["available"]]
+    if not downloadable:
+        print("\n  No versions are available for download (all purged).")
+        return
+
+    # Step 5: Pick a version to download
+    print()
+    sel = input("  Version # to download (or 0=back): ").strip()
+    if sel == "0" or not sel:
+        return
+    try:
+        idx = int(sel) - 1
+        if not (0 <= idx < len(versions)):
+            print("  Invalid selection.")
+            return
+    except ValueError:
+        print("  Invalid input.")
+        return
+
+    chosen = versions[idx]
+    if not chosen["available"]:
+        print(f"  [!] v{chosen['version']} has been purged from the CDN.")
+        return
+    if not chosen["url"]:
+        print(f"  [!] No download URL for v{chosen['version']}.")
+        return
+
+    # If recovered via WU Catalog with multiple links, let user pick
+    if chosen.get("wu_links") and len(chosen["wu_links"]) > 1:
+        print(f"\n  WU Catalog found {len(chosen['wu_links'])} download link(s):")
+        for li, link in enumerate(chosen["wu_links"], 1):
+            fname_part = link.rsplit("/", 1)[-1][:70]
+            print(f"    [{li}] {fname_part}")
+        sel2 = input(f"\n  Pick link # [1]: ").strip() or "1"
+        try:
+            li2 = int(sel2) - 1
+            if 0 <= li2 < len(chosen["wu_links"]):
+                chosen["url"] = chosen["wu_links"][li2]
+        except ValueError:
+            pass
+
+    # Step 6: Download
+    default_dest = os.path.join(SCRIPT_DIR, "downgrader_downloads")
+    dest = input(f"  Destination folder [{default_dest}]: ").strip().strip('"').strip("'")
+    dest = dest or default_dest
+
+    # Create subfolder named after the game
+    game_folder_name = _sanitize_folder_name(title) + "_" + content_id[:8]
+    game_folder = os.path.join(dest, game_folder_name)
+    os.makedirs(game_folder, exist_ok=True)
+
+    # Keep the raw CDN filename (from API FileName field or URL)
+    final_name = chosen["filename"] or chosen["url"].rsplit("/", 1)[-1]
+    out_path = os.path.join(game_folder, final_name)
+
+    print(f"\n  Downloading v{chosen['version']} ({chosen['size'] / 1e9:.2f} GB)...")
+    print(f"  Folder:   {game_folder}")
+    print(f"  Filename: {final_name}")
+    result = _download_with_progress(chosen["url"], out_path, expected_size=chosen["size"])
+    if result >= 0:
+        print(f"\n[+] Downloaded: {out_path}")
+    else:
+        print(f"\n[!] Download failed.")
+
+
+def _sanitize_folder_name(name):
+    """Strip invalid filesystem characters from a string for use as a folder name."""
+    import re
+    name = re.sub(r'[<>:"/\\|?*]', '_', name)
+    name = name.strip('. ')
+    if not name:
+        name = '_'
+    return name[:80]
+
+
+import threading
+
+_batch_progress_lock = threading.Lock()
+_batch_progress = {}  # task_index → {downloaded, total, title, version, started, done}
+
+
+def _enable_ansi():
+    """Enable VT100 escape sequences on Windows console stdout."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes as _ct
+        kernel32 = _ct.windll.kernel32
+        h = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = _ct.c_ulong()
+        kernel32.GetConsoleMode(h, _ct.byref(mode))
+        kernel32.SetConsoleMode(h, mode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        return True
+    except Exception:
+        return False
+
+
+def _batch_clear_display(num_lines):
+    """Move cursor up num_lines and clear each line using ANSI escapes."""
+    if num_lines <= 0:
+        return
+    sys.stdout.write(f"\033[{num_lines}A")
+    for _ in range(num_lines):
+        sys.stdout.write("\033[2K\n")
+    sys.stdout.write(f"\033[{num_lines}A")
+    sys.stdout.flush()
+
+
+def _batch_draw_display(slot_count, done_count, total_count, total_expected, t_start):
+    """Draw live progress slots + summary line. Returns number of lines written."""
+    now = time.time()
+    elapsed = now - t_start
+    lines = []
+
+    with _batch_progress_lock:
+        active = {k: dict(v) for k, v in _batch_progress.items() if not v.get("done")}
+
+    # Sort active entries by slot index for stable display order
+    active_sorted = sorted(active.items())
+
+    # Aggregate bytes for summary
+    total_downloaded = 0
+    with _batch_progress_lock:
+        for v in _batch_progress.values():
+            total_downloaded += v.get("downloaded", 0)
+
+    # Build slot lines
+    slot_entries = list(active_sorted[:slot_count])
+    any_retrying = False
+    for i in range(slot_count):
+        if i < len(slot_entries):
+            idx, info = slot_entries[i]
+            dl = info.get("downloaded", 0)
+            total = info.get("total", 0)
+            title = info.get("title", "???")
+            ver = info.get("version", "?")
+            started = info.get("started", now)
+            retry_wait = info.get("retry_wait", 0)
+            file_elapsed = now - started
+            speed = dl / file_elapsed if file_elapsed > 0.5 else 0
+
+            # Truncate title to 24 chars
+            disp_title = title[:24] + ".." if len(title) > 24 else title
+
+            if retry_wait > 0:
+                any_retrying = True
+                if total > 0:
+                    pct = min(dl / total, 1.0)
+                    lines.append(
+                        f"  [{i+1}] {disp_title:26s}  ** waiting {retry_wait}s **"
+                        f"  {pct*100:.0f}%  {dl/1e9:.2f}/{total/1e9:.2f} GB"
+                    )
+                else:
+                    lines.append(
+                        f"  [{i+1}] {disp_title:26s}  ** waiting {retry_wait}s **"
+                        f"  {dl/1e9:.2f} GB"
+                    )
+            elif total > 0:
+                pct = min(dl / total, 1.0)
+                bar_w = 20
+                filled = int(pct * bar_w)
+                bar = "#" * filled + "-" * (bar_w - filled)
+                lines.append(
+                    f"  [{i+1}] {disp_title:26s} [{bar}] {pct*100:4.0f}%"
+                    f"  {dl/1e9:5.2f}/{total/1e9:5.2f} GB"
+                    f"  {speed/1e6:5.1f} MB/s"
+                )
+            else:
+                lines.append(
+                    f"  [{i+1}] {disp_title:26s}  downloading..."
+                    f"  {dl/1e9:5.2f} GB  {speed/1e6:5.1f} MB/s"
+                )
+        else:
+            lines.append(f"  [{i+1}] {'':26s} (idle)")
+
+    # Summary line
+    overall_speed = total_downloaded / elapsed if elapsed > 1 else 0
+    pct_total = total_downloaded / total_expected * 100 if total_expected > 0 else 0
+    if overall_speed > 0 and total_expected > total_downloaded:
+        eta_s = (total_expected - total_downloaded) / overall_speed
+        if eta_s >= 3600:
+            eta_str = f"{eta_s/3600:.1f}h"
+        elif eta_s >= 60:
+            eta_str = f"{eta_s/60:.0f}m"
+        else:
+            eta_str = f"{eta_s:.0f}s"
+    else:
+        eta_str = "--"
+    summary = (
+        f"  {done_count}/{total_count} done"
+        f" | {total_downloaded/1e9:.2f}/{total_expected/1e9:.2f} GB"
+        f" ({pct_total:.0f}%)"
+        f" | {overall_speed/1e6:.1f} MB/s"
+        f" | ETA {eta_str}"
+    )
+    if any_retrying:
+        summary += "  [network: retrying]"
+    lines.append(summary)
+
+    output = "\n".join(lines) + "\n"
+    sys.stdout.write(output)
+    sys.stdout.flush()
+    return len(lines)
+
+
+def _batch_download_worker(task):
+    """Download a single file for the batch downgrader. Runs in a thread.
+
+    Returns the task dict with 'result_bytes' and 'error' keys added.
+    No stdout output — the caller prints status as futures complete.
+
+    On transient network errors (DNS failure, connection reset, timeout,
+    mid-stream read error), retries indefinitely with exponential backoff
+    (5s → 10s → 20s → … capped at 60s), resuming from bytes already on disk.
+    Only permanent HTTP errors (4xx except 408/429) cause immediate failure.
+    """
+    url = task["url"]
+    dest_file = task["out_path"]
+    expected_size = task["expected_size"]
+    idx = task["_progress_idx"]
+    CHUNK = 8 * 1024 * 1024  # 8 MB
+    RETRY_BASE = 5       # initial backoff seconds
+    RETRY_CAP = 60       # max backoff seconds
+
+    # Check if already complete on disk
+    if os.path.exists(dest_file):
+        existing = os.path.getsize(dest_file)
+        if expected_size and existing == expected_size:
+            task["result_bytes"] = 0
+            task["error"] = None
+            task["skipped"] = True
+            with _batch_progress_lock:
+                _batch_progress[idx] = {
+                    "downloaded": expected_size, "total": expected_size,
+                    "title": task["title"], "version": task["version"],
+                    "started": time.time(), "done": True,
+                }
+            return task
+
+    initial_on_disk = os.path.getsize(dest_file) if os.path.exists(dest_file) else 0
+
+    # Register progress entry
+    with _batch_progress_lock:
+        _batch_progress[idx] = {
+            "downloaded": initial_on_disk, "total": expected_size or 0,
+            "title": task["title"], "version": task["version"],
+            "started": time.time(), "done": False, "retry_wait": 0,
+        }
+
+    backoff = RETRY_BASE
+    while True:
+        # Recalculate resume point from what's on disk
+        resume_from = os.path.getsize(dest_file) if os.path.exists(dest_file) else 0
+        with _batch_progress_lock:
+            _batch_progress[idx]["downloaded"] = resume_from
+            _batch_progress[idx]["retry_wait"] = 0
+
+        headers = {}
+        if resume_from:
+            headers["Range"] = f"bytes={resume_from}-"
+
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                total = int(resp.headers.get("Content-Length", 0)) + resume_from
+                downloaded = resume_from
+                with _batch_progress_lock:
+                    _batch_progress[idx]["total"] = total
+                mode = "ab" if resume_from else "wb"
+                with open(dest_file, mode) as f:
+                    while True:
+                        buf = resp.read(CHUNK)
+                        if not buf:
+                            break
+                        f.write(buf)
+                        downloaded += len(buf)
+                        with _batch_progress_lock:
+                            _batch_progress[idx]["downloaded"] = downloaded
+            # Success
+            task["result_bytes"] = downloaded - initial_on_disk
+            task["error"] = None
+            backoff = RETRY_BASE  # reset for cleanliness
+            break
+
+        except urllib.error.HTTPError as e:
+            if e.code == 416:
+                # Range not satisfiable — file already complete
+                task["result_bytes"] = 0
+                task["error"] = None
+                task["skipped"] = True
+                break
+            elif e.code in (408, 429, 500, 502, 503, 504):
+                # Retryable server errors
+                with _batch_progress_lock:
+                    _batch_progress[idx]["retry_wait"] = backoff
+                time.sleep(backoff)
+                backoff = min(backoff * 2, RETRY_CAP)
+                continue
+            else:
+                # Permanent HTTP error (403, 404, etc.)
+                task["result_bytes"] = -1
+                task["error"] = f"HTTP {e.code}: {e.reason}"
+                break
+
+        except Exception:
+            # Network-level errors: DNS failure, connection reset, timeout,
+            # mid-stream read error, SSL error, etc. — always retry.
+            with _batch_progress_lock:
+                _batch_progress[idx]["retry_wait"] = backoff
+            time.sleep(backoff)
+            backoff = min(backoff * 2, RETRY_CAP)
+            continue
+
+    with _batch_progress_lock:
+        _batch_progress[idx]["done"] = True
+        _batch_progress[idx]["retry_wait"] = 0
+
+    return task
+
+
+def process_batch_downgrader():
+    """Batch Game Downgrader — download all versions of multiple games from CDN."""
+    import re as _re
+    from datetime import datetime
+    from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+
+    BATCH_WORKERS = 5
+
+    print("\n[Batch Game Downgrader — Download All Versions]")
+    print()
+    print("  Paste Content IDs or Product IDs (one per line, blank line to finish):")
+
+    raw_ids = []
+    while True:
+        line = input("  > ").strip().strip('"').strip("'").strip()
+        if not line:
+            break
+        raw_ids.append(line)
+
+    if not raw_ids:
+        print("  No input.")
+        return
+
+    # Deduplicate while preserving order
+    seen = set()
+    input_ids = []
+    for rid in raw_ids:
+        key = rid.lower()
+        if key not in seen:
+            seen.add(key)
+            input_ids.append(rid)
+
+    print(f"\n  {len(input_ids)} item(s) entered.")
+
+    default_dest = os.path.join(SCRIPT_DIR, "downgrader_downloads")
+    dest = input(f"  Destination folder [{default_dest}]: ").strip().strip('"').strip("'")
+    dest = dest or default_dest
+    os.makedirs(dest, exist_ok=True)
+
+    # Authenticate once
+    try:
+        xbl3_token, _signer = _get_update_xsts_token()
+    except Exception as e:
+        print(f"[!] Authentication failed: {e}")
+        return
+
+    # Tracking for report
+    games_log = []
+    not_found_ids = []
+    all_purged_versions = []
+    all_errors = []
+    download_queue = []  # list of task dicts to feed to thread pool
+
+    # ══════════════════════════════════════════
+    # Phase 1: Discover all versions (sequential — API calls are fast)
+    # ══════════════════════════════════════════
+    print("\n  Phase 1: Discovering versions...\n")
+
+    for gi, raw_id in enumerate(input_ids, 1):
+        game_entry = {
+            "input_id": raw_id,
+            "content_id": "",
+            "title": "",
+            "versions_total": 0,
+            "versions_available": 0,
+            "versions_purged": 0,
+            "versions_recovered": 0,
+            "downloaded": [],
+            "purged": [],
+            "errors": [],
+        }
+
+        # --- Parse input: GUID, Product ID, or Store URL ---
+        content_ids_to_process = []  # list of (content_id, title, store_id)
+        parsed_id = raw_id
+
+        # Extract Product ID or Content ID (GUID) from store URLs
+        if "microsoft.com" in raw_id.lower() or "xbox.com" in raw_id.lower():
+            # Check for GUID in URL (legacy store.xbox.com format)
+            guid_m = _re.search(
+                r'([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}'
+                r'-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})',
+                raw_id)
+            if guid_m:
+                parsed_id = guid_m.group(1).lower()
+            else:
+                m = _re.search(
+                    r'(?:/detail/|/productId/|/p/[^/]+/|/games/store/[^/]+/)'
+                    r'([A-Za-z0-9]{12})',
+                    raw_id)
+                if m:
+                    parsed_id = m.group(1).upper()
+                else:
+                    from urllib.parse import urlparse
+                    path = urlparse(raw_id).path.rstrip("/")
+                    last_seg = path.rsplit("/", 1)[-1] if "/" in path else path
+                    if last_seg and len(last_seg) == 12 and last_seg.isalnum():
+                        parsed_id = last_seg.upper()
+
+        # Determine if GUID (Content ID) or Product ID
+        guid_pattern = _re.compile(
+            r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+        if guid_pattern.match(parsed_id):
+            # Direct Content ID
+            content_ids_to_process.append((parsed_id.lower(), parsed_id[:13] + "...", ""))
+        else:
+            # Assume Product ID — resolve to Content ID(s)
+            print(f"  [{gi}/{len(input_ids)}] Resolving {parsed_id}...")
+            cid_list = _resolve_product_to_content_ids(parsed_id)
+            if not cid_list:
+                print(f"        [!] No Content IDs found for {parsed_id}")
+                not_found_ids.append(raw_id)
+                game_entry["errors"].append("No Content IDs found via Display Catalog")
+                games_log.append(game_entry)
+                continue
+            for cid, pname in cid_list:
+                content_ids_to_process.append((cid, pname, parsed_id))
+
+        for ci, (content_id, title, store_id) in enumerate(content_ids_to_process):
+            # Clone entry for each content_id when a Product ID resolves to multiple
+            if ci > 0:
+                game_entry = {
+                    "input_id": raw_id,
+                    "content_id": "",
+                    "title": "",
+                    "versions_total": 0,
+                    "versions_available": 0,
+                    "versions_purged": 0,
+                    "versions_recovered": 0,
+                    "downloaded": [],
+                    "purged": [],
+                    "errors": [],
+                }
+
+            game_entry["content_id"] = content_id
+            game_entry["title"] = title
+
+            cid_short = content_id[:8]
+            if len(content_ids_to_process) == 1:
+                print(f"\n  [{gi}/{len(input_ids)}] {title} ({cid_short}...)")
+            else:
+                print(f"\n  [{gi}/{len(input_ids)}][{ci+1}/{len(content_ids_to_process)}]"
+                      f" {title} ({cid_short}...)")
+
+            # Discover versions
+            versions, cdn_info = _downgrader_discover_versions(content_id, xbl3_token)
+            if not versions:
+                print(f"        [!] No versions found (no package on CDN)")
+                not_found_ids.append(f"{raw_id} → {content_id}" if raw_id != content_id else raw_id)
+                game_entry["errors"].append("No package on CDN")
+                games_log.append(game_entry)
+                continue
+
+            # Update title from CDN info if we only had a partial one
+            if cdn_info.get("filename") and title == content_id[:13] + "...":
+                title = cdn_info["filename"]
+                game_entry["title"] = title
+
+            avail = [v for v in versions if v["available"]]
+            purged = [v for v in versions if not v["available"]]
+            game_entry["versions_total"] = len(versions)
+            game_entry["versions_available"] = len(avail)
+            game_entry["versions_purged"] = len(purged)
+
+            print(f"        {len(versions)} version(s) found"
+                  f" ({len(avail)} available, {len(purged)} purged)")
+
+            # Auto-recover purged versions
+            num_recovered = 0
+            if purged:
+                print(f"        Recovering purged... ", end="", flush=True)
+                num_recovered = _downgrader_recover_purged(
+                    purged, content_id, xbl3_token, cdn_info, store_id)
+                if num_recovered:
+                    avail = [v for v in versions if v["available"]]
+                    purged = [v for v in versions if not v["available"]]
+                    game_entry["versions_available"] = len(avail)
+                    game_entry["versions_purged"] = len(purged)
+                print(f"{num_recovered} recovered")
+            game_entry["versions_recovered"] = num_recovered
+
+            # Record purged versions
+            for v in purged:
+                game_entry["purged"].append(v["version"])
+                all_purged_versions.append((title, v["version"]))
+
+            downloadable = [v for v in versions if v["available"]]
+            if not downloadable:
+                print(f"        No versions available for download (all purged)")
+                games_log.append(game_entry)
+                continue
+
+            # Queue downloads for phase 2
+            game_folder_name = _sanitize_folder_name(title) + "_" + cid_short
+            game_folder = os.path.join(dest, game_folder_name)
+            os.makedirs(game_folder, exist_ok=True)
+
+            queued = 0
+            for v in downloadable:
+                final_name = v["filename"] or v["url"].rsplit("/", 1)[-1]
+                out_path = os.path.join(game_folder, final_name)
+
+                if not v["url"]:
+                    game_entry["errors"].append(f"v{v['version']}: no download URL")
+                    all_errors.append((title, v["version"], "no download URL"))
+                    continue
+
+                download_queue.append({
+                    "url": v["url"],
+                    "out_path": out_path,
+                    "expected_size": v["size"],
+                    "title": title,
+                    "version": v["version"],
+                    "filename": final_name,
+                    "game_entry": game_entry,
+                })
+                queued += 1
+
+            print(f"        {queued} version(s) queued for download")
+            games_log.append(game_entry)
+
+    # ══════════════════════════════════════════
+    # Phase 2: Parallel downloads with live display
+    # ══════════════════════════════════════════
+    total_files = 0
+    total_bytes = 0
+
+    if not download_queue:
+        print("\n  No files to download.")
+    else:
+        total_q = len(download_queue)
+        total_size = sum(t["expected_size"] for t in download_queue)
+        print(f"\n  Phase 2: Downloading {total_q} file(s)"
+              f" (~{total_size / 1e9:.2f} GB) with {BATCH_WORKERS} threads...\n")
+
+        _enable_ansi()
+
+        # Assign progress indices and clear global state
+        for i, task in enumerate(download_queue):
+            task["_progress_idx"] = i
+        with _batch_progress_lock:
+            _batch_progress.clear()
+
+        done_count = 0
+        t_start = time.time()
+        display_lines = 0
+
+        with ThreadPoolExecutor(max_workers=BATCH_WORKERS) as pool:
+            futures = {pool.submit(_batch_download_worker, task): task
+                       for task in download_queue}
+            pending = set(futures.keys())
+
+            while pending:
+                completed, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+
+                # Erase the live display block
+                _batch_clear_display(display_lines)
+
+                # Print permanent completion lines for finished downloads
+                for f in completed:
+                    done_count += 1
+                    task = f.result()
+                    ver = task["version"]
+                    title = task["title"]
+                    sz = task["expected_size"]
+                    sz_str = f"{sz / 1e9:.2f} GB" if sz else "? GB"
+
+                    if task.get("skipped"):
+                        print(f"  [{done_count}/{total_q}]  {title} v{ver}"
+                              f"  {sz_str}  already complete")
+                        actual_size = (os.path.getsize(task["out_path"])
+                                       if os.path.exists(task["out_path"]) else sz)
+                        task["game_entry"]["downloaded"].append({
+                            "version": ver,
+                            "size": actual_size,
+                            "filename": task["filename"],
+                            "path": task["out_path"],
+                        })
+                        total_files += 1
+                        total_bytes += actual_size
+                    elif task["error"]:
+                        print(f"  [{done_count}/{total_q}]  {title} v{ver}"
+                              f"  {sz_str}  FAILED: {task['error']}")
+                        task["game_entry"]["errors"].append(
+                            f"v{ver}: {task['error']}")
+                        all_errors.append((title, ver, task["error"]))
+                    else:
+                        actual_size = (os.path.getsize(task["out_path"])
+                                       if os.path.exists(task["out_path"]) else sz)
+                        info = _batch_progress.get(task["_progress_idx"], {})
+                        file_started = info.get("started", t_start)
+                        file_elapsed = time.time() - file_started
+                        speed = actual_size / file_elapsed if file_elapsed > 0.5 else 0
+                        print(f"  [{done_count}/{total_q}]  {title} v{ver}"
+                              f"  {sz_str}  done ({speed / 1e6:.1f} MB/s)")
+                        task["game_entry"]["downloaded"].append({
+                            "version": ver,
+                            "size": actual_size,
+                            "filename": task["filename"],
+                            "path": task["out_path"],
+                        })
+                        total_files += 1
+                        total_bytes += actual_size
+
+                # Draw live display if there are still pending downloads
+                if pending:
+                    display_lines = _batch_draw_display(
+                        BATCH_WORKERS, done_count, total_q, total_size, t_start)
+                else:
+                    display_lines = 0
+
+        wall = time.time() - t_start
+        if wall > 0 and total_bytes > 0:
+            print(f"\n  Finished in {wall:.0f}s"
+                  f" ({total_bytes / 1e9:.2f} GB,"
+                  f" {total_bytes / wall / 1e6:.1f} MB/s effective)")
+
+    # ══════════════════════════════════════════
+    # Report
+    # ══════════════════════════════════════════
+    print()
+    print("  " + "=" * 50)
+    print("  Batch Download Report")
+    print("  " + "=" * 50)
+    print()
+
+    # Downloaded
+    downloaded_entries = [(g, d) for g in games_log for d in g["downloaded"]]
+    if downloaded_entries:
+        print(f"  Downloaded ({total_files} file(s), {total_bytes / 1e9:.2f} GB):")
+        current_title = None
+        for g, d in downloaded_entries:
+            if g["title"] != current_title:
+                current_title = g["title"]
+                print(f"    {current_title}")
+            print(f"      v{d['version']:16s}  {d['size'] / 1e9:.2f} GB  {d['filename']}")
+    else:
+        print("  Downloaded (0 files, 0 GB):")
+        print("    (none)")
+    print()
+
+    # Not Found
+    if not_found_ids:
+        print(f"  Not Found ({len(not_found_ids)}):")
+        for nf in not_found_ids:
+            print(f"    {nf}")
+    else:
+        print("  Not Found (0):")
+        print("    (none)")
+    print()
+
+    # Purged
+    if all_purged_versions:
+        print(f"  Purged ({len(all_purged_versions)} version(s)):")
+        for title, ver in all_purged_versions:
+            print(f"    {title}  v{ver}")
+    else:
+        print("  Purged (0):")
+        print("    (none)")
+    print()
+
+    # Errors
+    if all_errors:
+        print(f"  Errors ({len(all_errors)}):")
+        for title, ver, err in all_errors:
+            print(f"    {title}  v{ver}  — {err}")
+    else:
+        print("  Errors (0):")
+        print("    (none)")
+
+    # ══════════════════════════════════════════
+    # JSON log
+    # ══════════════════════════════════════════
+    now = datetime.now()
+    log_data = {
+        "timestamp": now.strftime("%Y-%m-%dT%H:%M:%S"),
+        "input_ids": input_ids,
+        "destination": os.path.abspath(dest),
+        "games": games_log,
+        "summary": {
+            "games_processed": len(games_log),
+            "games_not_found": len(not_found_ids),
+            "files_downloaded": total_files,
+            "total_bytes": total_bytes,
+            "versions_purged": len(all_purged_versions),
+            "errors": len(all_errors),
+        },
+    }
+    log_filename = f"batch_log_{now.strftime('%Y%m%d_%H%M%S')}.json"
+    log_path = os.path.join(dest, log_filename)
+    try:
+        with open(log_path, "w", encoding="utf-8") as f:
+            json.dump(log_data, f, indent=2, ensure_ascii=False)
+        print(f"\n  Log saved: {log_path}")
+    except Exception as e:
+        print(f"\n  [!] Failed to save log: {e}")
+
+
 def _cdn_backup_games(items, select_all=False):
     """Download current-version game packages from Xbox CDN. Used by USB tool submenu."""
     downloadable = [x for x in items if x.get("cdnUrls") and x.get("contentId")]
@@ -15555,6 +17671,8 @@ def interactive_menu():
         print("  CDN Installers:")
         print("    [m] Xbox One / Series X|S CDN Installer")
         print("    [n] MS Store (Win8/8.1/10) CDN Installer")
+        print("    [u] Game Downgrader (older versions)")
+        print("    [y] Batch Game Downgrader (all versions)")
         print()
         print("  GFWL:")
         print("    [o] GFWL CDN Installer")
@@ -15607,6 +17725,7 @@ def interactive_menu():
             print(_cr("Oriole"))
             print(_cr("Strive"))
             print(_cr("jondeezie"))
+            print(_cr("Landcross (dbox.tools)"))
             print(_cr("larvi"))
             print(_cr("Omfamna"))
             print(_cr("RetroChief1969"))
@@ -15894,6 +18013,22 @@ def interactive_menu():
                 _op_summary("MS Store Installer", detail="Done", elapsed=time.time() - _t0)
             except Exception as _e:
                 _op_summary("MS Store Installer", success=False, detail=str(_e), elapsed=time.time() - _t0)
+            continue
+        elif pu == "u":
+            _t0 = time.time()
+            try:
+                process_game_downgrader()
+                _op_summary("Game Downgrader", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("Game Downgrader", success=False, detail=str(_e), elapsed=time.time() - _t0)
+            continue
+        elif pu == "y":
+            _t0 = time.time()
+            try:
+                process_batch_downgrader()
+                _op_summary("Batch Downgrader", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("Batch Downgrader", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "o":
             _t0 = time.time()

@@ -21,6 +21,7 @@ Usage:
 import gzip
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -32,7 +33,10 @@ from functools import wraps
 import click
 import psycopg2
 import psycopg2.extras
-from flask import Flask, Response, jsonify, request
+from cryptography.fernet import Fernet
+from flask import Flask, Response, jsonify, redirect, request
+
+import xbox_auth_server as xba
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -51,6 +55,24 @@ UPLOAD_LIMIT = 5        # per minute
 # In-memory cache for shared data responses (key -> (etag, gzipped_bytes, timestamp))
 _shared_cache = {}
 SHARED_CACHE_TTL = 300  # 5 minutes
+ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "")
+
+# Xbox OAuth2 settings
+XBOX_CLIENT_ID = os.environ.get("XBOX_CLIENT_ID", "")
+XBOX_CLIENT_SECRET = os.environ.get("XBOX_CLIENT_SECRET", "")
+XBOX_REDIRECT_URI = os.environ.get("XBOX_REDIRECT_URI", "https://xct.freshdex.app/api/v1/xbox/callback")
+XBOX_ENCRYPTION_KEY = os.environ.get("XBOX_ENCRYPTION_KEY", "")
+_fernet = Fernet(XBOX_ENCRYPTION_KEY.encode()) if XBOX_ENCRYPTION_KEY else None
+
+# Xbox auth rate limiters
+_rate_xbox_refresh = defaultdict(list)   # api_key -> [timestamps]
+XBOX_REFRESH_LIMIT = 1     # per 5 minutes
+
+# OAuth2 state tokens (short-lived, in-memory)
+_oauth_states = {}          # state -> {created_at, contributor_id (optional)}
+OAUTH_STATE_TTL = 600       # 10 minutes
+
+log = logging.getLogger(__name__)
 
 
 def get_db():
@@ -77,6 +99,7 @@ def init_db():
     conn = get_db()
     try:
         cur = conn.cursor()
+        # Core tables (original)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS shared_data (
                 key         TEXT PRIMARY KEY,
@@ -97,6 +120,146 @@ def init_db():
             )
         """)
         conn.commit()
+    except Exception:
+        conn.rollback()
+    # Marketplace scanner tables — separate transaction so core tables
+    # are committed even if these fail (e.g. on first deploy before migration)
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS marketplace_products (
+                product_id        VARCHAR(16) PRIMARY KEY,
+                title             TEXT NOT NULL DEFAULT '',
+                publisher         TEXT NOT NULL DEFAULT '',
+                developer         TEXT NOT NULL DEFAULT '',
+                category          TEXT NOT NULL DEFAULT '',
+                release_date      DATE,
+                platforms         TEXT[] NOT NULL DEFAULT '{}',
+                product_kind      VARCHAR(32) NOT NULL DEFAULT '',
+                xbox_title_id     VARCHAR(32) NOT NULL DEFAULT '',
+                is_bundle         BOOLEAN NOT NULL DEFAULT FALSE,
+                is_ea_play        BOOLEAN NOT NULL DEFAULT FALSE,
+                xcloud_streamable BOOLEAN NOT NULL DEFAULT FALSE,
+                capabilities      TEXT[] NOT NULL DEFAULT '{}',
+                alternate_ids     JSONB NOT NULL DEFAULT '[]',
+                image_tile        TEXT NOT NULL DEFAULT '',
+                image_box_art     TEXT NOT NULL DEFAULT '',
+                image_hero        TEXT NOT NULL DEFAULT '',
+                short_description TEXT NOT NULL DEFAULT '',
+                average_rating    REAL NOT NULL DEFAULT 0,
+                rating_count      INTEGER NOT NULL DEFAULT 0,
+                first_seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_seen_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                sources           TEXT[] NOT NULL DEFAULT '{}'
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS marketplace_prices (
+                product_id  VARCHAR(16) REFERENCES marketplace_products(product_id),
+                market      VARCHAR(4) NOT NULL,
+                currency    VARCHAR(4) NOT NULL,
+                msrp        REAL NOT NULL DEFAULT 0,
+                sale_price  REAL NOT NULL DEFAULT 0,
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (product_id, market)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS marketplace_channels (
+                product_id  VARCHAR(16) REFERENCES marketplace_products(product_id),
+                channel     VARCHAR(64) NOT NULL,
+                regions     TEXT[] NOT NULL DEFAULT '{}',
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (product_id, channel)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS marketplace_tags (
+                product_id  VARCHAR(16) NOT NULL,
+                tag_type    VARCHAR(32) NOT NULL,
+                tag_value   TEXT NOT NULL DEFAULT '',
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (product_id, tag_type)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS marketplace_scans (
+                id                SERIAL PRIMARY KEY,
+                started_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                completed_at      TIMESTAMPTZ,
+                status            VARCHAR(16) NOT NULL DEFAULT 'running',
+                scan_type         VARCHAR(32) NOT NULL DEFAULT 'full',
+                channels_scanned  INTEGER DEFAULT 0,
+                browse_products   INTEGER DEFAULT 0,
+                catalog_enriched  INTEGER DEFAULT 0,
+                prices_fetched    INTEGER DEFAULT 0,
+                products_total    INTEGER DEFAULT 0,
+                products_new      INTEGER DEFAULT 0,
+                errors            JSONB DEFAULT '[]',
+                duration_seconds  REAL
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_mp_xbox_title_id
+            ON marketplace_products(xbox_title_id) WHERE xbox_title_id != ''
+        """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[!] Marketplace tables init failed ({e}) — run migration manually")
+    # Xbox Live auth + achievements tables
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS xbox_auth (
+                contributor_id    INTEGER PRIMARY KEY REFERENCES contributors(id) ON DELETE CASCADE,
+                xuid              TEXT NOT NULL,
+                gamertag          TEXT NOT NULL,
+                refresh_token_enc BYTEA NOT NULL,
+                xbl3_token        TEXT,
+                token_acquired_at TIMESTAMPTZ,
+                created_at        TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS xbox_achievement_summaries (
+                contributor_id       INTEGER NOT NULL REFERENCES contributors(id) ON DELETE CASCADE,
+                xbox_title_id        TEXT NOT NULL,
+                product_id           TEXT NOT NULL DEFAULT '',
+                title_name           TEXT NOT NULL DEFAULT '',
+                current_gamerscore   INTEGER NOT NULL DEFAULT 0,
+                total_gamerscore     INTEGER NOT NULL DEFAULT 0,
+                current_achievements INTEGER NOT NULL DEFAULT 0,
+                total_achievements   INTEGER NOT NULL DEFAULT 0,
+                last_time_played     TIMESTAMPTZ,
+                display_image        TEXT NOT NULL DEFAULT '',
+                platforms            TEXT[] NOT NULL DEFAULT '{}',
+                fetched_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (contributor_id, xbox_title_id)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS xbox_achievement_details (
+                contributor_id  INTEGER NOT NULL REFERENCES contributors(id) ON DELETE CASCADE,
+                xbox_title_id   TEXT NOT NULL,
+                achievement_id  TEXT NOT NULL,
+                name            TEXT NOT NULL DEFAULT '',
+                description     TEXT NOT NULL DEFAULT '',
+                gamerscore      INTEGER NOT NULL DEFAULT 0,
+                is_secret       BOOLEAN NOT NULL DEFAULT FALSE,
+                unlocked        BOOLEAN NOT NULL DEFAULT FALSE,
+                unlock_time     TIMESTAMPTZ,
+                rarity_category TEXT NOT NULL DEFAULT '',
+                rarity_pct      REAL NOT NULL DEFAULT 0,
+                media_url       TEXT NOT NULL DEFAULT '',
+                fetched_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (contributor_id, xbox_title_id, achievement_id)
+            )
+        """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[!] Xbox auth tables init failed ({e}) — run migration manually")
     finally:
         conn.close()
 
@@ -235,6 +398,24 @@ def index():
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "public, max-age=3600",
     })
+
+
+# ---------------------------------------------------------------------------
+# Tab slug routes — persistent URLs for tabs (e.g. /xvcdb, /gamepass)
+# ---------------------------------------------------------------------------
+
+_TAB_SLUGS = {
+    "library", "marketplace", "gamepass", "playhistory", "scanlog",
+    "gamertags", "gfwl", "xvcdb", "imports", "achievements",
+}
+
+
+@app.route("/<slug>")
+def tab_route(slug):
+    """Serve same HTML for tab URLs — client JS reads path to auto-select tab."""
+    if slug not in _TAB_SLUGS:
+        return index()  # fallback to index for unknown slugs
+    return index()
 
 
 # ---------------------------------------------------------------------------
@@ -576,6 +757,200 @@ def shared_meta():
 
 
 # ---------------------------------------------------------------------------
+# Marketplace endpoints — scanner-populated data
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/marketplace")
+def marketplace():
+    """Full marketplace dataset from scanner-populated tables.
+
+    Returns products, prices, channels, tags, exchange rates, and last scan info.
+    Gzipped with ETag caching (5-min in-memory cache).
+    """
+    _empty_result = {
+        "products": [], "exchangeRates": {}, "gcFactor": 0.81,
+        "tags": {}, "lastScan": None,
+    }
+    conn = get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Check if tables exist (graceful fallback before migration)
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_name = 'marketplace_products'
+            )
+        """)
+        if not cur.fetchone()["exists"]:
+            return _gzip_json_response(_empty_result, cache_key="marketplace_full")
+
+        # 1. Products
+        cur.execute("""
+            SELECT product_id, title, publisher, developer, category, release_date,
+                   platforms, product_kind, xbox_title_id, is_bundle, is_ea_play,
+                   xcloud_streamable, capabilities, alternate_ids,
+                   image_tile, image_box_art, image_hero, short_description,
+                   average_rating, rating_count, sources
+            FROM marketplace_products
+            ORDER BY title
+        """)
+        products_raw = cur.fetchall()
+
+        # 2. Prices — pivot into {product_id: {market: {msrp, salePrice, currency}}}
+        cur.execute("SELECT product_id, market, currency, msrp, sale_price FROM marketplace_prices")
+        price_map = {}
+        for row in cur:
+            pid = row["product_id"]
+            if pid not in price_map:
+                price_map[pid] = {}
+            price_map[pid][row["market"]] = {
+                "msrp": row["msrp"],
+                "salePrice": row["sale_price"],
+                "currency": row["currency"],
+            }
+
+        # 3. Channels — pivot into {product_id: [channel_names]}
+        cur.execute("SELECT product_id, channel FROM marketplace_channels")
+        channel_map = {}
+        for row in cur:
+            pid = row["product_id"]
+            if pid not in channel_map:
+                channel_map[pid] = []
+            channel_map[pid].append(row["channel"])
+
+        # 4. Tags
+        cur.execute("SELECT product_id, tag_type, tag_value FROM marketplace_tags")
+        tags = {}
+        for row in cur:
+            pid = row["product_id"]
+            if pid not in tags:
+                tags[pid] = {}
+            tags[pid][row["tag_type"]] = row["tag_value"]
+
+        # 5. Exchange rates from shared_data
+        cur.execute("SELECT data FROM shared_data WHERE key = 'rates'")
+        rates_row = cur.fetchone()
+        exchange_rates = {}
+        if rates_row and isinstance(rates_row["data"], dict):
+            exchange_rates = rates_row["data"].get("rates", rates_row["data"])
+
+        # 6. Last scan
+        cur.execute("""
+            SELECT id, completed_at, status, products_total, products_new,
+                   duration_seconds, scan_type
+            FROM marketplace_scans
+            ORDER BY id DESC LIMIT 1
+        """)
+        scan_row = cur.fetchone()
+        last_scan = None
+        if scan_row:
+            last_scan = {
+                "completedAt": scan_row["completed_at"].isoformat() if scan_row["completed_at"] else None,
+                "productsTotal": scan_row["products_total"],
+                "productsNew": scan_row["products_new"],
+                "status": scan_row["status"],
+                "scanType": scan_row["scan_type"],
+                "durationSeconds": scan_row["duration_seconds"],
+            }
+
+        # Assemble product list
+        products = []
+        for p in products_raw:
+            pid = p["product_id"]
+            products.append({
+                "productId": pid,
+                "title": p["title"],
+                "publisher": p["publisher"],
+                "developer": p["developer"],
+                "category": p["category"],
+                "releaseDate": p["release_date"].isoformat() if p["release_date"] else "",
+                "platforms": p["platforms"] or [],
+                "productKind": p["product_kind"],
+                "xboxTitleId": p["xbox_title_id"],
+                "isBundle": p["is_bundle"],
+                "isEAPlay": p["is_ea_play"],
+                "xCloudStreamable": p["xcloud_streamable"],
+                "imageBoxArt": p["image_box_art"],
+                "imageHero": p["image_hero"],
+                "shortDescription": p["short_description"],
+                "averageRating": p["average_rating"],
+                "ratingCount": p["rating_count"],
+                "channels": channel_map.get(pid, []),
+                "sources": p["sources"] or [],
+                "regionalPrices": price_map.get(pid, {}),
+            })
+
+        result = {
+            "products": products,
+            "exchangeRates": exchange_rates,
+            "gcFactor": 0.81,
+            "tags": tags,
+            "lastScan": last_scan,
+        }
+        return _gzip_json_response(result, cache_key="marketplace_full")
+
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+    finally:
+        conn.close()
+
+
+@app.route("/api/v1/marketplace/tags", methods=["POST"])
+def marketplace_tags_update():
+    """Admin endpoint: set manual tags on marketplace products.
+
+    Requires ADMIN_API_KEY env var. Body: {productId, tagType, tagValue}.
+    """
+    if not ADMIN_API_KEY:
+        return jsonify(error="Admin endpoint not configured"), 501
+
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or auth[7:].strip() != ADMIN_API_KEY:
+        return jsonify(error="Invalid admin key"), 403
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify(error="JSON body required"), 400
+
+    product_id = (data.get("productId") or "").strip()
+    tag_type = (data.get("tagType") or "").strip()
+    tag_value = (data.get("tagValue") or "").strip()
+
+    if not product_id or not tag_type:
+        return jsonify(error="productId and tagType are required"), 400
+
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        if tag_value:
+            cur.execute("""
+                INSERT INTO marketplace_tags (product_id, tag_type, tag_value, created_at)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (product_id, tag_type) DO UPDATE SET
+                    tag_value = EXCLUDED.tag_value, created_at = NOW()
+            """, (product_id, tag_type, tag_value))
+        else:
+            # Empty value = delete the tag
+            cur.execute("DELETE FROM marketplace_tags WHERE product_id = %s AND tag_type = %s",
+                        (product_id, tag_type))
+        conn.commit()
+        # Invalidate marketplace cache
+        _shared_cache.pop("marketplace_full", None)
+        return jsonify(status="ok", productId=product_id, tagType=tag_type, tagValue=tag_value)
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error=str(e)), 500
+    finally:
+        conn.close()
+
+
+@app.route("/api/v1/marketplace/tags", methods=["OPTIONS"])
+def marketplace_tags_preflight():
+    return Response(status=204)
+
+
+# ---------------------------------------------------------------------------
 # Collection endpoints — auth required
 # ---------------------------------------------------------------------------
 
@@ -777,6 +1152,529 @@ def import_shared(key, filepath):
 
 
 # ---------------------------------------------------------------------------
+# Xbox Live OAuth2 — helpers
+# ---------------------------------------------------------------------------
+
+def _cleanup_oauth_states():
+    """Remove expired OAuth state tokens."""
+    now = time.time()
+    expired = [s for s, v in _oauth_states.items() if now - v["created_at"] > OAUTH_STATE_TTL]
+    for s in expired:
+        del _oauth_states[s]
+
+
+def _ensure_xbl3_token(cur, conn, contributor_id):
+    """Return a valid XBL3.0 token for the contributor, refreshing if needed.
+
+    Returns (xbl3_token, xuid, gamertag) or raises.
+    """
+    cur.execute(
+        "SELECT xuid, gamertag, refresh_token_enc, xbl3_token, token_acquired_at "
+        "FROM xbox_auth WHERE contributor_id = %s",
+        (contributor_id,))
+    row = cur.fetchone()
+    if not row:
+        raise ValueError("No Xbox account linked")
+
+    # Check if token is still fresh (< 12 hours)
+    token_age = 999999
+    if row["token_acquired_at"]:
+        token_age = (datetime.now(timezone.utc) - row["token_acquired_at"]).total_seconds()
+
+    if row["xbl3_token"] and token_age < 43200:  # 12 hours
+        return row["xbl3_token"], row["xuid"], row["gamertag"]
+
+    # Token stale — refresh
+    if not _fernet:
+        raise ValueError("Encryption key not configured")
+    refresh_token = _fernet.decrypt(row["refresh_token_enc"]).decode()
+
+    try:
+        msa = xba.refresh_msa_token(XBOX_CLIENT_ID, XBOX_CLIENT_SECRET, refresh_token)
+    except Exception:
+        # Refresh token revoked — clear Xbox auth
+        cur.execute("DELETE FROM xbox_auth WHERE contributor_id = %s", (contributor_id,))
+        cur.execute("DELETE FROM xbox_achievement_summaries WHERE contributor_id = %s",
+                    (contributor_id,))
+        cur.execute("DELETE FROM xbox_achievement_details WHERE contributor_id = %s",
+                    (contributor_id,))
+        conn.commit()
+        raise ValueError("Xbox session expired — please sign in again")
+
+    auth_result = xba.full_auth(msa["access_token"])
+    new_refresh_enc = _fernet.encrypt(msa["refresh_token"].encode())
+
+    cur.execute("""
+        UPDATE xbox_auth SET
+            xbl3_token = %s, token_acquired_at = NOW(),
+            refresh_token_enc = %s, gamertag = %s, xuid = %s
+        WHERE contributor_id = %s
+    """, (auth_result["xbl3_token"], new_refresh_enc,
+          auth_result["gamertag"], auth_result["xuid"], contributor_id))
+    conn.commit()
+
+    return auth_result["xbl3_token"], auth_result["xuid"], auth_result["gamertag"]
+
+
+def _store_achievement_summaries(cur, contributor_id, summaries):
+    """Upsert TitleHub achievement summaries into DB."""
+    for s in summaries:
+        last_played = None
+        if s.get("lastTimePlayed"):
+            try:
+                last_played = datetime.fromisoformat(
+                    s["lastTimePlayed"].replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
+
+        cur.execute("""
+            INSERT INTO xbox_achievement_summaries
+                (contributor_id, xbox_title_id, product_id, title_name,
+                 current_gamerscore, total_gamerscore, current_achievements,
+                 total_achievements, last_time_played, display_image,
+                 platforms, fetched_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+            ON CONFLICT (contributor_id, xbox_title_id) DO UPDATE SET
+                product_id = EXCLUDED.product_id,
+                title_name = EXCLUDED.title_name,
+                current_gamerscore = EXCLUDED.current_gamerscore,
+                total_gamerscore = EXCLUDED.total_gamerscore,
+                current_achievements = EXCLUDED.current_achievements,
+                total_achievements = EXCLUDED.total_achievements,
+                last_time_played = EXCLUDED.last_time_played,
+                display_image = EXCLUDED.display_image,
+                platforms = EXCLUDED.platforms,
+                fetched_at = NOW()
+        """, (contributor_id, s["titleId"], s.get("productId", ""),
+              s.get("name", ""), s.get("currentGamerscore", 0),
+              s.get("totalGamerscore", 0), s.get("currentAchievements", 0),
+              s.get("totalAchievements", 0), last_played,
+              s.get("displayImage", ""), s.get("platforms", [])))
+
+
+def _store_achievement_details(cur, contributor_id, xbox_title_id, details):
+    """Upsert individual achievements into DB."""
+    for d in details:
+        unlock_time = None
+        if d.get("unlockTime"):
+            try:
+                unlock_time = datetime.fromisoformat(
+                    d["unlockTime"].replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
+
+        gamerscore = d.get("gamerscore", 0)
+        if isinstance(gamerscore, str):
+            try:
+                gamerscore = int(gamerscore)
+            except ValueError:
+                gamerscore = 0
+
+        cur.execute("""
+            INSERT INTO xbox_achievement_details
+                (contributor_id, xbox_title_id, achievement_id, name,
+                 description, gamerscore, is_secret, unlocked, unlock_time,
+                 rarity_category, rarity_pct, media_url, fetched_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+            ON CONFLICT (contributor_id, xbox_title_id, achievement_id) DO UPDATE SET
+                name = EXCLUDED.name,
+                description = EXCLUDED.description,
+                gamerscore = EXCLUDED.gamerscore,
+                is_secret = EXCLUDED.is_secret,
+                unlocked = EXCLUDED.unlocked,
+                unlock_time = EXCLUDED.unlock_time,
+                rarity_category = EXCLUDED.rarity_category,
+                rarity_pct = EXCLUDED.rarity_pct,
+                media_url = EXCLUDED.media_url,
+                fetched_at = NOW()
+        """, (contributor_id, xbox_title_id, d["id"], d.get("name", ""),
+              d.get("description", ""), gamerscore, d.get("isSecret", False),
+              d.get("unlocked", False), unlock_time,
+              d.get("rarityCategory", ""), d.get("rarityPct", 0),
+              d.get("mediaUrl", "")))
+
+
+# ---------------------------------------------------------------------------
+# Xbox Live OAuth2 — endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/xbox/auth/start")
+def xbox_auth_start():
+    """Start Xbox OAuth2 flow. Redirects to Microsoft login."""
+    if not XBOX_CLIENT_ID or not XBOX_CLIENT_SECRET:
+        return jsonify(error="Xbox OAuth not configured on server"), 501
+
+    _cleanup_oauth_states()
+
+    state = secrets.token_urlsafe(32)
+    state_data = {"created_at": time.time()}
+
+    # If user already has an api_key, link Xbox to that account
+    link_key = request.args.get("link", "")
+    if link_key:
+        conn = get_db()
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            contributor = _get_contributor(cur, link_key)
+            if contributor:
+                state_data["contributor_id"] = contributor["id"]
+                state_data["api_key"] = link_key
+        finally:
+            conn.close()
+
+    _oauth_states[state] = state_data
+
+    url = xba.build_authorize_url(XBOX_CLIENT_ID, XBOX_REDIRECT_URI, state)
+    return redirect(url)
+
+
+@app.route("/api/v1/xbox/callback")
+def xbox_auth_callback():
+    """Handle OAuth2 callback from Microsoft."""
+    error = request.args.get("error")
+    if error:
+        desc = request.args.get("error_description", error)
+        return redirect(f"/?xbox_auth=error&message={desc}")
+
+    code = request.args.get("code", "")
+    state = request.args.get("state", "")
+
+    if not code or not state:
+        return redirect("/?xbox_auth=error&message=Missing+code+or+state")
+
+    # Validate state (CSRF)
+    _cleanup_oauth_states()
+    state_data = _oauth_states.pop(state, None)
+    if not state_data:
+        return redirect("/?xbox_auth=error&message=Invalid+or+expired+state")
+
+    if not _fernet:
+        return redirect("/?xbox_auth=error&message=Server+encryption+not+configured")
+
+    # Exchange code for tokens
+    try:
+        msa = xba.exchange_code_for_tokens(
+            XBOX_CLIENT_ID, XBOX_CLIENT_SECRET, code, XBOX_REDIRECT_URI)
+    except Exception as e:
+        log.warning("Xbox code exchange failed: %s", e)
+        return redirect("/?xbox_auth=error&message=Token+exchange+failed")
+
+    # Get Xbox identity
+    try:
+        auth_result = xba.full_auth(msa["access_token"])
+    except Exception as e:
+        log.warning("Xbox auth chain failed: %s", e)
+        return redirect("/?xbox_auth=error&message=Xbox+auth+failed")
+
+    xbl3_token = auth_result["xbl3_token"]
+    xuid = auth_result["xuid"]
+    gamertag = auth_result["gamertag"]
+    refresh_token_enc = _fernet.encrypt(msa["refresh_token"].encode())
+
+    conn = get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Find or create contributor
+        contributor_id = state_data.get("contributor_id")
+        api_key = state_data.get("api_key", "")
+
+        if not contributor_id:
+            # Check if xuid already linked to a contributor
+            cur.execute(
+                "SELECT contributor_id FROM xbox_auth WHERE xuid = %s", (xuid,))
+            existing = cur.fetchone()
+            if existing:
+                contributor_id = existing["contributor_id"]
+                cur.execute(
+                    "SELECT api_key FROM contributors WHERE id = %s",
+                    (contributor_id,))
+                api_key = cur.fetchone()["api_key"]
+            else:
+                # Create new contributor with gamertag as username
+                # Check if gamertag username is taken
+                cur.execute(
+                    "SELECT id, api_key FROM contributors WHERE username = %s",
+                    (gamertag,))
+                existing_user = cur.fetchone()
+                if existing_user:
+                    # Username taken — check if it has Xbox auth already
+                    cur.execute(
+                        "SELECT xuid FROM xbox_auth WHERE contributor_id = %s",
+                        (existing_user["id"],))
+                    if cur.fetchone():
+                        # Different xuid owns this username — append suffix
+                        new_username = f"{gamertag}_{xuid[-4:]}"
+                        api_key = secrets.token_urlsafe(32)
+                        cur.execute(
+                            "INSERT INTO contributors (username, api_key) "
+                            "VALUES (%s, %s) RETURNING id",
+                            (new_username, api_key))
+                        contributor_id = cur.fetchone()["id"]
+                    else:
+                        # Same username, no Xbox — link to this account
+                        contributor_id = existing_user["id"]
+                        api_key = existing_user["api_key"]
+                else:
+                    api_key = secrets.token_urlsafe(32)
+                    cur.execute(
+                        "INSERT INTO contributors (username, api_key) "
+                        "VALUES (%s, %s) RETURNING id",
+                        (gamertag, api_key))
+                    contributor_id = cur.fetchone()["id"]
+
+        # Upsert xbox_auth
+        cur.execute("""
+            INSERT INTO xbox_auth
+                (contributor_id, xuid, gamertag, refresh_token_enc, xbl3_token, token_acquired_at)
+            VALUES (%s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (contributor_id) DO UPDATE SET
+                xuid = EXCLUDED.xuid,
+                gamertag = EXCLUDED.gamertag,
+                refresh_token_enc = EXCLUDED.refresh_token_enc,
+                xbl3_token = EXCLUDED.xbl3_token,
+                token_acquired_at = NOW()
+        """, (contributor_id, xuid, gamertag, refresh_token_enc, xbl3_token))
+        conn.commit()
+
+        # Fetch initial achievement summaries (best effort)
+        try:
+            summaries = xba.fetch_titlehub_achievements(xbl3_token, xuid)
+            _store_achievement_summaries(cur, contributor_id, summaries)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            log.warning("Initial achievement fetch failed for %s: %s", gamertag, e)
+
+        import urllib.parse
+        params = urllib.parse.urlencode({
+            "xbox_auth": "success",
+            "api_key": api_key,
+            "gamertag": gamertag,
+            "xuid": xuid,
+        })
+        return redirect(f"/?{params}")
+
+    except Exception as e:
+        conn.rollback()
+        log.error("Xbox callback DB error: %s", e)
+        return redirect("/?xbox_auth=error&message=Server+error")
+    finally:
+        conn.close()
+
+
+@app.route("/api/v1/xbox/achievements")
+@require_auth
+def xbox_achievements_list(conn=None, cur=None, contributor=None, api_key=None):
+    """Return cached achievement summaries for the authenticated user."""
+    try:
+        # Check if Xbox linked
+        cur.execute(
+            "SELECT xuid, gamertag FROM xbox_auth WHERE contributor_id = %s",
+            (contributor["id"],))
+        xbox = cur.fetchone()
+        if not xbox:
+            return jsonify(error="No Xbox account linked", linked=False), 404
+
+        # Ensure token is valid (refresh if needed)
+        try:
+            _ensure_xbl3_token(cur, conn, contributor["id"])
+        except ValueError as e:
+            return jsonify(error=str(e), linked=False), 401
+
+        # Return summaries from DB
+        cur.execute("""
+            SELECT xbox_title_id, product_id, title_name, current_gamerscore,
+                   total_gamerscore, current_achievements, total_achievements,
+                   last_time_played, display_image, platforms, fetched_at
+            FROM xbox_achievement_summaries
+            WHERE contributor_id = %s
+            ORDER BY last_time_played DESC NULLS LAST
+        """, (contributor["id"],))
+
+        summaries = []
+        total_gs = 0
+        for row in cur.fetchall():
+            total_gs += row["current_gamerscore"]
+            summaries.append({
+                "xboxTitleId": row["xbox_title_id"],
+                "productId": row["product_id"],
+                "titleName": row["title_name"],
+                "currentGamerscore": row["current_gamerscore"],
+                "totalGamerscore": row["total_gamerscore"],
+                "currentAchievements": row["current_achievements"],
+                "totalAchievements": row["total_achievements"],
+                "lastTimePlayed": row["last_time_played"].isoformat()
+                    if row["last_time_played"] else None,
+                "displayImage": row["display_image"],
+                "platforms": row["platforms"] or [],
+                "fetchedAt": row["fetched_at"].isoformat()
+                    if row["fetched_at"] else None,
+            })
+
+        return jsonify(
+            gamertag=xbox["gamertag"],
+            xuid=xbox["xuid"],
+            totalGamerscore=total_gs,
+            totalTitles=len(summaries),
+            summaries=summaries,
+            linked=True,
+        )
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/v1/xbox/achievements/<xbox_title_id>")
+@require_auth
+def xbox_achievements_detail(xbox_title_id, conn=None, cur=None, contributor=None, api_key=None):
+    """Return individual achievements for a specific title."""
+    try:
+        # Check cache freshness (1 hour)
+        cur.execute("""
+            SELECT fetched_at FROM xbox_achievement_details
+            WHERE contributor_id = %s AND xbox_title_id = %s
+            LIMIT 1
+        """, (contributor["id"], xbox_title_id))
+        cached = cur.fetchone()
+
+        need_fetch = True
+        if cached and cached["fetched_at"]:
+            age = (datetime.now(timezone.utc) - cached["fetched_at"]).total_seconds()
+            if age < 3600:
+                need_fetch = False
+
+        if need_fetch:
+            try:
+                xbl3, xuid, gt = _ensure_xbl3_token(cur, conn, contributor["id"])
+                details = xba.fetch_achievement_details(xbl3, xuid, xbox_title_id)
+                _store_achievement_details(cur, contributor["id"], xbox_title_id, details)
+                conn.commit()
+            except ValueError as e:
+                return jsonify(error=str(e), linked=False), 401
+            except Exception as e:
+                log.warning("Achievement detail fetch failed for %s/%s: %s",
+                            contributor["id"], xbox_title_id, e)
+                # Fall through to serve cached data if available
+
+        # Return from DB
+        cur.execute("""
+            SELECT achievement_id, name, description, gamerscore, is_secret,
+                   unlocked, unlock_time, rarity_category, rarity_pct, media_url
+            FROM xbox_achievement_details
+            WHERE contributor_id = %s AND xbox_title_id = %s
+            ORDER BY unlocked DESC, unlock_time DESC NULLS LAST, name
+        """, (contributor["id"], xbox_title_id))
+
+        # Also get the title name
+        cur.execute("""
+            SELECT title_name FROM xbox_achievement_summaries
+            WHERE contributor_id = %s AND xbox_title_id = %s
+        """, (contributor["id"], xbox_title_id))
+        title_row = cur.fetchone()
+        title_name = title_row["title_name"] if title_row else ""
+
+        # Re-run detail query (cursor was consumed by title_name query)
+        cur.execute("""
+            SELECT achievement_id, name, description, gamerscore, is_secret,
+                   unlocked, unlock_time, rarity_category, rarity_pct, media_url
+            FROM xbox_achievement_details
+            WHERE contributor_id = %s AND xbox_title_id = %s
+            ORDER BY unlocked DESC, unlock_time DESC NULLS LAST, name
+        """, (contributor["id"], xbox_title_id))
+
+        achievements = []
+        for row in cur.fetchall():
+            achievements.append({
+                "id": row["achievement_id"],
+                "name": row["name"],
+                "description": row["description"],
+                "gamerscore": row["gamerscore"],
+                "isSecret": row["is_secret"],
+                "unlocked": row["unlocked"],
+                "unlockTime": row["unlock_time"].isoformat()
+                    if row["unlock_time"] else None,
+                "rarityCategory": row["rarity_category"],
+                "rarityPct": row["rarity_pct"],
+                "mediaUrl": row["media_url"],
+            })
+
+        return jsonify(
+            xboxTitleId=xbox_title_id,
+            title=title_name,
+            achievements=achievements,
+        )
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/v1/xbox/achievements/refresh", methods=["POST"])
+@require_auth
+def xbox_achievements_refresh(conn=None, cur=None, contributor=None, api_key=None):
+    """Re-fetch achievement summaries from Xbox Live. Rate limited: 1 per 5 min."""
+    if not _check_rate(_rate_xbox_refresh, api_key, XBOX_REFRESH_LIMIT, 300):
+        return jsonify(error="Rate limit — try again in 5 minutes"), 429
+
+    try:
+        xbl3, xuid, gamertag = _ensure_xbl3_token(cur, conn, contributor["id"])
+    except ValueError as e:
+        return jsonify(error=str(e), linked=False), 401
+
+    try:
+        summaries = xba.fetch_titlehub_achievements(xbl3, xuid)
+        _store_achievement_summaries(cur, contributor["id"], summaries)
+        conn.commit()
+
+        total_gs = sum(s.get("currentGamerscore", 0) for s in summaries)
+        return jsonify(
+            status="ok",
+            totalTitles=len(summaries),
+            totalGamerscore=total_gs,
+        )
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error=f"Failed to fetch achievements: {e}"), 500
+
+
+@app.route("/api/v1/xbox/auth/disconnect", methods=["POST"])
+@require_auth
+def xbox_auth_disconnect(conn=None, cur=None, contributor=None, api_key=None):
+    """Disconnect Xbox account — removes auth state and all achievement data."""
+    try:
+        cur.execute("DELETE FROM xbox_achievement_details WHERE contributor_id = %s",
+                    (contributor["id"],))
+        cur.execute("DELETE FROM xbox_achievement_summaries WHERE contributor_id = %s",
+                    (contributor["id"],))
+        cur.execute("DELETE FROM xbox_auth WHERE contributor_id = %s",
+                    (contributor["id"],))
+        conn.commit()
+        return jsonify(status="ok")
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/v1/xbox/auth/status")
+@require_auth
+def xbox_auth_status(conn=None, cur=None, contributor=None, api_key=None):
+    """Check if the user has an Xbox account linked."""
+    try:
+        cur.execute(
+            "SELECT xuid, gamertag, token_acquired_at FROM xbox_auth "
+            "WHERE contributor_id = %s",
+            (contributor["id"],))
+        row = cur.fetchone()
+        if not row:
+            return jsonify(linked=False)
+        return jsonify(
+            linked=True,
+            gamertag=row["gamertag"],
+            xuid=row["xuid"],
+        )
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+# ---------------------------------------------------------------------------
 # CORS (allow xct.freshdex.app frontend)
 # ---------------------------------------------------------------------------
 
@@ -794,6 +1692,10 @@ def add_cors_headers(response):
 @app.route("/api/v1/collection/upload", methods=["OPTIONS"])
 @app.route("/api/v1/collection", methods=["OPTIONS"])
 @app.route("/api/v1/register", methods=["OPTIONS"])
+@app.route("/api/v1/xbox/achievements", methods=["OPTIONS"])
+@app.route("/api/v1/xbox/achievements/refresh", methods=["OPTIONS"])
+@app.route("/api/v1/xbox/auth/disconnect", methods=["OPTIONS"])
+@app.route("/api/v1/xbox/auth/status", methods=["OPTIONS"])
 def cors_preflight():
     return Response(status=204)
 
