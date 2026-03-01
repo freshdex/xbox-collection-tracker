@@ -4447,6 +4447,7 @@ def build_html_template(gamertag=""):
         "if(HISTORY.length){document.getElementById('tab-hist').style.display='';document.getElementById('tab-hist-cnt').textContent=HISTORY.length+' scans'}\n"
         # Marketplace dropdowns
         "var _MKT_TAGS=typeof _MKT_TAGS!=='undefined'?_MKT_TAGS:{};\n"
+        "var _MKT_LAST_SCAN=typeof _MKT_LAST_SCAN!=='undefined'?_MKT_LAST_SCAN:null;\n"
         "if(typeof MKT!=='undefined'&&MKT.length){\n"
         # Map new API fields to legacy field names for compat
         "MKT.forEach(x=>{"
