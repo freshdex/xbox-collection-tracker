@@ -15655,9 +15655,15 @@ def process_store_packages():
         print("[!] No packages found. Try a different ring or input type.")
         return
 
-    # --- Architecture filtering ---
+    # --- Architecture filtering (include compatible arches) ---
     arch = _detect_arch()
-    matching = [lnk for lnk in links if _pkg_arch(lnk["filename"]) in (arch, "neutral")]
+    _compat = {
+        "x64":   ("x64", "x86", "neutral"),
+        "arm64": ("arm64", "arm", "x86", "neutral"),
+        "x86":   ("x86", "neutral"),
+        "arm":   ("arm", "neutral"),
+    }
+    matching = [lnk for lnk in links if _pkg_arch(lnk["filename"]) in _compat.get(arch, (arch, "neutral"))]
     display_list = matching
     show_all = False
 
