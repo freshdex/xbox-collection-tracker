@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Xbox Collection Tracker (XCT) — single-file Python tool (`XCT.py`, ~15,300 lines) that authenticates with Xbox Live, fetches game library data via multiple Microsoft APIs, enriches with catalog metadata, and generates a self-contained HTML explorer page. Supports multiple Xbox accounts. Also includes Xbox hard drive tools, CDN scraping/sync, CDN download/install utilities, GFWL game downloading, and Windows gaming repair tools.
+Xbox Collection Tracker (XCT) — single-file Python tool (`XCT.py`, ~15,900 lines) that authenticates with Xbox Live, fetches game library data via multiple Microsoft APIs, enriches with catalog metadata, and generates a self-contained HTML explorer page. Supports multiple Xbox accounts. Also includes Xbox hard drive tools, CDN scraping/sync, CDN download/install utilities, GFWL game downloading, Windows gaming repair tools, and a hosted viewer at xct.freshdex.app (served by `xct_server.py`).
 
 ## Dependencies & Running
 
@@ -16,6 +16,7 @@ python XCT.py --all                # Refresh all tokens + process all accounts
 python XCT.py add                  # Add new account (device code flow)
 python XCT.py extract [file]       # Extract token from HAR file
 python XCT.py build                # Rebuild HTML from cached data (no network)
+python XCT.py export               # Export combined collection to xct_export.json (for XCT Live upload)
 python XCT.py preview              # Generate blank HTML only (UI testing, no account data)
 python XCT.py --no-update ...      # Skip GitHub update check (combine with any other arg)
 ```
@@ -56,7 +57,7 @@ Fetches Xbox store catalog via DynamicChannels (`fetch_dynamic_channel`) from `b
 ### Combined Index (`build_index`)
 Merges all per-account libraries into a single combined `accounts/XCT.html` + `accounts/data.js`. Each account also gets its own `accounts/{gamertag}/XCT.html` + `data.js`.
 
-### Xbox Hard Drive Tool (`process_xbox_hd_tool`, menu `[v]`)
+### Xbox Hard Drive Tool (menu `[v]`)
 Raw disk access via `\\.\PhysicalDriveN` on Windows. Reads/writes MBR, GPT, NTFS structures directly. Key operations:
 - **Analyze** — Reads MBR signature, GPT headers, partition entries, NTFS boot sector
 - **PC/Xbox mode conversion** — Rewrites MBR signature (`0x55AA` ↔ `0x99CC`) and GPT partition type GUID with full CRC recalculation (primary + backup GPT)
@@ -88,6 +89,12 @@ Downloads Games for Windows - LIVE packages from `download-ssl.xbox.com`. Uses `
 ### GFWL Key Recovery (`recover_gfwl_keys`, menu `[P]`)
 Recovers GFWL product keys from `Token.bin` files using Windows DPAPI decryption. Includes 312 GFWL title name mappings.
 
+### XCT Live Server (`xct_server.py`, ~700 lines)
+Flask app serving the hosted collection viewer at `xct.freshdex.app`. Shares PostgreSQL database with CDN Sync server (`cdn.freshdex.app`). Reuses CDN Sync `contributors` table for auth. Endpoints: shared data (marketplace, Game Pass, rates, flags, GFWL, XVC DB) served as gzipped JSON with ETag caching; collection upload/download/delete with Bearer token auth. Separate deps in `xct_server_requirements.txt` (flask, psycopg2-binary, gunicorn). Operator imports shared data via `flask --app xct_server import-shared` CLI.
+
+### Export (`cmd_export`, menu `[X]`)
+Exports combined collection to `xct_export.json` for upload to XCT Live. Strips credentials and bulky fields, caps scan history to 100 entries. Offers direct upload to xct.freshdex.app using CDN Sync API key.
+
 ### Windows Gaming Repair (`menu [Q]`) / Store Reset (`menu [R]`)
 PowerShell-based repair tools: re-register Xbox app packages, reset Gaming Services, restart Xbox services. Store reset launches `wsreset.exe`.
 
@@ -99,10 +106,10 @@ Price comparison across 10 regions (AR, BR, TR, IS, NG, TW, NZ, CO, HK, US). Exc
 - **Global path state**: `set_account_paths(gamertag)` sets module-level path globals (`AUTH_TOKEN_FILE`, `ENTITLEMENTS_FILE`, etc.) to the current account's directory. Must be called before any per-account operations.
 - **HTTP helpers**: `api_request()` handles retries with exponential backoff on 429/5xx. `msa_request()` handles MSA auth calls. `_signed_request()` adds EC P-256 ProofOfPossession signatures.
 - **Caching**: All API responses cached as JSON with 1-hour TTL (`CACHE_MAX_AGE = 3600`). `is_cache_fresh()` checks file age.
-- **HTML output**: `build_html_template()` (line ~3167) returns a large Python string containing all HTML, CSS, and JS — no separate template files. Data is loaded from a separate `data.js` file via `<script src>`. Edit the frontend entirely within this function.
-- **Data output**: `write_data_js()` (line ~5117) writes library data as JS constants to `data.js`. Includes `LIB`, `GP`, `PH`, `MKT`, `HISTORY`, `DEFAULT_FLAGS`, `ACCOUNTS`, `RATES`, `GC_FACTOR`, plus CDN sync data (`CDN_DB`, `CDN_LEADERBOARD`, `CDN_SYNC_LOG`, `CDN_SYNC_META`).
+- **HTML output**: `build_html_template()` (line ~3214) returns a large Python string containing all HTML, CSS, and JS — no separate template files. Data is loaded from a separate `data.js` file via `<script src>`. Edit the frontend entirely within this function.
+- **Data output**: `write_data_js()` (line ~5447) writes library data as JS constants to `data.js`. Includes `LIB`, `GP`, `PH`, `MKT`, `HISTORY`, `DEFAULT_FLAGS`, `ACCOUNTS`, `RATES`, `GC_FACTOR`, plus CDN sync data (`CDN_DB`, `CDN_LEADERBOARD`, `CDN_SYNC_LOG`, `CDN_SYNC_META`).
 - **Community tags**: `tags.json` maps product IDs to flags (delisted/indie/demo). Loaded at startup into `DEFAULT_FLAGS` dict, embedded in `data.js` output.
-- **Interactive menu**: `interactive_menu()` (line ~14721) is the main loop. Uses single-letter keys `[a]`–`[z]` plus `[0]` to quit.
+- **Interactive menu**: `interactive_menu()` (line ~15396) is the main loop. Uses single-letter keys `[a]`–`[z]` plus `[0]` to quit.
 - **Raw disk I/O**: `_hd_open_read`/`_hd_open_write` use `CreateFileW` via `ctypes` for direct sector access. Requires admin.
 - **GUID encoding**: Xbox GPT uses mixed-endian GUID format. `_hd_encode_guid()`/`_hd_format_guid()` handle conversion.
 - **Windows Update SOAP**: `_fe3_get_cookie`, `_fe3_sync_updates`, `_fe3_get_url` implement the WU SOAP protocol for package resolution.
@@ -118,11 +125,14 @@ Price comparison across 10 regions (AR, BR, TR, IS, NG, TW, NZ, CO, HK, US). Exc
 - **Xbox CDN** (`assets{N}.xboxlive.com`) — Game package downloads
 - **GFWL CDN** (`download-ssl.xbox.com`) — GFWL package downloads
 - **Freshdex CDN Sync** (`cdn.freshdex.app/api/v1`) — Community CDN package database
+- **XCT Live** (`xct.freshdex.app`) — Hosted collection viewer (shared data + personal collection upload)
 
 ## File Layout
 
 ```
-XCT.py                     # Everything: auth, API calls, HTML generation, disk tools (~15,300 lines)
+XCT.py                     # Everything: auth, API calls, HTML generation, disk tools (~15,900 lines)
+xct_server.py              # XCT Live Flask server (~700 lines, separate deploy)
+xct_server_requirements.txt # Server deps (flask, psycopg2-binary, gunicorn)
 xbox_auth.py               # Standalone auth helper (legacy, not used by main flow)
 tags.json                  # Community game tags (delisted, indie, demo flags)
 gfwl_links.json            # GFWL package database (244 titles, 1,775 packages)

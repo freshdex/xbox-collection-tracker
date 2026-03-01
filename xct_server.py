@@ -25,6 +25,8 @@ import logging
 import os
 import re
 import secrets
+import subprocess
+import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -150,8 +152,20 @@ def init_db():
                 rating_count      INTEGER NOT NULL DEFAULT 0,
                 first_seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 last_seen_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                sources           TEXT[] NOT NULL DEFAULT '{}'
+                sources           TEXT[] NOT NULL DEFAULT '{}',
+                has_trial_sku     BOOLEAN NOT NULL DEFAULT FALSE,
+                has_achievements  BOOLEAN NOT NULL DEFAULT FALSE
             )
+        """)
+        # Migration: add has_trial_sku if it doesn't exist yet
+        cur.execute("""
+            ALTER TABLE marketplace_products
+            ADD COLUMN IF NOT EXISTS has_trial_sku BOOLEAN NOT NULL DEFAULT FALSE
+        """)
+        # Migration: add has_achievements if it doesn't exist yet
+        cur.execute("""
+            ALTER TABLE marketplace_products
+            ADD COLUMN IF NOT EXISTS has_achievements BOOLEAN NOT NULL DEFAULT FALSE
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS marketplace_prices (
@@ -198,6 +212,28 @@ def init_db():
                 errors            JSONB DEFAULT '[]',
                 duration_seconds  REAL
             )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS marketplace_changelog (
+                id            SERIAL PRIMARY KEY,
+                scan_id       INTEGER REFERENCES marketplace_scans(id),
+                change_type   VARCHAR(32) NOT NULL,
+                product_id    VARCHAR(16) NOT NULL,
+                title         TEXT NOT NULL DEFAULT '',
+                field_name    VARCHAR(64) NOT NULL DEFAULT '',
+                old_value     TEXT NOT NULL DEFAULT '',
+                new_value     TEXT NOT NULL DEFAULT '',
+                market        VARCHAR(4) NOT NULL DEFAULT '',
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_changelog_scan
+            ON marketplace_changelog(scan_id)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_changelog_created
+            ON marketplace_changelog(created_at DESC)
         """)
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_mp_xbox_title_id
@@ -260,6 +296,57 @@ def init_db():
     except Exception as e:
         conn.rollback()
         print(f"[!] Xbox auth tables init failed ({e}) — run migration manually")
+    # Leaderboard tables
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS ta_leaderboard_entries (
+                id SERIAL PRIMARY KEY,
+                leaderboard_type TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                gamertag TEXT NOT NULL,
+                score TEXT NOT NULL DEFAULT '',
+                avatar_url TEXT DEFAULT '',
+                scraped_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(leaderboard_type, gamertag)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS xbox_gamer_profiles (
+                xuid TEXT PRIMARY KEY,
+                gamertag TEXT NOT NULL,
+                gamerscore INTEGER DEFAULT 0,
+                games_played_v2 INTEGER DEFAULT 0,
+                games_played_v1 INTEGER DEFAULT 0,
+                games_played_total INTEGER DEFAULT 0,
+                avatar_url TEXT DEFAULT '',
+                scan_status TEXT DEFAULT 'pending',
+                scan_error TEXT DEFAULT '',
+                scanned_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS scan_log (
+                id SERIAL PRIMARY KEY,
+                message TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[!] Leaderboard tables init failed ({e}) — run migration manually")
+    # Profile columns on contributors
+    try:
+        cur = conn.cursor()
+        cur.execute("ALTER TABLE contributors ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE contributors ADD COLUMN IF NOT EXISTS status TEXT DEFAULT ''")
+        cur.execute("ALTER TABLE contributors ADD COLUMN IF NOT EXISTS settings JSONB DEFAULT '{}'")
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[!] Profile columns migration failed ({e}) — run manually")
     finally:
         conn.close()
 
@@ -278,7 +365,7 @@ with app.app_context():
 def _get_contributor(cur, api_key):
     """Validate Bearer token and return contributor row or None."""
     cur.execute(
-        "SELECT id, username, total_points FROM contributors WHERE api_key = %s",
+        "SELECT id, username, total_points, avatar_url, status, settings FROM contributors WHERE api_key = %s",
         (api_key,))
     return cur.fetchone()
 
@@ -406,7 +493,7 @@ def index():
 
 _TAB_SLUGS = {
     "library", "marketplace", "gamepass", "playhistory", "scanlog",
-    "gamertags", "gfwl", "xvcdb", "imports", "achievements",
+    "gamertags", "gfwl", "xvcdb", "imports", "achievements", "admin",
 }
 
 
@@ -791,7 +878,8 @@ def marketplace():
                    platforms, product_kind, xbox_title_id, is_bundle, is_ea_play,
                    xcloud_streamable, capabilities, alternate_ids,
                    image_tile, image_box_art, image_hero, short_description,
-                   average_rating, rating_count, sources
+                   average_rating, rating_count, sources, has_trial_sku,
+                   has_achievements
             FROM marketplace_products
             ORDER BY title
         """)
@@ -810,14 +898,19 @@ def marketplace():
                 "currency": row["currency"],
             }
 
-        # 3. Channels — pivot into {product_id: [channel_names]}
-        cur.execute("SELECT product_id, channel FROM marketplace_channels")
+        # 3. Channels — pivot into {product_id: [channel_names]} + region map
+        cur.execute("SELECT product_id, channel, regions FROM marketplace_channels")
         channel_map = {}
+        region_map = {}
         for row in cur:
             pid = row["product_id"]
             if pid not in channel_map:
                 channel_map[pid] = []
             channel_map[pid].append(row["channel"])
+            if row["regions"]:
+                if pid not in region_map:
+                    region_map[pid] = set()
+                region_map[pid].update(row["regions"])
 
         # 4. Tags
         cur.execute("SELECT product_id, tag_type, tag_value FROM marketplace_tags")
@@ -854,10 +947,12 @@ def marketplace():
                 "durationSeconds": scan_row["duration_seconds"],
             }
 
-        # Assemble product list
+        # Assemble product list (skip products with missing titles)
         products = []
         for p in products_raw:
             pid = p["product_id"]
+            if p["title"] == pid:
+                continue
             products.append({
                 "productId": pid,
                 "title": p["title"],
@@ -871,14 +966,18 @@ def marketplace():
                 "isBundle": p["is_bundle"],
                 "isEAPlay": p["is_ea_play"],
                 "xCloudStreamable": p["xcloud_streamable"],
-                "imageBoxArt": p["image_box_art"],
+                "imageBoxArt": p["image_box_art"] or p["image_tile"] or "",
                 "imageHero": p["image_hero"],
                 "shortDescription": p["short_description"],
                 "averageRating": p["average_rating"],
                 "ratingCount": p["rating_count"],
                 "channels": channel_map.get(pid, []),
                 "sources": p["sources"] or [],
+                "hasTrialSku": p["has_trial_sku"],
+                "hasAchievements": p["has_achievements"],
+                "capabilities": p["capabilities"] or [],
                 "regionalPrices": price_map.get(pid, {}),
+                "channelRegions": sorted(region_map.get(pid, set())),
             })
 
         result = {
@@ -951,6 +1050,156 @@ def marketplace_tags_preflight():
 
 
 # ---------------------------------------------------------------------------
+# Admin endpoints — Freshdex only
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/admin/changelog", methods=["GET"])
+@require_auth
+def admin_changelog(conn=None, cur=None, contributor=None, api_key=None):
+    """Get marketplace changelog entries. Freshdex admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+
+    page = request.args.get("page", 1, type=int)
+    per_page = request.args.get("per_page", 200, type=int)
+    per_page = min(per_page, 1000)
+    offset = (page - 1) * per_page
+
+    filters = []
+    params = []
+
+    change_type = request.args.get("type")
+    if change_type:
+        filters.append("c.change_type = %s")
+        params.append(change_type)
+
+    scan_id = request.args.get("scan_id", type=int)
+    if scan_id:
+        filters.append("c.scan_id = %s")
+        params.append(scan_id)
+
+    q = request.args.get("q")
+    if q:
+        filters.append("(c.title ILIKE %s OR c.product_id ILIKE %s)")
+        params.extend([f"%{q}%", f"%{q}%"])
+
+    where = ""
+    if filters:
+        where = "WHERE " + " AND ".join(filters)
+
+    try:
+        # Total count
+        cur.execute(f"SELECT COUNT(*) FROM marketplace_changelog c {where}", params)
+        total = cur.fetchone()["count"]
+
+        # Entries with scan metadata
+        cur.execute(f"""
+            SELECT c.id, c.scan_id, c.change_type, c.product_id, c.title,
+                   c.field_name, c.old_value, c.new_value, c.market,
+                   c.created_at,
+                   s.scan_type, s.started_at AS scan_started_at
+            FROM marketplace_changelog c
+            LEFT JOIN marketplace_scans s ON s.id = c.scan_id
+            {where}
+            ORDER BY c.created_at DESC
+            LIMIT %s OFFSET %s
+        """, params + [per_page, offset])
+        entries = cur.fetchall()
+
+        # Serialize datetimes
+        for e in entries:
+            for k in ("created_at", "scan_started_at"):
+                if e[k] is not None:
+                    e[k] = e[k].isoformat()
+
+        # Last 50 scans that have changelog entries
+        cur.execute("""
+            SELECT s.id, s.scan_type AS type, s.started_at, s.completed_at,
+                   s.duration_seconds, s.products_new,
+                   (SELECT COUNT(*) FROM marketplace_changelog c WHERE c.scan_id = s.id) AS change_count
+            FROM marketplace_scans s
+            WHERE EXISTS (SELECT 1 FROM marketplace_changelog c WHERE c.scan_id = s.id)
+            ORDER BY s.started_at DESC
+            LIMIT 50
+        """)
+        scans = cur.fetchall()
+        for sc in scans:
+            for k in ("started_at", "completed_at"):
+                if sc[k] is not None:
+                    sc[k] = sc[k].isoformat()
+
+        return jsonify(entries=entries, total=total, page=page, scans=scans)
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/v1/admin/scans", methods=["GET"])
+@require_auth
+def admin_scans(conn=None, cur=None, contributor=None, api_key=None):
+    """Get recent marketplace scans. Freshdex admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+
+    try:
+        cur.execute("""
+            SELECT s.*,
+                   (SELECT COUNT(*) FROM marketplace_changelog c WHERE c.scan_id = s.id) AS change_count
+            FROM marketplace_scans s
+            ORDER BY s.started_at DESC
+            LIMIT 50
+        """)
+        scans = cur.fetchall()
+        for sc in scans:
+            for k in ("started_at", "completed_at"):
+                if sc.get(k) is not None:
+                    sc[k] = sc[k].isoformat()
+
+        return jsonify(scans=scans)
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/v1/admin/scan", methods=["POST"])
+@require_auth
+def admin_scan_trigger(conn=None, cur=None, contributor=None, api_key=None):
+    """Trigger a marketplace scan. Freshdex admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+
+    data = request.get_json(silent=True) or {}
+
+    cmd = ["docker", "run", "--rm", "--network", "host",
+           "--name", f"xct-scanner-manual-{int(time.time())}",
+           "-e", f"DATABASE_URL={os.environ.get('DATABASE_URL', '')}",
+           "-e", "SCANNER_ACCOUNT_DIR=/app/scanner_account",
+           "-v", "/opt/xct-live/scanner_account:/app/scanner_account",
+           "freshdex-xct-live", "python3", "marketplace_scanner.py"]
+
+    scan_type = data.get("type", "full")
+    if scan_type == "nz_new":
+        cmd.append("scan-nz")
+    elif scan_type == "prices_only":
+        cmd.extend(["scan", "--prices-only"])
+    elif scan_type == "force_browse":
+        cmd.extend(["scan", "--force-browse"])
+    elif scan_type == "channel":
+        cmd.extend(["scan", f"--channel={data.get('channel', '')}"])
+    elif scan_type == "region":
+        cmd.extend(["scan", f"--region={data.get('region', '')}"])
+    else:
+        cmd.append("scan")
+
+    threading.Thread(
+        target=lambda: subprocess.run(cmd, timeout=3600, capture_output=True),
+        daemon=True
+    ).start()
+
+    return jsonify(ok=True, message="Scan triggered", type=scan_type)
+
+
+# ---------------------------------------------------------------------------
 # Collection endpoints — auth required
 # ---------------------------------------------------------------------------
 
@@ -961,9 +1210,21 @@ def collection_upload(conn=None, cur=None, contributor=None, api_key=None):
     if not _check_rate(_rate_upload, api_key, UPLOAD_LIMIT, 60):
         return jsonify(error="Rate limit exceeded. Try again in a minute."), 429
 
-    # Accept JSON body
-    data = request.get_json(silent=True)
-    if not data:
+    # Accept JSON body (with gzip support)
+    raw = request.get_data(as_text=False)
+    if request.headers.get("Content-Encoding") == "gzip":
+        try:
+            raw = gzip.decompress(raw)
+        except Exception:
+            return jsonify(error="Invalid gzip data"), 400
+
+    # Size guard: 50MB decompressed limit
+    if len(raw) > 50 * 1024 * 1024:
+        return jsonify(error="Payload too large (max 50MB)"), 413
+
+    try:
+        data = json.loads(raw)
+    except Exception:
         return jsonify(error="Invalid JSON body"), 400
 
     # Validate expected structure
@@ -971,6 +1232,19 @@ def collection_upload(conn=None, cur=None, contributor=None, api_key=None):
         return jsonify(error="'library' array is required"), 400
 
     lib = data["library"]
+
+    # Server-side allowlist: strip any fields not needed for display
+    _LIB_ALLOWED = {
+        "gamertag", "productId", "productKind", "status",
+        "acquiredDate", "startDate", "endDate", "isTrial", "skuType", "quantity",
+        "title", "developer", "publisher", "image", "boxArt", "category",
+        "releaseDate", "platforms", "isDemo", "hasTrialSku", "hasAchievements",
+        "priceUSD", "currentPriceUSD",
+        "onGamePass", "owned", "lastTimePlayed", "catalogInvalid", "xboxTitleId",
+    }
+    lib = [{k: v for k, v in item.items() if k in _LIB_ALLOWED}
+           for item in lib if isinstance(item, dict)]
+
     ph = data.get("playHistory", [])
     history = data.get("history", [])
     accounts = data.get("accounts", [])
@@ -981,11 +1255,6 @@ def collection_upload(conn=None, cur=None, contributor=None, api_key=None):
         history = []
     if not isinstance(accounts, list):
         accounts = []
-
-    # Size guard: ~20MB JSON limit
-    raw_size = len(request.get_data(as_text=False))
-    if raw_size > 20 * 1024 * 1024:
-        return jsonify(error="Payload too large (max 20MB)"), 413
 
     # Cap history to 100 entries
     history = history[:100]
@@ -1041,13 +1310,16 @@ def collection_get(conn=None, cur=None, contributor=None, api_key=None):
         if not row:
             return jsonify(
                 library=[], playHistory=[], history=[], accounts=[],
-                username=contributor["username"], uploaded=False)
+                username=contributor["username"],
+                settings=contributor.get("settings") or {},
+                uploaded=False)
         return jsonify(
             library=row["lib"] or [],
             playHistory=row["play_history"] or [],
             history=row["scan_history"] or [],
             accounts=row["accounts_meta"] or [],
             username=contributor["username"],
+            settings=contributor.get("settings") or {},
             uploadedAt=row["uploaded_at"].isoformat() if row["uploaded_at"] else None,
             version=row["version"],
             uploaded=True,
@@ -1187,7 +1459,7 @@ def _ensure_xbl3_token(cur, conn, contributor_id):
     # Token stale — refresh
     if not _fernet:
         raise ValueError("Encryption key not configured")
-    refresh_token = _fernet.decrypt(row["refresh_token_enc"]).decode()
+    refresh_token = _fernet.decrypt(bytes(row["refresh_token_enc"])).decode()
 
     try:
         msa = xba.refresh_msa_token(XBOX_CLIENT_ID, XBOX_CLIENT_SECRET, refresh_token)
@@ -1371,6 +1643,14 @@ def xbox_auth_callback():
     gamertag = auth_result["gamertag"]
     refresh_token_enc = _fernet.encrypt(msa["refresh_token"].encode())
 
+    # Resolve avatar URL from Xbox profile
+    avatar_url = ""
+    try:
+        profile = xba.resolve_gamertag(xbl3_token, gamertag)
+        avatar_url = profile.get("avatar_url", "")
+    except Exception as e:
+        log.warning("Avatar resolve failed for %s: %s", gamertag, e)
+
     conn = get_db()
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -1435,16 +1715,36 @@ def xbox_auth_callback():
                 xbl3_token = EXCLUDED.xbl3_token,
                 token_acquired_at = NOW()
         """, (contributor_id, xuid, gamertag, refresh_token_enc, xbl3_token))
+
+        # Save avatar_url on contributor
+        if avatar_url:
+            cur.execute(
+                "UPDATE contributors SET avatar_url = %s WHERE id = %s",
+                (avatar_url, contributor_id))
         conn.commit()
 
-        # Fetch initial achievement summaries (best effort)
-        try:
-            summaries = xba.fetch_titlehub_achievements(xbl3_token, xuid)
-            _store_achievement_summaries(cur, contributor_id, summaries)
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            log.warning("Initial achievement fetch failed for %s: %s", gamertag, e)
+        # Fetch initial achievement summaries in background (avoid blocking redirect)
+        def _bg_ach_fetch(cid, token, xu, gt):
+            try:
+                summaries = xba.fetch_titlehub_achievements(token, xu)
+                c = get_db()
+                try:
+                    cr = c.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                    _store_achievement_summaries(cr, cid, summaries)
+                    c.commit()
+                except Exception:
+                    c.rollback()
+                    raise
+                finally:
+                    c.close()
+            except Exception as e:
+                import traceback
+                log.warning("Background achievement fetch failed for %s: %s\n%s",
+                            gt, e, traceback.format_exc())
+        threading.Thread(
+            target=_bg_ach_fetch,
+            args=(contributor_id, xbl3_token, xuid, gamertag),
+            daemon=True).start()
 
         import urllib.parse
         params = urllib.parse.urlencode({
@@ -1452,6 +1752,7 @@ def xbox_auth_callback():
             "api_key": api_key,
             "gamertag": gamertag,
             "xuid": xuid,
+            "avatar_url": avatar_url,
         })
         return redirect(f"/?{params}")
 
@@ -1472,6 +1773,7 @@ def xbox_achievements_list(conn=None, cur=None, contributor=None, api_key=None):
         cur.execute(
             "SELECT xuid, gamertag FROM xbox_auth WHERE contributor_id = %s",
             (contributor["id"],))
+        avatar_url = contributor.get("avatar_url") or ""
         xbox = cur.fetchone()
         if not xbox:
             return jsonify(error="No Xbox account linked", linked=False), 404
@@ -1492,9 +1794,42 @@ def xbox_achievements_list(conn=None, cur=None, contributor=None, api_key=None):
             ORDER BY last_time_played DESC NULLS LAST
         """, (contributor["id"],))
 
+        rows = cur.fetchall()
+
+        # Auto-fetch from Xbox Live in background if DB has no cached summaries
+        # (e.g. first page load after sign-in, before background thread finishes)
+        fetching = False
+        if not rows:
+            try:
+                xbl3, xuid_val, gt = _ensure_xbl3_token(cur, conn, contributor["id"])
+                def _bg_auto_fetch(cid, token, xu):
+                    try:
+                        live = xba.fetch_titlehub_achievements(token, xu)
+                        c = get_db()
+                        try:
+                            cr = c.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                            _store_achievement_summaries(cr, cid, live)
+                            c.commit()
+                        except Exception:
+                            c.rollback()
+                            raise
+                        finally:
+                            c.close()
+                    except Exception as e:
+                        import traceback
+                        log.warning("Background auto-fetch summaries failed: %s\n%s",
+                                    e, traceback.format_exc())
+                threading.Thread(
+                    target=_bg_auto_fetch,
+                    args=(contributor["id"], xbl3, xuid_val),
+                    daemon=True).start()
+                fetching = True
+            except Exception as e:
+                log.warning("Auto-fetch setup failed: %s", e)
+
         summaries = []
         total_gs = 0
-        for row in cur.fetchall():
+        for row in rows:
             total_gs += row["current_gamerscore"]
             summaries.append({
                 "xboxTitleId": row["xbox_title_id"],
@@ -1506,7 +1841,7 @@ def xbox_achievements_list(conn=None, cur=None, contributor=None, api_key=None):
                 "totalAchievements": row["total_achievements"],
                 "lastTimePlayed": row["last_time_played"].isoformat()
                     if row["last_time_played"] else None,
-                "displayImage": row["display_image"],
+                "displayImage": (row["display_image"] or "").replace("http://", "https://"),
                 "platforms": row["platforms"] or [],
                 "fetchedAt": row["fetched_at"].isoformat()
                     if row["fetched_at"] else None,
@@ -1519,6 +1854,8 @@ def xbox_achievements_list(conn=None, cur=None, contributor=None, api_key=None):
             totalTitles=len(summaries),
             summaries=summaries,
             linked=True,
+            fetching=fetching,
+            avatarUrl=avatar_url,
         )
     except Exception as e:
         return jsonify(error=str(e)), 500
@@ -1675,6 +2012,492 @@ def xbox_auth_status(conn=None, cur=None, contributor=None, api_key=None):
 
 
 # ---------------------------------------------------------------------------
+# Leaderboard endpoints
+# ---------------------------------------------------------------------------
+
+# Background scan state
+_lb_scan_active = False
+_lb_scan_status = {"state": "idle", "scanned": 0, "total": 0, "errors": 0}
+_lb_scan_log = []        # ring buffer of recent scan events
+_LB_LOG_MAX = 500        # keep last 500 entries
+_lb_scan_current = ""    # gamertag currently being scanned
+
+
+def _scan_log(msg):
+    """Append a timestamped message to the scan log — persisted to DB."""
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    entry = f"[{ts}] {msg}"
+    # In-memory buffer for quick access
+    _lb_scan_log.append(entry)
+    if len(_lb_scan_log) > _LB_LOG_MAX:
+        del _lb_scan_log[:len(_lb_scan_log) - _LB_LOG_MAX]
+    # Persist to DB
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("INSERT INTO scan_log (message) VALUES (%s)", (entry,))
+        # Trim to last 1000 rows
+        cur.execute("""
+            DELETE FROM scan_log WHERE id NOT IN (
+                SELECT id FROM scan_log ORDER BY id DESC LIMIT 1000
+            )
+        """)
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # don't let logging errors break the scan
+
+
+def _bg_scan_gamertags(xbl3_token):
+    """Background thread: resolve gamertags via Xbox API and fetch games played."""
+    global _lb_scan_active, _lb_scan_current
+    conn = get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Get gamertags needing scan: missing, pending, error, or incomplete (v2=0)
+        cur.execute("""
+            SELECT DISTINCT t.gamertag
+            FROM ta_leaderboard_entries t
+            LEFT JOIN xbox_gamer_profiles x ON LOWER(t.gamertag) = LOWER(x.gamertag)
+            WHERE x.xuid IS NULL
+               OR x.scan_status IN ('pending', 'error')
+               OR (x.scan_status = 'complete' AND x.games_played_v2 = 0)
+            ORDER BY t.gamertag
+        """)
+        pending = [row["gamertag"] for row in cur.fetchall()]
+
+        _lb_scan_status["total"] = len(pending)
+        _lb_scan_status["scanned"] = 0
+        _lb_scan_status["errors"] = 0
+        _lb_scan_status["state"] = "scanning"
+        _scan_log(f"Scan started: {len(pending)} gamertags pending")
+
+        for gt in pending:
+            if not _lb_scan_active:
+                _scan_log("Scan aborted by user")
+                break
+            _lb_scan_current = gt
+            try:
+                # Step 1: Resolve gamertag → XUID + gamerscore + avatar
+                _scan_log(f"Resolving: {gt}")
+                profile = xba.resolve_gamertag(xbl3_token, gt)
+                xuid = profile["xuid"]
+                if not xuid:
+                    raise ValueError("No XUID returned")
+
+                # Step 2: Fetch games played counts
+                counts = xba.fetch_games_played_count(xbl3_token, xuid)
+
+                _scan_log(f"OK: {gt} → XUID={xuid} GS={profile['gamerscore']:,} "
+                          f"games={counts['total']} (v2={counts['v2_count']} v1={counts['v1_count']})")
+
+                # Step 3: Upsert into xbox_gamer_profiles
+                cur.execute("""
+                    INSERT INTO xbox_gamer_profiles
+                        (xuid, gamertag, gamerscore, games_played_v2, games_played_v1,
+                         games_played_total, avatar_url, scan_status, scanned_at, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'complete', NOW(), NOW())
+                    ON CONFLICT (xuid) DO UPDATE SET
+                        gamertag = EXCLUDED.gamertag,
+                        gamerscore = EXCLUDED.gamerscore,
+                        games_played_v2 = EXCLUDED.games_played_v2,
+                        games_played_v1 = EXCLUDED.games_played_v1,
+                        games_played_total = EXCLUDED.games_played_total,
+                        avatar_url = EXCLUDED.avatar_url,
+                        scan_status = 'complete',
+                        scan_error = '',
+                        scanned_at = NOW()
+                """, (xuid, profile["gamertag"], profile["gamerscore"],
+                      counts["v2_count"], counts["v1_count"], counts["total"],
+                      profile["avatar_url"]))
+                conn.commit()
+                _lb_scan_status["scanned"] += 1
+
+            except Exception as e:
+                _scan_log(f"ERR: {gt} — {e}")
+                # Mark as error in DB if we know the XUID, otherwise just count
+                try:
+                    cur.execute("""
+                        INSERT INTO xbox_gamer_profiles
+                            (xuid, gamertag, scan_status, scan_error, created_at)
+                        VALUES (%s, %s, 'error', %s, NOW())
+                        ON CONFLICT (xuid) DO UPDATE SET
+                            scan_status = 'error', scan_error = EXCLUDED.scan_error
+                    """, (f"err_{gt}", gt, str(e)[:200]))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                _lb_scan_status["errors"] += 1
+                _lb_scan_status["scanned"] += 1
+
+            time.sleep(4)  # rate limit: 4s between gamertags (3 API calls each)
+
+        _lb_scan_status["state"] = "complete"
+        _lb_scan_current = ""
+        _scan_log(f"Scan complete: {_lb_scan_status['scanned']} scanned, "
+                  f"{_lb_scan_status['errors']} errors")
+    except Exception as e:
+        _lb_scan_status["state"] = f"error: {e}"
+        _lb_scan_current = ""
+        _scan_log(f"Scan FAILED: {e}")
+        log.error("Background scan failed: %s", e)
+    finally:
+        _lb_scan_active = False
+        conn.close()
+
+
+@app.route("/api/v1/leaderboard/<lb_type>")
+def leaderboard_get(lb_type):
+    """Return leaderboard data (public, no auth)."""
+    conn = get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Check if ta_leaderboard_entries table exists
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_name = 'ta_leaderboard_entries'
+            )
+        """)
+        if not cur.fetchone()["exists"]:
+            return _gzip_json_response({
+                "type": lb_type, "entries": [],
+                "scannedCount": 0, "totalCount": 0,
+                "scanStatus": _lb_scan_status,
+            }, cache_key=f"lb_{lb_type}")
+
+        # Join TA entries with Xbox gamer profiles + contributor status
+        cur.execute("""
+            SELECT t.position, t.gamertag, t.score, t.avatar_url AS ta_avatar,
+                   x.xuid, x.gamerscore, x.games_played_v2, x.games_played_v1,
+                   x.games_played_total, x.avatar_url AS xbox_avatar,
+                   x.scan_status, c.status AS user_status
+            FROM ta_leaderboard_entries t
+            LEFT JOIN xbox_gamer_profiles x ON LOWER(t.gamertag) = LOWER(x.gamertag)
+            LEFT JOIN xbox_auth xa ON LOWER(xa.gamertag) = LOWER(t.gamertag)
+            LEFT JOIN contributors c ON c.id = xa.contributor_id
+            WHERE t.leaderboard_type = %s
+            ORDER BY t.position
+        """, (lb_type,))
+
+        entries = []
+        scanned = 0
+        for row in cur.fetchall():
+            status = row["scan_status"] or "pending"
+            if status == "complete":
+                scanned += 1
+            entries.append({
+                "position": row["position"],
+                "gamertag": row["gamertag"],
+                "score": row["score"],
+                "gamerscore": row["gamerscore"],
+                "gamesPlayedV2": row["games_played_v2"],
+                "gamesPlayedV1": row["games_played_v1"],
+                "gamesPlayed": row["games_played_total"],
+                "avatarUrl": row["xbox_avatar"] or row["ta_avatar"] or "",
+                "scanStatus": status,
+                "status": row["user_status"] or "",
+            })
+
+        total = len(entries)
+
+        # Invalidate cache so fresh data is always served
+        _shared_cache.pop(f"lb_{lb_type}", None)
+
+        return _gzip_json_response({
+            "type": lb_type,
+            "entries": entries,
+            "scannedCount": scanned,
+            "totalCount": total,
+            "scanStatus": _lb_scan_status,
+        })
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+    finally:
+        conn.close()
+
+
+@app.route("/api/v1/leaderboard/scrape", methods=["POST"])
+@require_auth
+def leaderboard_scrape(conn=None, cur=None, contributor=None, api_key=None):
+    """Trigger TA scrape + optional Xbox scan in background."""
+    global _lb_scan_active
+
+    lb_type = "gamesplayed"
+    pages = 10
+
+    body = request.get_json(silent=True) or {}
+    if body.get("type"):
+        lb_type = body["type"]
+    if body.get("pages"):
+        pages = min(int(body["pages"]), 20)
+
+    def _bg_scrape_and_scan(cid, token):
+        global _lb_scan_active
+        try:
+            _lb_scan_status["state"] = "scraping"
+            _scan_log(f"Scraping TA leaderboard '{lb_type}' ({pages} pages)...")
+            entries = xba.scrape_ta_leaderboard(lb_type, pages=pages)
+            _scan_log(f"Scraped {len(entries)} gamertags from TA")
+
+            # Store in DB
+            c = get_db()
+            try:
+                cr = c.cursor()
+                for e in entries:
+                    cr.execute("""
+                        INSERT INTO ta_leaderboard_entries
+                            (leaderboard_type, position, gamertag, score, avatar_url, scraped_at)
+                        VALUES (%s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (leaderboard_type, gamertag) DO UPDATE SET
+                            position = EXCLUDED.position,
+                            score = EXCLUDED.score,
+                            avatar_url = EXCLUDED.avatar_url,
+                            scraped_at = NOW()
+                    """, (lb_type, e["position"], e["gamertag"],
+                          e["score"], e["avatar_url"]))
+                c.commit()
+            finally:
+                c.close()
+
+            # Now start Xbox API scan
+            _lb_scan_active = True
+            _bg_scan_gamertags(token)
+
+        except Exception as e:
+            _lb_scan_status["state"] = f"error: {e}"
+            log.error("Scrape+scan failed: %s", e)
+            _lb_scan_active = False
+
+    # Get XBL3.0 token for the authenticated user
+    try:
+        xbl3, xuid, gt = _ensure_xbl3_token(cur, conn, contributor["id"])
+    except ValueError as e:
+        return jsonify(error=str(e)), 401
+
+    _lb_scan_active = True
+    threading.Thread(
+        target=_bg_scrape_and_scan,
+        args=(contributor["id"], xbl3),
+        daemon=True).start()
+
+    return jsonify(status="started", message=f"Scraping {pages} pages of {lb_type}...")
+
+
+@app.route("/api/v1/leaderboard/scan", methods=["POST"])
+@require_auth
+def leaderboard_scan(conn=None, cur=None, contributor=None, api_key=None):
+    """Resume/restart Xbox API scanning for pending gamertags."""
+    global _lb_scan_active
+
+    if _lb_scan_active:
+        return jsonify(status="already_running", scanStatus=_lb_scan_status)
+
+    try:
+        xbl3, xuid, gt = _ensure_xbl3_token(cur, conn, contributor["id"])
+    except ValueError as e:
+        return jsonify(error=str(e)), 401
+
+    _lb_scan_active = True
+    threading.Thread(
+        target=_bg_scan_gamertags,
+        args=(xbl3,),
+        daemon=True).start()
+
+    return jsonify(status="started", message="Scanning pending gamertags...")
+
+
+@app.route("/api/v1/leaderboard/status")
+def leaderboard_scan_status():
+    """Return current scan status (public, no auth)."""
+    return jsonify(scanStatus=_lb_scan_status, active=_lb_scan_active)
+
+
+@app.route("/api/v1/leaderboard/admin")
+@require_auth
+def leaderboard_admin(conn=None, cur=None, contributor=None, api_key=None):
+    """Admin-only: detailed scan status + log + DB stats."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin only"), 403
+
+    try:
+        # DB stats
+        cur.execute("SELECT COUNT(*) as cnt FROM ta_leaderboard_entries")
+        ta_count = cur.fetchone()["cnt"]
+
+        cur.execute("SELECT COUNT(*) as cnt FROM xbox_gamer_profiles")
+        profile_count = cur.fetchone()["cnt"]
+
+        cur.execute("SELECT COUNT(*) as cnt FROM xbox_gamer_profiles WHERE scan_status = 'complete'")
+        complete_count = cur.fetchone()["cnt"]
+
+        cur.execute("SELECT COUNT(*) as cnt FROM xbox_gamer_profiles WHERE scan_status = 'error'")
+        error_count = cur.fetchone()["cnt"]
+
+        # Recent scans (last 20 completed profiles)
+        cur.execute("""
+            SELECT gamertag, xuid, gamerscore, games_played_total,
+                   games_played_v2, games_played_v1, scan_status, scan_error, scanned_at
+            FROM xbox_gamer_profiles
+            ORDER BY scanned_at DESC NULLS LAST
+            LIMIT 20
+        """)
+        recent = []
+        for row in cur.fetchall():
+            recent.append({
+                "gamertag": row["gamertag"],
+                "xuid": row["xuid"],
+                "gamerscore": row["gamerscore"],
+                "gamesPlayed": row["games_played_total"],
+                "v2": row["games_played_v2"],
+                "v1": row["games_played_v1"],
+                "status": row["scan_status"],
+                "error": row["scan_error"] or "",
+                "scannedAt": row["scanned_at"].isoformat() if row["scanned_at"] else None,
+            })
+
+        # Error profiles
+        cur.execute("""
+            SELECT gamertag, scan_error, scanned_at
+            FROM xbox_gamer_profiles
+            WHERE scan_status = 'error'
+            ORDER BY scanned_at DESC NULLS LAST
+            LIMIT 50
+        """)
+        errors = []
+        for row in cur.fetchall():
+            errors.append({
+                "gamertag": row["gamertag"],
+                "error": row["scan_error"] or "",
+                "scannedAt": row["scanned_at"].isoformat() if row["scanned_at"] else None,
+            })
+
+        # Read persisted log from DB (last 200 entries, oldest first)
+        cur.execute("""
+            SELECT message FROM scan_log ORDER BY id DESC LIMIT 200
+        """)
+        db_log = [row["message"] for row in cur.fetchall()]
+        db_log.reverse()  # oldest first
+
+        return jsonify(
+            scanStatus=_lb_scan_status,
+            active=_lb_scan_active,
+            currentGamertag=_lb_scan_current,
+            log=db_log,
+            dbStats={
+                "taEntries": ta_count,
+                "profiles": profile_count,
+                "complete": complete_count,
+                "errors": error_count,
+            },
+            recentScans=recent,
+            errorProfiles=errors,
+        )
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/v1/leaderboard/stop", methods=["POST"])
+@require_auth
+def leaderboard_stop(conn=None, cur=None, contributor=None, api_key=None):
+    """Admin-only: stop an active scan."""
+    global _lb_scan_active
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin only"), 403
+    _lb_scan_active = False
+    _scan_log("Scan stop requested by admin")
+    return jsonify(status="ok", message="Stop signal sent")
+
+
+# ---------------------------------------------------------------------------
+# Profile
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/profile")
+@require_auth
+def profile_get(conn=None, cur=None, contributor=None, api_key=None):
+    """Return profile data for the authenticated user."""
+    try:
+        cid = contributor["id"]
+        # Get Xbox link info
+        cur.execute(
+            "SELECT xuid, gamertag FROM xbox_auth WHERE contributor_id = %s",
+            (cid,))
+        xbox = cur.fetchone()
+        # Aggregate achievement stats
+        cur.execute("""
+            SELECT COALESCE(SUM(current_gamerscore), 0) AS total_gs,
+                   COUNT(*) AS titles_played
+            FROM xbox_achievement_summaries
+            WHERE contributor_id = %s
+        """, (cid,))
+        stats = cur.fetchone()
+        # Total CDN points
+        cur.execute(
+            "SELECT COALESCE(total_points, 0) AS pts FROM contributors WHERE id = %s",
+            (cid,))
+        pts_row = cur.fetchone()
+        return jsonify(
+            username=contributor["username"],
+            avatarUrl=contributor.get("avatar_url") or "",
+            status=contributor.get("status") or "",
+            settings=contributor.get("settings") or {},
+            totalPoints=pts_row["pts"] if pts_row else 0,
+            xuid=xbox["xuid"] if xbox else "",
+            gamertag=xbox["gamertag"] if xbox else "",
+            gamerscore=stats["total_gs"] if stats else 0,
+            titlesPlayed=stats["titles_played"] if stats else 0,
+        )
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/v1/profile", methods=["PUT"])
+@require_auth
+def profile_put(conn=None, cur=None, contributor=None, api_key=None):
+    """Update profile fields (status, settings)."""
+    try:
+        data = request.get_json(force=True)
+        # Merge settings if provided
+        valid_regions = {
+            "AE", "AR", "AT", "AU", "BE", "BG", "BH", "BR", "CA", "CH",
+            "CL", "CN", "CO", "CY", "CZ", "DE", "DK", "EE", "EG", "ES",
+            "FI", "FR", "GB", "GR", "GT", "HK", "HR", "HU", "ID", "IE",
+            "IL", "IN", "IS", "IT", "JP", "KR", "KW", "LT", "LV", "MT",
+            "MX", "MY", "NG", "NL", "NO", "NZ", "OM", "PE", "PH", "PL",
+            "PT", "QA", "RO", "RS", "RU", "SA", "SE", "SG", "SI", "SK",
+            "TH", "TR", "TT", "TW", "UA", "US", "VN", "ZA",
+        }
+        settings_update = {}
+        if "settings" in data and isinstance(data["settings"], dict):
+            raw = data["settings"]
+            if "myRegions" in raw and isinstance(raw["myRegions"], list):
+                settings_update["myRegions"] = [r for r in raw["myRegions"] if r in valid_regions]
+        has_status = "status" in data
+        status = (data.get("status") or "")[:280] if has_status else None
+        if settings_update and has_status:
+            cur.execute(
+                "UPDATE contributors SET status = %s, settings = COALESCE(settings, '{}') || %s::jsonb WHERE id = %s",
+                (status, json.dumps(settings_update), contributor["id"]))
+        elif settings_update:
+            cur.execute(
+                "UPDATE contributors SET settings = COALESCE(settings, '{}') || %s::jsonb WHERE id = %s",
+                (json.dumps(settings_update), contributor["id"]))
+        elif has_status:
+            cur.execute(
+                "UPDATE contributors SET status = %s WHERE id = %s",
+                (status, contributor["id"]))
+        conn.commit()
+        return jsonify(ok=True)
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error=str(e)), 500
+
+
+# ---------------------------------------------------------------------------
 # CORS (allow xct.freshdex.app frontend)
 # ---------------------------------------------------------------------------
 
@@ -1685,7 +2508,7 @@ def add_cors_headers(response):
     if origin in allowed:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     return response
 
 
@@ -1696,6 +2519,14 @@ def add_cors_headers(response):
 @app.route("/api/v1/xbox/achievements/refresh", methods=["OPTIONS"])
 @app.route("/api/v1/xbox/auth/disconnect", methods=["OPTIONS"])
 @app.route("/api/v1/xbox/auth/status", methods=["OPTIONS"])
+@app.route("/api/v1/leaderboard/scrape", methods=["OPTIONS"])
+@app.route("/api/v1/leaderboard/scan", methods=["OPTIONS"])
+@app.route("/api/v1/leaderboard/admin", methods=["OPTIONS"])
+@app.route("/api/v1/leaderboard/stop", methods=["OPTIONS"])
+@app.route("/api/v1/profile", methods=["OPTIONS"])
+@app.route("/api/v1/admin/changelog", methods=["OPTIONS"])
+@app.route("/api/v1/admin/scans", methods=["OPTIONS"])
+@app.route("/api/v1/admin/scan", methods=["OPTIONS"])
 def cors_preflight():
     return Response(status=204)
 

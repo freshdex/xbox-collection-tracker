@@ -2,6 +2,65 @@
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
 
+## What's New in v2.0
+
+### XCT Live — Marketplace Overhaul
+- **Marketplace sidebar with checkbox dropdown filters** — All marketplace filters (Channel, Type, Platform, Price, Genre, Subscriptions, Multiplayer, Publisher, Developer, Ownership, Release Status, Bundles, Region Availability) converted from `<select>` elements to multi-select checkbox dropdown panels. Binary filters (Streamable, Has Trial, Has Achievements) are single checkboxes. Compact sidebar layout with search at top and scan info at bottom.
+- **URL persistence for all filters** — Every filter state is serialized into URL query parameters. Share a filtered marketplace view by copying the URL. Loading a URL with params restores the exact filter state.
+- **Saved filter presets** — Save the current filter combination as a named preset stored in localStorage. Load or delete saved presets from a dropdown in the sidebar.
+- **Loading spinner with live item counter** — Marketplace data loads via streaming fetch with a spinner showing a live count of items as they arrive.
+- **Price cells link to Xbox store pages** — Every price cell (USD and regional) is now a direct link to the Xbox store page for that locale. Game title click still opens the detail modal.
+- **Free trial detection fix** — Trial detection was flagging ~13,000 products (75%) because the generic `IsTrial` SKU property exists on nearly every Xbox game. Now correctly checks for `Purchase` action in trial SKU availability, reducing to 537 real free trials.
+- **Marketplace column sorting** — Click any column header in list view to sort ascending/descending.
+- **Admin panel expansion** — Marketplace changelog browser, scan history table, and force-scan buttons for all 67 Xbox regions (up from 11).
+
+### XCT Live — Sign in with Xbox
+- **Xbox OAuth integration** — Link your Xbox account to XCT Live via Sign in with Xbox. Your avatar, gamertag, and gamerscore display in the profile tab.
+- **Achievements tab** — Three-source achievement merge combining Xbox history v2 (modern titles), v1 (Xbox 360), and TitleHub enrichment (images, product IDs). Stats overview with completion percentages and game counts.
+- **TrueAchievements leaderboard** — Scraped TA leaderboard data with sortable columns, cross-referenced with Xbox profiles for gamerscore and games played.
+- **Profile tab** — User profile with avatar, status message, settings, and My Regions configuration.
+
+### XCT Live — Performance
+- **Lazy tab loading** — Shared data (marketplace, Game Pass, GFWL, XVC Database) loads on first tab click instead of all at once on page load. Dramatically faster initial load.
+- **Gzip collection upload** — Collection data is gzip-compressed before upload, with before/after size reporting.
+- **My Regions selector** — Pick your regions from a checkbox dropdown in the tab bar. Persisted to your profile.
+
+### Game Downgrader Overhaul
+- **Multi-source version discovery** — Merges Xbox CDN (GetBasePackage XSP chain), FE3 SOAP delivery API (all 4 rings: RP, Retail, WIF, WIS), WU Catalog website scraping, and local CDN.json database. Each source independently finds versions the others miss.
+- **Multi-content-ID support** — When a product has multiple packages (Xbox One, Series X|S, PC), pick one or process all with `a=all`.
+- **Parallel CDN probing** — 24-worker thread pool for dramatically faster HEAD probing across CDN domains and shards 0-20.
+- **GET+Range fallback** — On non-404 HEAD failures (405, 403), falls back to GET with `Range: bytes=0-0` to verify URL validity.
+- **MSIX install prompt** — After downloading `.msixvc`/`.appx`/`.appxbundle` packages, offers to install via PowerShell `Add-AppxPackage`.
+
+### Game Purge Recovery `[z]`
+- **Dedicated brute-force recovery tool** — Runs full CDN.json lookup, multi-domain CDN brute-force, FE3 delivery API, and WU Catalog recovery pipeline for purged game versions. Presents before/after recovery tables with method attribution.
+
+### Auth & Reliability
+- **SISU authorize retry** — Retries on transient HTTP errors (429, 5xx) and network errors with exponential backoff (up to 3 attempts).
+- **Cached update token fallback** — `update.xboxlive.com` XBL3.0 token cached to disk. When SISU auth fails, falls back to cached token with remaining validity check.
+- **JWT expiry parsing** — XBL3.0 tokens decoded to check remaining validity before use.
+
+### Browse & Discovery
+- **Browse regions expanded** — Marketplace browse discovery expanded from 8 to 40+ regions covering East Asia, Europe, Latin America, Middle East, and more. Inter-region cooldown reduced from 15s to 5s.
+- **Invalid product backfill** — Products marked invalid by Catalog v3 are retried via Display Catalog v7. TitleHub name recovery clears invalid flags when names are found.
+
+### Library Filters
+- **Trial filter** — All / Has Trial / No Trial in the collection tab.
+- **Achievements filter** — All / Has Achievements / No Achievements in the collection tab.
+
+### Hard Drive Tool
+- **Convert/Mount/Unmount temporarily hidden** — Menu options `[a]` Convert to PC Mode, `[b]` Convert to Xbox Mode, `[c]` Mount Partition, and `[d]` Unmount Partition are hidden from the menu while under revision. Logic is preserved internally.
+- **Better GPT partition selection** — Skips MSR, EFI, Recovery, and BIOS boot partitions by GUID, picks the largest data partition.
+
+### CDN Sync
+- **Rate limit increased** — Sync limit raised from 10 to 30 per minute.
+- **Richer sync response** — Sync results now include accepted/duplicate entry IDs and per-platform counts.
+
+### Other
+- **Post-scan menu** — After processing accounts, choose to open the local page, sync to XCT Live, or return to menu (replaces auto-open browser).
+- **Upload collection `[m]`** — Upload collection directly to XCT Live from the menu without exporting to file first.
+- **Marketplace scanner: all 67 regions** — Scanner expanded from 11 to 67 supported market regions for per-region force scans.
+
 ## What's New in v1.9.1
 
 - **Raw NTFS scraper picks up GUID.GUID CDN URL files** — The Xbox hard drive scraper (`[L]`) and USB drive scanner now detect a second file format alongside `.xvs` files: plain binary files named `{contentId-guid}.{suffix-guid}` containing null-terminated CDN URLs in UTF-16LE. These appear on some Xbox drives and contain the same CDN download links as `.xvs` files but in a non-JSON format. The scraper auto-detects the format, extracts all mirror URLs, and parses build version, build ID, and package name from the URL path structure.

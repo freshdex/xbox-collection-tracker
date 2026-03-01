@@ -29,7 +29,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://localhost/freshdex_c
 # Rate limiting (in-memory, resets on restart)
 _rate_sync = defaultdict(list)    # api_key -> [timestamps]
 _rate_register = defaultdict(list)  # ip -> [timestamps]
-SYNC_LIMIT = 10       # per minute
+SYNC_LIMIT = 30       # per minute
 REGISTER_LIMIT = 5    # per hour
 
 
@@ -169,6 +169,9 @@ def sync():
         points_earned = 0
         new_accepted = 0
         duplicates_skipped = 0
+        accepted_ids = []
+        duplicate_ids = []
+        platform_counts = {}
 
         # Process uploaded entries
         for entry in entries[:5000]:  # cap at 5000 per sync
@@ -233,8 +236,12 @@ def sync():
                         (contributor_id, row['id']))
                     points_earned += 1
                     new_accepted += 1
+                    accepted_ids.append(store_id)
+                    plat = _sanitize_str(entry.get('platform'), 32) or 'Unknown'
+                    platform_counts[plat] = platform_counts.get(plat, 0) + 1
                 else:
                     duplicates_skipped += 1
+                    duplicate_ids.append(store_id)
             except Exception:
                 conn.rollback()
                 conn = get_db()
@@ -254,66 +261,67 @@ def sync():
             cur.execute("UPDATE contributors SET last_sync_at = NOW() WHERE id = %s",
                         (contributor_id,))
 
-        # Fetch entries the client doesn't have
+        # Fetch entries the client doesn't have (only when known_keys provided)
         remote_entries = []
-        cur.execute("SELECT store_id, build_id FROM cdn_entries WHERE NOT deleted")
-        all_db_keys = set()
-        for row in cur:
-            all_db_keys.add(f"{row['store_id']}:{row['build_id']}")
-
-        missing_keys = all_db_keys - known_keys
-        if missing_keys:
-            # Fetch full records for missing entries (cap at 5000)
-            missing_list = list(missing_keys)[:5000]
-            pairs = [(k.split(':', 1)[0], k.split(':', 1)[1]) for k in missing_list if ':' in k]
-            if pairs:
-                # Build query for missing entries
-                values_clause = ','.join(
-                    cur.mogrify("(%s, %s)", (s, b)).decode() for s, b in pairs)
-                cur.execute(f"""
-                    SELECT e.store_id, e.build_id, e.content_id, e.package_name, e.build_version,
-                           e.platform, e.size_bytes, e.cdn_urls, e.content_types, e.devices,
-                           e.language, e.plan_id, e.source, e.scraped_at,
-                           e.prior_build_version, e.prior_build_id,
-                           c2.username AS contributor
-                    FROM cdn_entries e
-                    LEFT JOIN contributions c ON c.cdn_entry_id = e.id
-                    LEFT JOIN contributors c2 ON c2.id = c.contributor_id
-                    WHERE (e.store_id, e.build_id) IN ({values_clause})
-                      AND NOT e.deleted
-                """)
-                for row in cur:
-                    remote_entries.append({
-                        'storeId': row['store_id'],
-                        'buildId': row['build_id'],
-                        'contentId': row['content_id'],
-                        'packageName': row['package_name'],
-                        'buildVersion': row['build_version'],
-                        'platform': row['platform'],
-                        'sizeBytes': row['size_bytes'],
-                        'cdnUrls': row['cdn_urls'] or [],
-                        'contentTypes': row['content_types'],
-                        'devices': row['devices'],
-                        'language': row['language'],
-                        'planId': row['plan_id'],
-                        'source': row['source'],
-                        'scrapedAt': row['scraped_at'].isoformat() if row['scraped_at'] else None,
-                        'priorBuildVersion': row['prior_build_version'],
-                        'priorBuildId': row['prior_build_id'],
-                        'contributor': row['contributor'],
-                    })
-
-        # Build contributor map for all entries (storeId:buildId -> username)
         contributor_map = {}
-        cur.execute("""
-            SELECT e.store_id, e.build_id, c2.username
-            FROM cdn_entries e
-            JOIN contributions c ON c.cdn_entry_id = e.id
-            JOIN contributors c2 ON c2.id = c.contributor_id
-            WHERE NOT e.deleted
-        """)
-        for row in cur:
-            contributor_map[f"{row['store_id']}:{row['build_id']}"] = row['username']
+        if known_keys:
+            cur.execute("SELECT store_id, build_id FROM cdn_entries WHERE NOT deleted")
+            all_db_keys = set()
+            for row in cur:
+                all_db_keys.add(f"{row['store_id']}:{row['build_id']}")
+
+            missing_keys = all_db_keys - known_keys
+            if missing_keys:
+                # Fetch full records for missing entries (cap at 5000)
+                missing_list = list(missing_keys)[:5000]
+                pairs = [(k.split(':', 1)[0], k.split(':', 1)[1]) for k in missing_list if ':' in k]
+                if pairs:
+                    # Build query for missing entries
+                    values_clause = ','.join(
+                        cur.mogrify("(%s, %s)", (s, b)).decode() for s, b in pairs)
+                    cur.execute(f"""
+                        SELECT e.store_id, e.build_id, e.content_id, e.package_name, e.build_version,
+                               e.platform, e.size_bytes, e.cdn_urls, e.content_types, e.devices,
+                               e.language, e.plan_id, e.source, e.scraped_at,
+                               e.prior_build_version, e.prior_build_id,
+                               c2.username AS contributor
+                        FROM cdn_entries e
+                        LEFT JOIN contributions c ON c.cdn_entry_id = e.id
+                        LEFT JOIN contributors c2 ON c2.id = c.contributor_id
+                        WHERE (e.store_id, e.build_id) IN ({values_clause})
+                          AND NOT e.deleted
+                    """)
+                    for row in cur:
+                        remote_entries.append({
+                            'storeId': row['store_id'],
+                            'buildId': row['build_id'],
+                            'contentId': row['content_id'],
+                            'packageName': row['package_name'],
+                            'buildVersion': row['build_version'],
+                            'platform': row['platform'],
+                            'sizeBytes': row['size_bytes'],
+                            'cdnUrls': row['cdn_urls'] or [],
+                            'contentTypes': row['content_types'],
+                            'devices': row['devices'],
+                            'language': row['language'],
+                            'planId': row['plan_id'],
+                            'source': row['source'],
+                            'scrapedAt': row['scraped_at'].isoformat() if row['scraped_at'] else None,
+                            'priorBuildVersion': row['prior_build_version'],
+                            'priorBuildId': row['prior_build_id'],
+                            'contributor': row['contributor'],
+                        })
+
+            # Build contributor map for all entries (storeId:buildId -> username)
+            cur.execute("""
+                SELECT e.store_id, e.build_id, c2.username
+                FROM cdn_entries e
+                JOIN contributions c ON c.cdn_entry_id = e.id
+                JOIN contributors c2 ON c2.id = c.contributor_id
+                WHERE NOT e.deleted
+            """)
+            for row in cur:
+                contributor_map[f"{row['store_id']}:{row['build_id']}"] = row['username']
 
         # Get totals
         cur.execute("SELECT COUNT(*) as cnt FROM cdn_entries WHERE NOT deleted")
@@ -327,12 +335,17 @@ def sync():
 
         # Log sync (only if points earned)
         if points_earned > 0:
+            extra = {
+                'accepted_ids': sorted(set(accepted_ids)),
+                'duplicate_ids': sorted(set(duplicate_ids)),
+                'platform_counts': platform_counts,
+            }
             cur.execute("""
                 INSERT INTO sync_log (contributor_id, username, points_earned, total_points,
-                                      new_entries, duplicates_skipped)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                                      new_entries, duplicates_skipped, extra)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (contributor_id, contributor_username, points_earned, total_points,
-                  new_accepted, duplicates_skipped))
+                  new_accepted, duplicates_skipped, psycopg2.extras.Json(extra)))
 
         conn.commit()
         return jsonify(
@@ -344,6 +357,9 @@ def sync():
             contributor_map=contributor_map,
             total_db_entries=total_entries,
             total_db_games=total_games,
+            accepted_ids=sorted(set(accepted_ids)),
+            duplicate_ids=sorted(set(duplicate_ids)),
+            platform_counts=platform_counts,
         )
     except Exception as e:
         conn.rollback()
@@ -399,7 +415,7 @@ def sync_log():
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("""
             SELECT username, points_earned, total_points, new_entries,
-                   duplicates_skipped, synced_at
+                   duplicates_skipped, synced_at, extra
             FROM sync_log
             ORDER BY synced_at DESC
             LIMIT 100
@@ -407,6 +423,7 @@ def sync_log():
         rows = cur.fetchall()
         log = []
         for row in rows:
+            ex = row.get('extra') or {}
             log.append({
                 'username': row['username'],
                 'pointsEarned': row['points_earned'],
@@ -414,6 +431,9 @@ def sync_log():
                 'newEntries': row['new_entries'],
                 'duplicatesSkipped': row['duplicates_skipped'],
                 'syncedAt': row['synced_at'].isoformat() if row['synced_at'] else None,
+                'acceptedIds': ex.get('accepted_ids', []),
+                'duplicateIds': ex.get('duplicate_ids', []),
+                'platformCounts': ex.get('platform_counts', {}),
             })
         return jsonify(sync_log=log)
     except Exception as e:
