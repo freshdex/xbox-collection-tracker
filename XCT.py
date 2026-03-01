@@ -15054,8 +15054,13 @@ def _fe3_get_url(update_id, revision, ring="Retail", timeout=30):
         url_els = loc.getElementsByTagName("Url")
         if url_els and url_els[0].firstChild:
             dl_url = url_els[0].firstChild.nodeValue
-            if len(dl_url) != 99:   # skip blockmap URLs (always 99 chars)
-                return dl_url
+            if len(dl_url) == 99:   # skip blockmap URLs (always 99 chars)
+                continue
+            # skip PHF (Piece Hash File) URLs — want actual content
+            dl_path = dl_url.split("?")[0].lower()
+            if dl_path.endswith(".phf"):
+                continue
+            return dl_url
     return None
 
 
