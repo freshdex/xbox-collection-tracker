@@ -4446,6 +4446,7 @@ def build_html_template(gamertag=""):
         "if(GP.length){document.getElementById('tab-gp').style.display='';document.getElementById('tab-gp-cnt').textContent=GP.length}\n"
         "if(HISTORY.length){document.getElementById('tab-hist').style.display='';document.getElementById('tab-hist-cnt').textContent=HISTORY.length+' scans'}\n"
         # Marketplace dropdowns
+        "var _MKT_TAGS=typeof _MKT_TAGS!=='undefined'?_MKT_TAGS:{};\n"
         "if(typeof MKT!=='undefined'&&MKT.length){\n"
         # Map new API fields to legacy field names for compat
         "MKT.forEach(x=>{"
@@ -6010,7 +6011,7 @@ def build_html_template(gamertag=""):
 
     html += (
         '_loadImports().catch(()=>{}).then(()=>{\n'
-        'try{initDropdowns();_mktInitSaved();_mktDeserializeFilters();_initAdminRegionBtns();filterLib();filterPH();filterGP();filterMKT();renderHistory();renderImports();}catch(e){console.error("init error",e)}\n'
+        'try{initDropdowns();_mktInitSaved();_mktDeserializeFilters();filterLib();filterPH();filterGP();filterMKT();renderHistory();renderImports();}catch(e){console.error("init error",e)}\n'
         'renderGFWL();\n'
         '_cdnSyncBuildFlat();renderCDNSync();renderCDNLeaderboard();renderCDNSyncLog();\n'
         "var _revSlug={library:'library',store:'marketplace',marketplace:'marketplace',gamepass:'gamepass',"
