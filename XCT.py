@@ -6109,7 +6109,8 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
         except Exception:
             pass
 
-    # Load CDN leaderboard cache if available
+    # Load CDN leaderboard cache if available (reused below for sync_log)
+    lb_cache = {}
     cdn_leaderboard = []
     cdn_lb_stats = {}
     if os.path.isfile(CDN_LEADERBOARD_CACHE_FILE):
@@ -6149,14 +6150,9 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
             local_log = [e for e in (load_json(CDN_SYNC_LOG_FILE) or []) if e.get("ptsEarned", 0) > 0]
         except Exception:
             pass
-    server_log = []
-    if os.path.isfile(CDN_LEADERBOARD_CACHE_FILE):
-        try:
-            server_log = (load_json(CDN_LEADERBOARD_CACHE_FILE) or {}).get("sync_log", [])
-        except Exception:
-            pass
+    server_log = lb_cache.get("sync_log", [])
     if local_log:
-        cdn_sync_log = list(local_log)
+        cdn_sync_log = local_log
         # Append older server entries not covered by local log
         oldest_local = min((e.get("ts") or "") for e in local_log)
         for se in server_log:
