@@ -3674,8 +3674,10 @@ def build_html_template(gamertag=""):
 
         # -- Tabs (counts populated by JS) --
         '<div class="tabs">\n'
-        '<div class="tab active" onclick="switchTab(\'library\',this)">My Collection <span class="cnt" id="tab-lib-cnt"></span></div>\n'
-        '<div class="tab" id="tab-mkt" onclick="switchTab(\'marketplace\',this)" style="display:none">Marketplace <span class="cnt" id="tab-mkt-cnt"></span></div>\n'
+        '<img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCAAcADMDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD5BgUE8g1s2ES5DFwGDAbByceo7Vn2UKvOq7wCR1X2z/Ouh8PRpFrcEbLFKN2SJSVA+uOh/OlKokcc5pHo/gTwRFeQ28+sS3UQuc/Z7a1t2muJgDglUHRQeCzFVB4znIHR+OPAvhXSbWO4kv73S03YZb9EDv7oEZ93px09a2bTW9E0vXrC90xLi7uLjyIbSzvXzbWUjbU8ybbgOqgZUY6E5wWqHxv4v8Fza/eXMWn+KL3Uorsw3GqS3dvE06K3zeTG0Z2htpCgcAHJz38eGKrVpLldl93yS3+b36Hnqq6j92R494z8NQ2NhHqdle/ard5WhZXQxyRsoB5Q84OetcVqEcaxHHXABA7V758ctR8C6Xpk+n6To+rXuq3Nvbq+oX16rxoBGpKbUVdzJwuTwSvTpXz1dTOxYAnBPSvTw0pyheTv5nZQ5uX3nfzKn4UUh4JB/nRXSdRJA4BJOc+oNbPheSeXVoIIZvLmkcKj4DEH29Olc6tSKSDwe9RKPMmhThdNHuI0yS11OZ9K1aS4lmtwslna3CTTyyA4DKfugYAYrncOQOxq1ra+LbzTEGq3ElpZKgQ3eoQm1htgMhtqHDzS8kAAHGT68eExTyxsCkjKR3Bqa6v7y4A8+5llwMDexPFef9SqJp8y9ba/1/TucCwck1qvWx0/jXWrfUr0rBLPNbpkJJM2ZH9WbHGSecDgZx2rmZnAJK4yegHaq6MwcNnkVbjRHjLsoJOTXYkqSUUdKiqSSKZUk5Oc0U5sk5yaKvmNbn//2Q==" '
+        'alt="XCT" style="height:24px;margin:0 4px 0 6px;vertical-align:middle">\n'
+        '<div class="tab" id="tab-mkt" onclick="switchTab(\'marketplace\',this)" style="display:none">Store <span class="cnt" id="tab-mkt-cnt"></span></div>\n'
+        '<div class="tab active" onclick="switchTab(\'library\',this)">Collection <span class="cnt" id="tab-lib-cnt"></span></div>\n'
         '<div class="tab" id="tab-gp" onclick="switchTab(\'gamepass\',this)" style="display:none">Game Pass <span class="cnt" id="tab-gp-cnt"></span></div>\n'
         '<div class="tab" id="tab-ph" onclick="switchTab(\'playhistory\',this)" style="display:none">Play History <span class="cnt" id="tab-ph-cnt"></span></div>\n'
         '<div class="tab" id="tab-hist" onclick="switchTab(\'history\',this)" style="display:none">Scan Log <span class="cnt" id="tab-hist-cnt"></span></div>\n'
@@ -3936,7 +3938,7 @@ def build_html_template(gamertag=""):
         # Binary checkboxes
         '<label class="mkt-tick"><input type="checkbox" id="mkt-xcloud" onchange="mktPage=0;filterMKT()"> Streamable</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-trial" onchange="mktPage=0;filterMKT()"> Has Trial</label>\n'
-        '<label class="mkt-tick"><input type="checkbox" id="mkt-ach" onchange="mktPage=0;filterMKT()"> Has Achievements</label>\n'
+        '<label class="mkt-tick"><input type="checkbox" id="mkt-ach" checked onchange="mktPage=0;filterMKT()"> Has Achievements</label>\n'
         # Last scan info (moved from top)
         '<div id="mkt-scan-banner" style="font-size:11px;color:#666;margin-top:14px;padding-top:10px;border-top:1px solid #222"></div>\n'
         '</div>\n'
@@ -4134,12 +4136,12 @@ def build_html_template(gamertag=""):
         # Reset binary checkboxes
         "document.getElementById('mkt-xcloud').checked=false;"
         "document.getElementById('mkt-trial').checked=false;"
-        "document.getElementById('mkt-ach').checked=false;"
+        "document.getElementById('mkt-ach').checked=true;"
         "document.getElementById('mkt-group').checked=false;"
         "document.getElementById('mkt-search').value='';"
         "document.getElementById('mkt-saved').value='';"
         "mktSortCol=null;mktPage=0;"
-        "if(window._xctHosted){history.replaceState(null,'','/marketplace')}else{location.hash='marketplace'}"
+        "location.hash='marketplace';"
         "filterMKT()}\n"
 
         # -- URL slug persistence --
@@ -4241,7 +4243,7 @@ def build_html_template(gamertag=""):
         "document.querySelectorAll('#mkt-preorder .cb-panel input').forEach(c=>{c.checked=c.value==='released'});"
         "document.getElementById('mkt-xcloud').checked=false;"
         "document.getElementById('mkt-trial').checked=false;"
-        "document.getElementById('mkt-ach').checked=false;"
+        "document.getElementById('mkt-ach').checked=true;"
         "document.getElementById('mkt-group').checked=false;"
         "document.getElementById('mkt-search').value='';"
         # Apply saved params
@@ -6011,7 +6013,7 @@ def build_html_template(gamertag=""):
         'try{initDropdowns();_mktInitSaved();_mktDeserializeFilters();_initAdminRegionBtns();filterLib();filterPH();filterGP();filterMKT();renderHistory();renderImports();}catch(e){console.error("init error",e)}\n'
         'renderGFWL();\n'
         '_cdnSyncBuildFlat();renderCDNSync();renderCDNLeaderboard();renderCDNSyncLog();\n'
-        "var _revSlug={library:'library',marketplace:'marketplace',gamepass:'gamepass',"
+        "var _revSlug={library:'library',store:'marketplace',marketplace:'marketplace',gamepass:'gamepass',"
         "playhistory:'playhistory',scanlog:'history',gamertags:'gamertags',"
         "gfwl:'gfwl',xvcdb:'cdnsync',imports:'imports'};\n"
         "function _hashNav(){var s=(location.hash.replace('#','')||'library').split('?')[0];"
