@@ -4454,30 +4454,45 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "var _MKT_TAGS=typeof _MKT_TAGS!=='undefined'?_MKT_TAGS:{};\n"
         "var _MKT_LAST_SCAN=typeof _MKT_LAST_SCAN!=='undefined'?_MKT_LAST_SCAN:null;\n"
         "if(typeof MKT!=='undefined'&&MKT.length){\n"
-        # Map new API fields to legacy field names for compat
-        "MKT.forEach(x=>{"
+        # Single-pass: field mapping, pre-index, owned/GP/demo/preOrder/bundle/sale + dropdown counts
+        "const _ownedPids=new Set(LIB.map(x=>x.productId));\n"
+        "const _gpPids=new Set(GP.map(x=>x.productId));\n"
+        "const _demoPids=new Set();\n"
+        "const mChs={},mTypes={},mPlats={},mPubs={},mDevs={},mCats={};\n"
+        "for(let i=0;i<MKT.length;i++){const x=MKT[i];\n"
+        # Pre-index for O(1) lookup in render
+        "x._idx=i;\n"
+        # Field compat
         "if(x.imageBoxArt&&!x.boxArt)x.boxArt=x.imageBoxArt;"
         "if(x.imageHero&&!x.heroImage)x.heroImage=x.imageHero;"
         "if(!x.priceUSD&&x.regionalPrices&&x.regionalPrices.US)x.priceUSD=x.regionalPrices.US.msrp||0;"
-        "if(!x.currentPriceUSD&&x.regionalPrices&&x.regionalPrices.US){const sp=x.regionalPrices.US.salePrice;if(sp>0)x.currentPriceUSD=sp}"
-        "});\n"
-        "MKT.forEach(x=>{const regs=new Set(Object.keys(x.regionalPrices||{}));(x.channelRegions||[]).forEach(r=>regs.add(r));x._availableRegions=[...regs]});\n"
-        "const _ownedPids=new Set(LIB.map(x=>x.productId));MKT.forEach(x=>{x.owned=_ownedPids.has(x.productId)});\n"
-        "const _gpPids=new Set(GP.map(x=>x.productId));MKT.forEach(x=>{x.onGP=_gpPids.has(x.productId)});\n"
-        "const _demoPids=new Set(MKT.filter(x=>(x.channels||[]).includes('Game Demos')).map(x=>x.productId));"
-        "LIB.forEach(x=>{if(!x.isDemo&&_demoPids.has(x.productId))x.isDemo=true});\n"
-        "MKT.forEach(x=>{const rd=x.releaseDate||'';if(rd.slice(0,4)>='2100')x.releaseDate='';x.isPreOrder=rd>_today&&rd.slice(0,4)<'2100'});\n"
-        # Determine isBundle from data + tag overrides
-        "MKT.forEach(x=>{"
+        "if(!x.currentPriceUSD&&x.regionalPrices&&x.regionalPrices.US){const sp=x.regionalPrices.US.salePrice;if(sp>0)x.currentPriceUSD=sp}\n"
+        # Available regions
+        "const regs=new Set(Object.keys(x.regionalPrices||{}));(x.channelRegions||[]).forEach(r=>regs.add(r));x._availableRegions=[...regs];\n"
+        # Owned / GP
+        "x.owned=_ownedPids.has(x.productId);x.onGP=_gpPids.has(x.productId);\n"
+        # Demo detection
+        "if((x.channels||[]).includes('Game Demos'))_demoPids.add(x.productId);\n"
+        # Release / preOrder
+        "const rd=x.releaseDate||'';if(rd.slice(0,4)>='2100')x.releaseDate='';x.isPreOrder=rd>_today&&rd.slice(0,4)<'2100';\n"
+        # Bundle
         "const tag=(_MKT_TAGS[x.productId]||{});"
         "if(tag.is_bundle_override==='true')x._isBundle=true;"
         "else if(tag.is_bundle_override==='false')x._isBundle=false;"
-        "else x._isBundle=!!x.isBundle});\n"
-        # Determine _onSale from any region
-        "MKT.forEach(x=>{x._onSale=false;"
-        "const rp=x.regionalPrices||{};"
+        "else x._isBundle=!!x.isBundle;\n"
+        # On sale
+        "x._onSale=false;const rp=x.regionalPrices||{};"
         "for(const m in rp){if(rp[m].salePrice>0&&rp[m].salePrice<rp[m].msrp){x._onSale=true;break}}"
-        "if(!x._onSale&&x.currentPriceUSD>0&&x.currentPriceUSD<x.priceUSD)x._onSale=true});\n"
+        "if(!x._onSale&&x.currentPriceUSD>0&&x.currentPriceUSD<x.priceUSD)x._onSale=true;\n"
+        # Dropdown counts
+        "(x.channels||[]).forEach(c=>{mChs[c]=(mChs[c]||0)+1});"
+        "let tk=x.productKind||'';if(tk==='Durable')tk='DLC';if(tk)mTypes[tk]=(mTypes[tk]||0)+1;"
+        "(x.platforms||[]).forEach(p=>{mPlats[p]=(mPlats[p]||0)+1});"
+        "const pub=x.publisher||'';if(pub)mPubs[pub]=(mPubs[pub]||0)+1;"
+        "const dev=x.developer||'';if(dev)mDevs[dev]=(mDevs[dev]||0)+1;"
+        "const cat=x.category||'';if(cat)mCats[cat]=(mCats[cat]||0)+1;"
+        "}\n"
+        "LIB.forEach(x=>{if(!x.isDemo&&_demoPids.has(x.productId))x.isDemo=true});\n"
         "document.getElementById('tab-mkt').style.display='';document.getElementById('tab-mkt-cnt').textContent=MKT.length;\n"
         # Scan status banner
         "if(_MKT_LAST_SCAN&&_MKT_LAST_SCAN.completedAt){"
@@ -4485,24 +4500,13 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const agoStr=ago<60?ago+' minutes ago':Math.round(ago/60)+' hours ago';"
         "document.getElementById('mkt-scan-banner').textContent="
         "'Last scan: '+agoStr+' ('+(_MKT_LAST_SCAN.productsTotal||0).toLocaleString()+' products)'}\n"
-        # Channels
-        "const mChs={};MKT.forEach(x=>(x.channels||[]).forEach(c=>{mChs[c]=(mChs[c]||0)+1}));\n"
+        # Fill dropdowns from pre-built counts
         "fill('mkt-channel',Object.entries(mChs).sort((a,b)=>b[1]-a[1]).map(([c,n])=>[c,c+' ('+n+')']),\'filterMKT\');\n"
-        # Types
-        "const mTypes={};MKT.forEach(x=>{let t=x.productKind||'';if(t==='Durable')t='DLC';if(t)mTypes[t]=(mTypes[t]||0)+1});\n"
         "fill('mkt-type',Object.entries(mTypes).sort((a,b)=>b[1]-a[1]).map(([t,n])=>[t,t+' ('+n+')']),\'filterMKT\');\n"
         "document.querySelectorAll('#mkt-type .cb-panel input').forEach(c=>{c.checked=c.value==='Game'});\n"
-        # Platforms
-        "const mPlats={};MKT.forEach(x=>(x.platforms||[]).forEach(p=>{mPlats[p]=(mPlats[p]||0)+1}));\n"
         "fill('mkt-plat',Object.entries(mPlats).sort((a,b)=>b[1]-a[1]).map(([p,n])=>[p,p+' ('+n+')']),\'filterMKT\');\n"
-        # Publishers
-        "const mPubs={};MKT.forEach(x=>{const p=x.publisher||'';if(p)mPubs[p]=(mPubs[p]||0)+1});\n"
         "fill('mkt-pub',Object.entries(mPubs).sort((a,b)=>b[1]-a[1]).map(([p,n])=>[p,p+' ('+n+')']),\'filterMKT\');\n"
-        # Developers
-        "const mDevs={};MKT.forEach(x=>{const d=x.developer||'';if(d)mDevs[d]=(mDevs[d]||0)+1});\n"
         "fill('mkt-dev',Object.entries(mDevs).sort((a,b)=>b[1]-a[1]).map(([d,n])=>[d,d+' ('+n+')']),\'filterMKT\');\n"
-        # Categories
-        "const mCats={};MKT.forEach(x=>{const c=x.category||'';if(c)mCats[c]=(mCats[c]||0)+1});\n"
         "fill('mkt-cat',Object.entries(mCats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>[c,c+' ('+n+')']),\'filterMKT\');\n"
         # Static cb-drops for marketplace
         "fillStatic('mkt-price',[['free','Free'],['under10','Under $10'],['under20','Under $20'],['under40','Under $40'],['over40','$40+'],['sale','On Sale']],'filterMKT');\n"
@@ -5441,14 +5445,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const br=_bestReg(item);\n"
         "const bestCard=br?`<div style=\"margin:2px 0;color:#e91e63;font-weight:600;font-size:11px\">Best: $${br.usd.toFixed(2)} (${br.mkt})</div>`:'';\n"
         "const ratingStr=item.averageRating>0?`<div style=\"font-size:10px;color:#aaa\">${item.averageRating.toFixed(1)} (${(item.ratingCount||0).toLocaleString()})</div>`:'';\n"
-        'gh+=`<div class="card" onclick="showMKTDetail(${MKT.indexOf(item)})">${imgTag}<div class="card-body">'
+        'gh+=`<div class="card" onclick="showMKTDetail(${item._idx})">${imgTag}<div class="card-body">'
         '<div class="card-name" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}</div>'
         '<div class="card-meta">${item.publisher||\'\'} | ${(item.releaseDate||\'\').substring(0,10)}</div>'
         '<div style="margin:4px 0">${priceTag}</div>'
         '${bestCard}${ratingStr}'
         '<div class="card-badges">${owned}${gpBadge}${bundleBadge}${xcloudBadge}${altBadge}${chBadges}</div></div></div>`;\n'
         "const thumbImg=img?`<img src=\"${img}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';\n"
-        'lh+=`<div class="lv-row" onclick="showMKTDetail(${MKT.indexOf(item)})">${thumbImg}'
+        'lh+=`<div class="lv-row" onclick="showMKTDetail(${item._idx})">${thumbImg}'
         '<div class="lv-title" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}'
         '${altCount>0?\'<span style="font-size:10px;color:#78909c;margin-left:6px;cursor:pointer" onclick="event.stopPropagation();_mktToggleAlts(this)">\'+altCount+\' ed.</span>\':\'\'}</div>'
         '<div class="lv-pub">${item.publisher||\'\'}</div>'
@@ -5468,7 +5472,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const aImg=alt.heroImage||alt.boxArt||'';"
         "const aThumb=aImg?`<img src=\"${aImg}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';"
         "const aBundleBadge=alt._isBundle?'<span class=\"badge\" style=\"font-size:9px;background:#e65100;color:#fff\">BUNDLE</span>':'';"
-        "lh+=`<div class=\"lv-row mkt-alt\" style=\"display:none;background:#1a1a2e;border-left:3px solid #455a64\" onclick=\"showMKTDetail(${MKT.indexOf(alt)})\">${aThumb}"
+        "lh+=`<div class=\"lv-row mkt-alt\" style=\"display:none;background:#1a1a2e;border-left:3px solid #455a64\" onclick=\"showMKTDetail(${alt._idx})\">${aThumb}"
         "<div class=\"lv-title\" style=\"padding-left:12px;font-size:12px\" title=\"${(alt.title||'').replace(/\"/g,'&quot;')}\">${alt.title||'Unknown'}</div>"
         "<div class=\"lv-pub\">${alt.publisher||''}</div>"
         "<div class=\"lv-type\">${(alt.releaseDate||'').substring(0,10)}</div>"
