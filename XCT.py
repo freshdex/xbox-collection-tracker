@@ -3420,7 +3420,7 @@ def fetch_gamepass_details(gp_data, existing_catalog_us=None,
 # Step 6: Build HTML
 # ===========================================================================
 
-def build_html_template(gamertag=""):
+def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""):
     """Build the static HTML template. Contains no data — loads from data.js.
 
     All dropdowns are populated dynamically from LIB/GP/HISTORY data by JS.
@@ -3723,8 +3723,11 @@ def build_html_template(gamertag=""):
         '</div>\n'
     )
 
+    if header_html:
+        html += header_html
+
     html += (
-        f'<div style="margin-left:6px;padding:0 8px;color:#555;font-size:11px;white-space:nowrap">'
+        f'<div style="margin-left:{"auto" if not header_html else "0"};padding:0 8px;color:#555;font-size:11px;white-space:nowrap">'
         f'XCT v{VERSION}</div>\n'
         '</div>\n'
     )
@@ -4037,6 +4040,8 @@ def build_html_template(gamertag=""):
         # -- Load data from data.js --
     )
 
+    if default_tab:
+        html += f'<script>var _defaultTab="{default_tab}";</script>\n'
     html += '<script src="data.js"></script>\n'
 
 
@@ -6018,16 +6023,22 @@ def build_html_template(gamertag=""):
         "var _revSlug={library:'library',store:'marketplace',marketplace:'marketplace',gamepass:'gamepass',"
         "playhistory:'playhistory',scanlog:'history',gamertags:'gamertags',"
         "gfwl:'gfwl',xvcdb:'cdnsync',imports:'imports'};\n"
-        "function _hashNav(){var s=(location.hash.replace('#','')||'library').split('?')[0];"
-        "var t=_revSlug[s]||'library';"
+        "function _hashNav(){var _dt=typeof _defaultTab!=='undefined'?_defaultTab:'library';"
+        "var s=(location.hash.replace('#','')||_dt).split('?')[0];"
+        "var t=_revSlug[s]||_dt;"
         "var el=document.querySelector('.tab[onclick*=\"'+t+'\"]');"
         "if(el)switchTab(t,el)}\n"
         "_hashNav();\n"
         "window.addEventListener('hashchange',_hashNav);\n"
         "document.getElementById('loading-overlay').style.display='none';\n"
         '});\n'
-        '</script></body></html>'
+        '</script>\n'
     )
+
+    if extra_js:
+        html += f'<script>{extra_js}</script>\n'
+
+    html += '</body></html>'
 
     return html
 
