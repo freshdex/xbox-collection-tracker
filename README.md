@@ -4,26 +4,13 @@ Track your Xbox game library across multiple accounts. See every game you own, w
 
 ## What's New in v2.0
 
-### XCT Live — Marketplace Overhaul
+### Marketplace Filters
 - **Marketplace sidebar with checkbox dropdown filters** — All marketplace filters (Channel, Type, Platform, Price, Genre, Subscriptions, Multiplayer, Publisher, Developer, Ownership, Release Status, Bundles, Region Availability) converted from `<select>` elements to multi-select checkbox dropdown panels. Binary filters (Streamable, Has Trial, Has Achievements) are single checkboxes. Compact sidebar layout with search at top and scan info at bottom.
 - **URL persistence for all filters** — Every filter state is serialized into URL query parameters. Share a filtered marketplace view by copying the URL. Loading a URL with params restores the exact filter state.
 - **Saved filter presets** — Save the current filter combination as a named preset stored in localStorage. Load or delete saved presets from a dropdown in the sidebar.
-- **Loading spinner with live item counter** — Marketplace data loads via streaming fetch with a spinner showing a live count of items as they arrive.
 - **Price cells link to Xbox store pages** — Every price cell (USD and regional) is now a direct link to the Xbox store page for that locale. Game title click still opens the detail modal.
 - **Free trial detection fix** — Trial detection was flagging ~13,000 products (75%) because the generic `IsTrial` SKU property exists on nearly every Xbox game. Now correctly checks for `Purchase` action in trial SKU availability, reducing to 537 real free trials.
 - **Marketplace column sorting** — Click any column header in list view to sort ascending/descending.
-- **Admin panel expansion** — Marketplace changelog browser, scan history table, and force-scan buttons for all 67 Xbox regions (up from 11).
-
-### XCT Live — Sign in with Xbox
-- **Xbox OAuth integration** — Link your Xbox account to XCT Live via Sign in with Xbox. Your avatar, gamertag, and gamerscore display in the profile tab.
-- **Achievements tab** — Three-source achievement merge combining Xbox history v2 (modern titles), v1 (Xbox 360), and TitleHub enrichment (images, product IDs). Stats overview with completion percentages and game counts.
-- **TrueAchievements leaderboard** — Scraped TA leaderboard data with sortable columns, cross-referenced with Xbox profiles for gamerscore and games played.
-- **Profile tab** — User profile with avatar, status message, settings, and My Regions configuration.
-
-### XCT Live — Performance
-- **Lazy tab loading** — Shared data (marketplace, Game Pass, GFWL, XVC Database) loads on first tab click instead of all at once on page load. Dramatically faster initial load.
-- **Gzip collection upload** — Collection data is gzip-compressed before upload, with before/after size reporting.
-- **My Regions selector** — Pick your regions from a checkbox dropdown in the tab bar. Persisted to your profile.
 
 ### Game Downgrader Overhaul
 - **Multi-source version discovery** — Merges Xbox CDN (GetBasePackage XSP chain), FE3 SOAP delivery API (all 4 rings: RP, Retail, WIF, WIS), WU Catalog website scraping, and local CDN.json database. Each source independently finds versions the others miss.
@@ -56,22 +43,10 @@ Track your Xbox game library across multiple accounts. See every game you own, w
 - **Rate limit increased** — Sync limit raised from 10 to 30 per minute.
 - **Richer sync response** — Sync results now include accepted/duplicate entry IDs and per-platform counts.
 
-### Other
-- **Post-scan menu** — After processing accounts, choose to open the local page, sync to XCT Live, or return to menu (replaces auto-open browser).
-- **Upload collection `[m]`** — Upload collection directly to XCT Live from the menu without exporting to file first.
-- **Marketplace scanner: all 67 regions** — Scanner expanded from 11 to 67 supported market regions for per-region force scans.
-
 ## What's New in v1.9.1
 
 - **Raw NTFS scraper picks up GUID.GUID CDN URL files** — The Xbox hard drive scraper (`[L]`) and USB drive scanner now detect a second file format alongside `.xvs` files: plain binary files named `{contentId-guid}.{suffix-guid}` containing null-terminated CDN URLs in UTF-16LE. These appear on some Xbox drives and contain the same CDN download links as `.xvs` files but in a non-JSON format. The scraper auto-detects the format, extracts all mirror URLs, and parses build version, build ID, and package name from the URL path structure.
 - **Package name regex now matches URLs without .xvc extension** — All three CDN scrapers (raw NTFS, USB drive, PC games) now extract package names from CDN URLs that don't end in `.xvc`, covering the URL format used by GUID.GUID files.
-- **XCT Live — CDN contributor names fixed** — The hosted viewer at [xct.freshdex.app](https://xct.freshdex.app) now shows actual contributor usernames in the CDN Sync tab instead of displaying "You" for every entry. A new server endpoint serves the contributor map from the CDN database, and the client defaults all entries to "remote" source in hosted mode.
-
-## What's New in v1.9
-
-- **XCT Live — Hosted Collection Viewer at [xct.freshdex.app](https://xct.freshdex.app)** — A hosted version of the XCT HTML explorer that runs in your browser with no local install. Shared data (Marketplace, Game Pass, GFWL, XVC Database, CDN Leaderboard) is loaded from the server and available to everyone immediately. Log in with your CDN Sync username+passphrase to upload your personal collection and get the full experience — your library, play history, scan log, and "owned" badges on Marketplace/GP items.
-- **Export command `[X]` / `python XCT.py export`** — Exports your combined collection data to `xct_export.json` for upload to XCT Live. Strips credential and bulky fields (descriptions, hero images), caps scan history to 100 entries, and keeps only gamertag names in account metadata. Offers direct upload to xct.freshdex.app using your existing CDN Sync API key.
-- **XCT Live server (`xct_server.py`)** — Flask app serving the hosted version. Shares the same PostgreSQL database as the CDN Sync server. Reuses the CDN Sync `contributors` table for authentication. Shared data endpoints serve gzipped JSON with ETag caching. Collection upload/download/delete endpoints with Bearer token auth. Operator imports shared data via `flask import-shared` CLI command.
 
 ## What's New in v1.8.1
 

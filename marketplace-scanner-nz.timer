@@ -1,9 +1,0 @@
-[Unit]
-Description=XCT NZ New Releases Scanner (15 min)
-
-[Timer]
-OnCalendar=*:0/15
-Persistent=true
-
-[Install]
-WantedBy=timers.target

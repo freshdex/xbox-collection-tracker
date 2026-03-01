@@ -1,2 +1,0 @@
-ecdsa
-psycopg2-binary

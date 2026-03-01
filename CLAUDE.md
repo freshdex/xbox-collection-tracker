@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Xbox Collection Tracker (XCT) — single-file Python tool (`XCT.py`, ~15,900 lines) that authenticates with Xbox Live, fetches game library data via multiple Microsoft APIs, enriches with catalog metadata, and generates a self-contained HTML explorer page. Supports multiple Xbox accounts. Also includes Xbox hard drive tools, CDN scraping/sync, CDN download/install utilities, GFWL game downloading, Windows gaming repair tools, and a hosted viewer at xct.freshdex.app (served by `xct_server.py`).
+Xbox Collection Tracker (XCT) — single-file Python tool (`XCT.py`) that authenticates with Xbox Live, fetches game library data via multiple Microsoft APIs, enriches with catalog metadata, and generates a self-contained HTML explorer page. Supports multiple Xbox accounts. Also includes Xbox hard drive tools, CDN scraping/sync, CDN download/install utilities, GFWL game downloading, and Windows gaming repair tools.
 
 ## Dependencies & Running
 
@@ -16,7 +16,6 @@ python XCT.py --all                # Refresh all tokens + process all accounts
 python XCT.py add                  # Add new account (device code flow)
 python XCT.py extract [file]       # Extract token from HAR file
 python XCT.py build                # Rebuild HTML from cached data (no network)
-python XCT.py export               # Export combined collection to xct_export.json (for XCT Live upload)
 python XCT.py preview              # Generate blank HTML only (UI testing, no account data)
 python XCT.py --no-update ...      # Skip GitHub update check (combine with any other arg)
 ```
@@ -89,12 +88,6 @@ Downloads Games for Windows - LIVE packages from `download-ssl.xbox.com`. Uses `
 ### GFWL Key Recovery (`recover_gfwl_keys`, menu `[P]`)
 Recovers GFWL product keys from `Token.bin` files using Windows DPAPI decryption. Includes 312 GFWL title name mappings.
 
-### XCT Live Server (`xct_server.py`, ~700 lines)
-Flask app serving the hosted collection viewer at `xct.freshdex.app`. Shares PostgreSQL database with CDN Sync server (`cdn.freshdex.app`). Reuses CDN Sync `contributors` table for auth. Endpoints: shared data (marketplace, Game Pass, rates, flags, GFWL, XVC DB) served as gzipped JSON with ETag caching; collection upload/download/delete with Bearer token auth. Separate deps in `xct_server_requirements.txt` (flask, psycopg2-binary, gunicorn). Operator imports shared data via `flask --app xct_server import-shared` CLI.
-
-### Export (`cmd_export`, menu `[X]`)
-Exports combined collection to `xct_export.json` for upload to XCT Live. Strips credentials and bulky fields, caps scan history to 100 entries. Offers direct upload to xct.freshdex.app using CDN Sync API key.
-
 ### Windows Gaming Repair (`menu [Q]`) / Store Reset (`menu [R]`)
 PowerShell-based repair tools: re-register Xbox app packages, reset Gaming Services, restart Xbox services. Store reset launches `wsreset.exe`.
 
@@ -125,14 +118,11 @@ Price comparison across 10 regions (AR, BR, TR, IS, NG, TW, NZ, CO, HK, US). Exc
 - **Xbox CDN** (`assets{N}.xboxlive.com`) — Game package downloads
 - **GFWL CDN** (`download-ssl.xbox.com`) — GFWL package downloads
 - **Freshdex CDN Sync** (`cdn.freshdex.app/api/v1`) — Community CDN package database
-- **XCT Live** (`xct.freshdex.app`) — Hosted collection viewer (shared data + personal collection upload)
 
 ## File Layout
 
 ```
-XCT.py                     # Everything: auth, API calls, HTML generation, disk tools (~15,900 lines)
-xct_server.py              # XCT Live Flask server (~700 lines, separate deploy)
-xct_server_requirements.txt # Server deps (flask, psycopg2-binary, gunicorn)
+XCT.py                     # Everything: auth, API calls, HTML generation, disk tools
 xbox_auth.py               # Standalone auth helper (legacy, not used by main flow)
 tags.json                  # Community game tags (delisted, indie, demo flags)
 gfwl_links.json            # GFWL package database (244 titles, 1,775 packages)
