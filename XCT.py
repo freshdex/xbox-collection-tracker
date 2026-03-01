@@ -3683,7 +3683,7 @@ def build_html_template(gamertag=""):
         '<div class="tab" id="tab-hist" onclick="switchTab(\'history\',this)" style="display:none">Scan Log <span class="cnt" id="tab-hist-cnt"></span></div>\n'
         '<div class="tab" id="tab-acct" onclick="switchTab(\'gamertags\',this)" style="display:none">Gamertags <span class="cnt" id="tab-acct-cnt"></span></div>\n'
         '<div class="tab" id="tab-gfwl" onclick="switchTab(\'gfwl\',this)" style="display:none">GFWL <span class="cnt" id="tab-gfwl-cnt"></span></div>\n'
-        '<div class="tab" id="tab-cdnsync" onclick="switchTab(\'cdnsync\',this)" style="display:none">XVC Database <span class="cnt" id="tab-cdnsync-cnt"></span></div>\n'
+        '<div class="tab" id="tab-cdnsync" onclick="switchTab(\'cdnsync\',this)" style="display:none">XVC <span class="cnt" id="tab-cdnsync-cnt"></span></div>\n'
         '<div class="tab" id="tab-imp" onclick="switchTab(\'imports\',this)" style="display:none">Imports <span class="cnt" id="tab-imp-cnt"></span></div>\n'
         '<select id="lib-cur" class="tab-cur" onchange="_onCur()">'
         '<option value="USD" selected>USD $</option>'
@@ -5900,7 +5900,7 @@ def build_html_template(gamertag=""):
         "  if(!el)return;\n"
         "  const hasLb=typeof CDN_LEADERBOARD!=='undefined'&&CDN_LEADERBOARD.length;\n"
         "  const hasCdn=_cdnSyncFlat.length>0;\n"
-        "  if(!hasLb&&!hasCdn)return;\n"
+        "  if(!hasCdn)return;\n"
         "  document.getElementById('tab-cdnsync').style.display='';\n"
         "  const games=_cdnSyncFlat.filter(e=>!e.isVer&&e.kind!=='Durable').length;\n"
         "  document.getElementById('tab-cdnsync-cnt').textContent=games||'';\n"
@@ -6140,19 +6140,30 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
         except Exception:
             pass
 
-    # Load CDN sync log — prefer server log from leaderboard cache, fall back to local
+    # Load CDN sync log — prefer local log (has uploadedIds/receivedIds detail),
+    # supplement with older server-side entries for full history
     cdn_sync_log = []
+    local_log = []
+    if os.path.isfile(CDN_SYNC_LOG_FILE):
+        try:
+            local_log = [e for e in (load_json(CDN_SYNC_LOG_FILE) or []) if e.get("ptsEarned", 0) > 0]
+        except Exception:
+            pass
+    server_log = []
     if os.path.isfile(CDN_LEADERBOARD_CACHE_FILE):
         try:
-            cdn_sync_log = (load_json(CDN_LEADERBOARD_CACHE_FILE) or {}).get("sync_log", [])
+            server_log = (load_json(CDN_LEADERBOARD_CACHE_FILE) or {}).get("sync_log", [])
         except Exception:
             pass
-    if not cdn_sync_log and os.path.isfile(CDN_SYNC_LOG_FILE):
-        try:
-            local_log = load_json(CDN_SYNC_LOG_FILE) or []
-            cdn_sync_log = [e for e in local_log if e.get("ptsEarned", 0) > 0]
-        except Exception:
-            pass
+    if local_log:
+        cdn_sync_log = list(local_log)
+        # Append older server entries not covered by local log
+        oldest_local = min((e.get("ts") or "") for e in local_log)
+        for se in server_log:
+            if (se.get("syncedAt") or "") < oldest_local:
+                cdn_sync_log.append(se)
+    elif server_log:
+        cdn_sync_log = server_log
 
     content = (
         "const LIB=" + json.dumps(library, ensure_ascii=False) + ";\n"
