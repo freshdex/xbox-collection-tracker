@@ -2,6 +2,13 @@
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
 
+## What's New in v2.1.2
+
+### Catalog Enrichment Fix
+- **Catalog v3 batching** — Large collections (10K+ items) caused Catalog v3 to return a 504 Gateway Timeout when all IDs were sent in a single POST request. Now batches into chunks of 2,000 IDs per request.
+- **Backfill always runs** — The three Display Catalog backfill passes (empty shells, invalid IDs, silently-dropped movies/TV/apps) and the known products list now run regardless of whether Catalog v3 or Display Catalog was the primary enrichment source. Previously these only ran when v3 succeeded, meaning users who hit the 504 timeout got no backfill at all.
+- **Collated `invalidid.json`** — Unresolved product IDs are now saved to a single `invalidid.json` in the root folder (next to XCT.py) instead of per-account subdirectories. When processing multiple accounts, entries are merged with gamertag attribution. Batch runs clear the file first so it only contains results from the current scan.
+
 ## What's New in v2.1.1
 
 ### Game Pass Free Trial Button Fixer (Chrome Extension)

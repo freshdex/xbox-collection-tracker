@@ -61,7 +61,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "2.1.1"
+VERSION = "2.1.2"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -2809,7 +2809,7 @@ def fetch_catalog_v3(product_ids, auth_token_xl, market="GB", lang="en-GB",
     """Fetch rich product metadata via catalog.gamepass.com/v3/products.
 
     Despite the name, this endpoint works for ALL product IDs, not just
-    Game Pass items. Accepts thousands of IDs in a single POST call.
+    Game Pass items. Batches into chunks of 2000 to avoid gateway timeouts.
     Requires xboxlive.com RP token (auth_token_xl.txt).
 
     Returns dict of {productId: info_dict} in the same shape as
@@ -2823,32 +2823,46 @@ def fetch_catalog_v3(product_ids, auth_token_xl, market="GB", lang="en-GB",
     print(f"[*] Fetching {label} for {len(product_ids)} products...")
 
     unique_ids = list(dict.fromkeys(product_ids))
-    cv = base64.b64encode(os.urandom(12)).decode().rstrip("=") + ".0"
     url = (f"https://catalog.gamepass.com/v3/products"
            f"?market={market}&language={lang}&hydration=MobileLowAmber0")
-    body = json.dumps({"Products": unique_ids}).encode("utf-8")
 
-    req = urllib.request.Request(url, data=body, headers={
-        "Authorization": auth_token_xl,
-        "Content-Type": "application/json",
-        "calling-app-name": "XboxMobile",
-        "calling-app-version": "2602.2.1",
-        "MS-CV": cv,
-        "Accept": "application/json",
-        "User-Agent": "okhttp/4.12.0",
-    })
+    BATCH_SIZE = 2000
+    all_products = {}
+    all_invalid = []
 
-    try:
-        with urllib.request.urlopen(req, context=SSL_CTX, timeout=120) as resp:
-            raw = resp.read()
-            data = json.loads(raw)
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
-        debug(f"  catalog_v3 failed: {e}")
-        print(f"  Catalog v3 failed: {e}")
-        return None
+    chunks = [unique_ids[i:i + BATCH_SIZE] for i in range(0, len(unique_ids), BATCH_SIZE)]
+    for ci, chunk in enumerate(chunks):
+        if len(chunks) > 1:
+            print(f"  {label}: batch {ci + 1}/{len(chunks)} ({len(chunk)} IDs)...")
+        cv = base64.b64encode(os.urandom(12)).decode().rstrip("=") + ".0"
+        body = json.dumps({"Products": chunk}).encode("utf-8")
+        req = urllib.request.Request(url, data=body, headers={
+            "Authorization": auth_token_xl,
+            "Content-Type": "application/json",
+            "calling-app-name": "XboxMobile",
+            "calling-app-version": "2602.2.1",
+            "MS-CV": cv,
+            "Accept": "application/json",
+            "User-Agent": "okhttp/4.12.0",
+        })
 
-    products = data.get("Products", {})
-    invalid = data.get("InvalidIds", [])
+        try:
+            with urllib.request.urlopen(req, context=SSL_CTX, timeout=120) as resp:
+                raw = resp.read()
+                data = json.loads(raw)
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
+            debug(f"  catalog_v3 batch {ci + 1} failed: {e}")
+            print(f"  Catalog v3 failed: {e}")
+            if ci == 0 and not all_products:
+                return None  # First batch failed, abort entirely
+            print(f"  Continuing with {len(all_products)} products from previous batches...")
+            continue
+
+        all_products.update(data.get("Products", {}))
+        all_invalid.extend(data.get("InvalidIds", []))
+
+    products = all_products
+    invalid = all_invalid
     debug(f"  catalog_v3: {len(products)} products, {len(invalid)} invalid")
 
     # Map v3 response to our standard catalog shape
@@ -5319,6 +5333,13 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const _RSYM={AR:'AR$',BR:'R$',TR:'\\u20ba',IS:'kr',NG:'\\u20a6',TW:'NT$',NZ:'NZ$',CO:'CO$',HK:'HK$',US:'$'};\n"
         "const _RCC={AR:'ARS',BR:'BRL',TR:'TRY',IS:'ISK',NG:'NGN',TW:'TWD',NZ:'NZD',CO:'COP',HK:'HKD',US:'USD'};\n"
         "const _RLOCALE={AR:'es-ar',BR:'pt-br',TR:'tr-tr',IS:'is-is',NG:'en-ng',TW:'zh-tw',NZ:'en-nz',CO:'es-co',HK:'zh-hk',US:'en-us'};\n"
+        "const _MKT_LOCALE={AE:'ar-ae',AR:'es-ar',AT:'de-at',AU:'en-au',BE:'fr-be',BG:'bg-bg',BH:'ar-bh',BR:'pt-br',CA:'en-ca',CH:'de-ch',CL:'es-cl',CN:'zh-cn',CO:'es-co',CY:'en-cy',CZ:'cs-cz',DE:'de-de',DK:'da-dk',EE:'et-ee',EG:'ar-eg',ES:'es-es',FI:'fi-fi',FR:'fr-fr',GB:'en-gb',GR:'el-gr',GT:'es-gt',HK:'zh-hk',HR:'hr-hr',HU:'hu-hu',ID:'id-id',IE:'en-ie',IL:'he-il',IN:'en-in',IS:'is-is',IT:'it-it',JP:'ja-jp',KR:'ko-kr',KW:'ar-kw',LT:'lt-lt',LV:'lv-lv',MT:'en-mt',MX:'es-mx',MY:'en-my',NG:'en-ng',NL:'nl-nl',NO:'nb-no',NZ:'en-nz',OM:'ar-om',PE:'es-pe',PH:'en-ph',PL:'pl-pl',PT:'pt-pt',QA:'ar-qa',RO:'ro-ro',RS:'sr-latn-rs',RU:'ru-ru',SA:'ar-sa',SE:'sv-se',SG:'en-sg',SI:'sl-si',SK:'sk-sk',TH:'th-th',TR:'tr-tr',TT:'en-tt',TW:'zh-tw',UA:'uk-ua',US:'en-us',VN:'vi-vn',ZA:'en-za'};\n"
+        "function _storeHref(pid,regions){"
+        "var loc='en-us';"
+        "if(regions&&regions.length){"
+        "if(regions.indexOf('US')>=0)loc='en-us';"
+        "else loc=_MKT_LOCALE[regions[0]]||'en-us'}"
+        "return'https://www.xbox.com/'+loc+'/games/store/p/'+pid}\n"
         "function _bestReg(item){"
         "if(!item.regionalPrices||typeof RATES==='undefined')return null;"
         "let best=null;"
@@ -5566,7 +5587,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const imgTag=img?`<img class=\"card-img\" src=\"${_imgResize(img,330,186)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:"
         "'<div class=\"card-img\" style=\"display:flex;align-items:center;justify-content:center;color:#333;font-size:36px\">'+(item.title||'?')[0]+'</div>';\n"
         "const usd=_p(item.priceUSD);\n"
-        "const _usHref=`https://www.xbox.com/en-us/games/store/p/${item.productId}`;\n"
+        "const _usHref=_storeHref(item.productId,item.availableRegions||item._availableRegions);\n"
         "const saleTag=item.currentPriceUSD>0&&item.currentPriceUSD<item.priceUSD?"
         "`<a href=\"${_usHref}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">${_p(item.currentPriceUSD)}</a>`:'';\n"
         "const priceTag=usd?"
@@ -5596,7 +5617,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "pageGroups[i].alts.forEach(alt=>{"
         "const aOwned=alt.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>':'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';"
         "const aUsd=_p(alt.priceUSD);"
-        "const aHref=`https://www.xbox.com/en-us/games/store/p/${alt.productId}`;"
+        "const aHref=_storeHref(alt.productId,alt.availableRegions||alt._availableRegions);"
         "const aSale=alt.currentPriceUSD>0&&alt.currentPriceUSD<alt.priceUSD?"
         "`<a href=\"${aHref}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">${_p(alt.currentPriceUSD)}</a>`:'';"
         "const aImg=alt.heroImage||alt.boxArt||'';"
@@ -5705,7 +5726,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const imgTag=img?`<img class=\"card-img\" src=\"${img}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:"
         "'<div class=\"card-img\" style=\"display:flex;align-items:center;justify-content:center;color:#333;font-size:36px\">'+(item.title||'?')[0]+'</div>';\n"
         "const usd=_p(item.priceUSD);\n"
-        "const _usHref=`https://www.xbox.com/en-us/games/store/p/${item.productId}`;\n"
+        "const _usHref=_storeHref(item.productId,item.availableRegions);\n"
         "const saleTag=item.currentPriceUSD>0&&item.currentPriceUSD<item.priceUSD?"
         "`<a href=\"${_usHref}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">${_p(item.currentPriceUSD)}</a>`:'';\n"
         "const priceTag=usd?"
@@ -5779,7 +5800,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "d.onclick=function(){showMKTDetail(alt.productId)};"
         "var aOwned=alt.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>':'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';"
         "var aUsd=_p(alt.priceUSD);"
-        "var aHref='https://www.xbox.com/en-us/games/store/p/'+alt.productId;"
+        "var aHref=_storeHref(alt.productId,alt.availableRegions);"
         "var aSale=alt.currentPriceUSD>0&&alt.currentPriceUSD<alt.priceUSD?"
         "'<a href=\"'+aHref+'\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">'+_p(alt.currentPriceUSD)+'</a>':'';"
         "var aImg=alt.imageBoxArt||'';"
@@ -6928,13 +6949,14 @@ def process_account(gamertag, method=None, prompt_upload=True):
         print("  Catalog v3 unavailable, falling back to Display Catalog...")
         catalog_us = fetch_display_catalog(
             product_ids, "US", "en-US", CATALOG_US_FILE, "Display Catalog (US)")
-    else:
-        # Backfill: Catalog v3 returns empty shells for Xbox 360 / legacy items.
-        # Use Display Catalog to resolve any product IDs with no title.
+
+    # -- Backfill passes (run regardless of v3 vs Display Catalog primary) --
+    if catalog_us:
+        # Pass 1: Resolve empty shells (no title) — v3 returns these for Xbox 360/legacy
         empty_ids = [pid for pid in product_ids
                      if pid in catalog_us and not catalog_us[pid].get("title")]
         if empty_ids:
-            print(f"  Catalog v3 returned {len(empty_ids)} empty entries, "
+            print(f"  {len(empty_ids)} entries with no title, "
                   f"backfilling from Display Catalog...")
             backfill = fetch_display_catalog(
                 empty_ids, "US", "en-US", CATALOG_US_FILE, "Display Catalog (US backfill)")
@@ -6942,7 +6964,6 @@ def process_account(gamertag, method=None, prompt_upload=True):
                 filled = sum(1 for pid in empty_ids
                              if pid in backfill and backfill[pid].get("title"))
                 catalog_us.update(backfill)
-                # Update v3 cache so build_index picks up resolved entries
                 if CATALOG_V3_US_FILE and os.path.isfile(CATALOG_V3_US_FILE):
                     v3_data = load_json(CATALOG_V3_US_FILE)
                     for pid in empty_ids:
@@ -6951,13 +6972,11 @@ def process_account(gamertag, method=None, prompt_upload=True):
                     save_json(CATALOG_V3_US_FILE, v3_data)
                 print(f"  Backfilled {filled}/{len(empty_ids)} items from Display Catalog")
 
-        # Backfill: Catalog v3 returns some IDs as "invalid" (not recognized).
-        # Try Display Catalog — it uses a different backend and may resolve them.
+        # Pass 2: Resolve IDs marked as invalid by v3
         invalid_ids = [pid for pid in product_ids
                        if pid in catalog_us and catalog_us[pid].get("_invalid")]
         if invalid_ids:
-            print(f"  Catalog v3 returned {len(invalid_ids)} invalid IDs, "
-                  f"trying Display Catalog...")
+            print(f"  {len(invalid_ids)} invalid IDs, trying Display Catalog...")
             inv_backfill = {}
             for i in range(0, len(invalid_ids), 20):
                 inv_backfill.update(fetch_catalog_batch(
@@ -6977,12 +6996,11 @@ def process_account(gamertag, method=None, prompt_upload=True):
                     save_json(CATALOG_V3_US_FILE, v3_data)
             print(f"  Resolved {filled}/{len(invalid_ids)} invalid IDs from Display Catalog")
 
-        # Backfill: Catalog v3 silently drops non-game content (movies, TV, apps).
-        # These IDs appear in neither Products nor InvalidIds — find and resolve them.
+        # Pass 3: Resolve silently-dropped IDs (not in catalog at all — movies, TV, apps)
         missing_ids = [pid for pid in product_ids if pid not in catalog_us]
         if missing_ids:
-            print(f"  Catalog v3 silently dropped {len(missing_ids)} IDs "
-                  f"(movies/TV/apps?), trying Display Catalog...")
+            print(f"  {len(missing_ids)} IDs not in catalog, "
+                  f"trying Display Catalog...")
             miss_backfill = {}
             for i in range(0, len(missing_ids), 20):
                 miss_backfill.update(fetch_catalog_batch(
@@ -6999,10 +7017,10 @@ def process_account(gamertag, method=None, prompt_upload=True):
                             v3_data[pid] = miss_backfill[pid]
                     save_json(CATALOG_V3_US_FILE, v3_data)
             still_missing = len(missing_ids) - filled
-            print(f"  Resolved {filled}/{len(missing_ids)} dropped IDs from Display Catalog"
+            print(f"  Resolved {filled}/{len(missing_ids)} missing IDs from Display Catalog"
                   + (f" ({still_missing} unresolvable)" if still_missing else ""))
 
-        # Hardcoded known non-game products that no catalog API will resolve
+        # Known non-game products that no catalog API will resolve
         KNOWN_PRODUCTS = {
             "CFQ7TTC0L7S5": {"title": "Microsoft 365 Business Basic",
                              "publisher": "Microsoft Corporation",
@@ -7168,9 +7186,16 @@ def process_account(gamertag, method=None, prompt_upload=True):
             "acquiredDate": x.get("acquiredDate", ""),
             "gamertag": x.get("gamertag", ""),
         } for x in invalid_items]
-        inv_path = os.path.join(account_dir(gamertag), "invalidid.json")
+        inv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invalidid.json")
+        # Merge with existing file (other accounts' invalids)
+        if os.path.isfile(inv_path):
+            existing = load_json(inv_path)
+            if isinstance(existing, list):
+                # Remove old entries for this gamertag, then add new ones
+                existing = [e for e in existing if e.get("gamertag") != gamertag]
+                inv_export = existing + inv_export
         save_json(inv_path, inv_export)
-        print(f"  Unresolved IDs: {len(inv_export)} → {inv_path}")
+        print(f"  Unresolved IDs: {len(invalid_items)} → {inv_path}")
 
     # -- Compute value summaries --
     total_usd = sum((x.get("priceUSD") or 0) for x in library)
@@ -8784,6 +8809,11 @@ def process_all_accounts():
 
     results = []
     all_libraries = []
+
+    # Clear collated invalidid.json at start of batch run
+    inv_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invalidid.json")
+    if os.path.isfile(inv_root):
+        os.remove(inv_root)
 
     total = len(gamertags)
     for idx, gt in enumerate(gamertags, 1):
