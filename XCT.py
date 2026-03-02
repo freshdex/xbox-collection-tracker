@@ -61,7 +61,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "2.1"
+VERSION = "2.1.1"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -13690,6 +13690,614 @@ def clear_credential_manager():
     print("  Restart the MS Store and Xbox app, then sign back in.")
 
 
+def install_trial_button_extension():
+    """
+    Install the Game Pass Free Trial Button Fixer Chrome extension.
+    Writes extension files to a local folder and opens Chrome extensions page.
+    """
+    import sys as _sys
+
+    print("\n  [Game Pass Free Trial Button Fixer — Chrome Extension Install]")
+    print()
+    print("  There is currently (03/02/26) a bug on the Microsoft Web Store: if you")
+    print("  navigate to a game page that has both Game Pass access and a free trial")
+    print("  available (separate from Game Pass), and you are currently subscribed to")
+    print("  Game Pass with that account, the Get Free Trial button is hidden.")
+    print()
+    print("  This Chrome extension detects hidden free trials and adds a floating")
+    print("  GET Free Trial button to the page so you can still claim them.")
+    print()
+
+    if _sys.platform != "win32":
+        print("  [!] This tool is Windows-only.")
+        return
+
+    confirm = input("  Install extension? [Y/n]: ").strip().lower()
+    if confirm in ("n", "no"):
+        print("  Cancelled.")
+        return
+
+    # Extension destination folder (next to XCT.py)
+    ext_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chrome_extension_trial_fixer")
+    os.makedirs(ext_dir, exist_ok=True)
+
+    # -- manifest.json --
+    manifest = '''{
+  "manifest_version": 3,
+  "name": "Xbox Store Button Injector",
+  "version": "1.3",
+  "description": "Injects a GET Free Trial button on Xbox Store product pages.",
+  "permissions": [
+    "webRequest",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://emerald.xboxservices.com/*",
+    "https://*.xboxlive.com/*",
+    "https://www.xbox.com/*",
+    "https://www.microsoft.com/*",
+    "https://displaycatalog.mp.microsoft.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.xbox.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}'''
+
+    # -- background.js --
+    background = r'''// Background service worker
+// 1. Captures XBL3.0 auth tokens from emerald requests
+// 2. Queries productActions + productDetails APIs to find hidden trials
+
+chrome.webRequest.onSendHeaders.addListener(
+  (details) => {
+    if (!details.requestHeaders) return;
+    for (const header of details.requestHeaders) {
+      if (header.name.toLowerCase() === "authorization" && header.value && header.value.includes("XBL3.0")) {
+        chrome.storage.local.set({ xblToken: header.value, tokenTime: Date.now() });
+        return;
+      }
+    }
+  },
+  { urls: ["https://emerald.xboxservices.com/*"] },
+  ["requestHeaders", "extraHeaders"]
+);
+
+// Generate MS-CV header
+let cvCounter = 0;
+function generateMsCV() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  const base64 = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "/").replace(/=/g, "");
+  cvCounter++;
+  return `${base64}.${cvCounter}`;
+}
+
+function makeHeaders(token) {
+  return {
+    "Authorization": token,
+    "x-ms-api-version": "1.0",
+    "ms-cv": generateMsCV(),
+    "x-xbl-client-name": "XboxCom",
+    "x-xbl-client-type": "web",
+    "x-xbl-contract-version": "2",
+    "Accept": "application/json",
+    "Origin": "https://www.xbox.com",
+    "Referer": "https://www.xbox.com/"
+  };
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === "getToken") {
+    chrome.storage.local.get(["xblToken", "tokenTime"], (result) => sendResponse(result));
+    return true;
+  }
+
+  if (msg.type === "checkTrial") {
+    const productId = msg.productId;
+    chrome.storage.local.get(["xblToken"], async (result) => {
+      if (!result.xblToken) {
+        sendResponse({ error: "No auth token available" });
+        return;
+      }
+
+      try {
+        // Step 1: Check productActions for Trial action or SKU 0011
+        const actionsResp = await fetch(
+          `https://emerald.xboxservices.com/xboxcomfd/productActions/${productId}?locale=en-US`,
+          { headers: makeHeaders(result.xblToken) }
+        );
+
+        if (!actionsResp.ok) {
+          const errBody = await actionsResp.text().catch(() => "");
+          sendResponse({ error: `productActions ${actionsResp.status}: ${errBody.substring(0, 200)}` });
+          return;
+        }
+
+        const actionsData = await actionsResp.json();
+        console.log("[XBOX-INJ-BG] productActions for", productId);
+
+        let trialInfo = null;
+        let hasTrialSku = false;
+
+        if (actionsData.productActions && actionsData.productActions.length > 0) {
+          const pa = actionsData.productActions[0];
+
+          // Check for explicit Trial action (visible for non-Game Pass users)
+          if (pa.productActions) {
+            for (const action of pa.productActions) {
+              if (action.actionType === "Trial" && action.actionArguments) {
+                trialInfo = {
+                  productId: action.actionArguments.ProductId || productId,
+                  skuId: action.actionArguments.SkuId,
+                  availabilityId: action.actionArguments.AvailabilityId
+                };
+                break;
+              }
+            }
+          }
+
+          // Check if SKU 0011 exists (trial SKU hidden by Game Pass)
+          if (!trialInfo && pa.skuActionsBySkuId && pa.skuActionsBySkuId["0011"]) {
+            hasTrialSku = true;
+            console.log("[XBOX-INJ-BG] SKU 0011 found but Trial action hidden (Game Pass bug)");
+          }
+        }
+
+        // If we found an explicit trial, return it
+        if (trialInfo) {
+          console.log("[XBOX-INJ-BG] Trial found via productActions:", JSON.stringify(trialInfo));
+          sendResponse({ trialInfo });
+          return;
+        }
+
+        // If no SKU 0011, no trial exists
+        if (!hasTrialSku) {
+          console.log("[XBOX-INJ-BG] No trial SKU (0011) for this game");
+          sendResponse({ trialInfo: null });
+          return;
+        }
+
+        // Step 2: SKU 0011 exists but Trial action is hidden.
+        // Get the availability ID from productDetails.
+        console.log("[XBOX-INJ-BG] Fetching productDetails for availability ID...");
+
+        // productDetails uses api-version 2.0
+        const detailHeaders = makeHeaders(result.xblToken);
+        detailHeaders["x-ms-api-version"] = "2.0";
+
+        const detailsResp = await fetch(
+          `https://emerald.xboxservices.com/xboxcomfd/productDetails/${productId}?locale=en-US&enableFullDetail=true&deviceType=desktop`,
+          { headers: detailHeaders }
+        );
+
+        if (!detailsResp.ok) {
+          const errBody = await detailsResp.text().catch(() => "");
+          console.error("[XBOX-INJ-BG] productDetails", detailsResp.status, ":", errBody.substring(0, 500));
+
+          // Try the display catalog API as fallback
+          console.log("[XBOX-INJ-BG] Trying displaycatalog fallback...");
+          const catResp = await fetch(
+            `https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=${productId}&market=US&languages=en-US`,
+            { headers: { "Accept": "application/json" } }
+          );
+
+          if (catResp.ok) {
+            const catData = await catResp.json();
+            const catStr = JSON.stringify(catData);
+            // Find availability for SKU 0011
+            const match = catStr.match(/"SkuId"\s*:\s*"0011"[\s\S]*?"AvailabilityId"\s*:\s*"([^"]+)"/i);
+            if (match) {
+              console.log("[XBOX-INJ-BG] Found availability via catalog:", match[1]);
+              sendResponse({ trialInfo: { productId, skuId: "0011", availabilityId: match[1] } });
+              return;
+            }
+          }
+
+          // Last resort fallback
+          console.log("[XBOX-INJ-BG] All APIs failed, cannot get availability ID");
+          sendResponse({ trialInfo: { productId, skuId: "0011", availabilityId: "" } });
+          return;
+        }
+
+        const detailsData = await detailsResp.json();
+
+        // Search for SKU 0011's availability ID in the product details
+        let availabilityId = "";
+        try {
+          const detailsStr = JSON.stringify(detailsData);
+
+          // Look for SKU 0011 availability patterns
+          if (detailsData.skus) {
+            for (const sku of detailsData.skus) {
+              if (sku.skuId === "0011" && sku.availabilities && sku.availabilities.length > 0) {
+                availabilityId = sku.availabilities[0].availabilityId;
+                break;
+              }
+            }
+          }
+
+          // Also try nested product.skus structure
+          if (!availabilityId && detailsData.products) {
+            for (const prod of detailsData.products) {
+              if (prod.skus) {
+                for (const sku of prod.skus) {
+                  if (sku.skuId === "0011" && sku.availabilities && sku.availabilities.length > 0) {
+                    availabilityId = sku.availabilities[0].availabilityId;
+                    break;
+                  }
+                }
+              }
+              if (availabilityId) break;
+            }
+          }
+
+          // Regex fallback: find 0011 near an availability ID
+          if (!availabilityId) {
+            const match = detailsStr.match(/"skuId"\s*:\s*"0011"[^}]*?"availabilityId"\s*:\s*"([^"]+)"/);
+            if (match) availabilityId = match[1];
+          }
+          if (!availabilityId) {
+            // Try reversed order
+            const match2 = detailsStr.match(/"availabilityId"\s*:\s*"([^"]+)"[^}]*?"skuId"\s*:\s*"0011"/);
+            if (match2) availabilityId = match2[1];
+          }
+        } catch (e) {
+          console.error("[XBOX-INJ-BG] Error parsing details:", e);
+        }
+
+        console.log("[XBOX-INJ-BG] Trial SKU 0011 availability:", availabilityId || "(not found, will try empty)");
+
+        sendResponse({
+          trialInfo: {
+            productId: productId,
+            skuId: "0011",
+            availabilityId: availabilityId
+          }
+        });
+
+      } catch (e) {
+        console.error("[XBOX-INJ-BG] Error:", e);
+        sendResponse({ error: e.message });
+      }
+    });
+    return true;
+  }
+});
+
+console.log("[XBOX-INJ-BG] Service worker started");
+'''
+
+    # -- content.js --
+    content = r'''// Xbox Store Free Trial Button Injector (content script)
+// Dynamically detects the current game, checks for trial availability via API,
+// and injects a GET Free Trial button if a trial exists.
+(function () {
+  "use strict";
+
+  console.log("[XBOX-INJ] Content script loaded on:", location.href);
+
+  const WRAPPER_ID = "injected-trial-wrapper";
+
+  // Extract product ID from the URL
+  // Formats: /games/store/p/XXXXX or /games/store/game-name/XXXXX
+  function getProductIdFromUrl() {
+    const url = location.pathname;
+    const segments = url.split("/").filter(Boolean);
+    for (let i = segments.length - 1; i >= 0; i--) {
+      if (/^[A-Z0-9]{10,14}$/i.test(segments[i])) {
+        return segments[i].toUpperCase();
+      }
+    }
+    return null;
+  }
+
+  function getXToken() {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: "getToken" }, (result) => {
+        resolve(result ? result.xblToken : null);
+      });
+    });
+  }
+
+  function checkTrialAvailability(productId) {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: "checkTrial", productId: productId }, (result) => {
+        resolve(result);
+      });
+    });
+  }
+
+  function openBuyNowIframe(xToken, productId, skuId, availabilityId) {
+    const existing = document.getElementById("trial-purchase-overlay");
+    if (existing) existing.remove();
+
+    const overlay = document.createElement("div");
+    overlay.id = "trial-purchase-overlay";
+    overlay.style.cssText = `
+      position: fixed !important; top: 0 !important; left: 0 !important;
+      width: 100% !important; height: 100% !important;
+      background: rgba(0,0,0,0.7) !important; z-index: 2147483647 !important;
+      display: flex !important; align-items: center !important; justify-content: center !important;
+    `;
+
+    const iframeName = "buynow_frame_" + Date.now();
+    const iframe = document.createElement("iframe");
+    iframe.name = iframeName;
+    iframe.style.cssText = `
+      width: 500px !important; height: 620px !important; border: none !important;
+      border-radius: 8px !important; background: #1a1a1a !important;
+    `;
+
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "\u2715";
+    closeBtn.style.cssText = `
+      position: fixed !important; top: 20px !important; right: 20px !important;
+      background: #444 !important; color: white !important;
+      border: none !important; border-radius: 50% !important;
+      width: 40px !important; height: 40px !important; font-size: 20px !important;
+      cursor: pointer !important; z-index: 2147483647 !important;
+    `;
+    closeBtn.addEventListener("click", () => overlay.remove());
+
+    overlay.appendChild(closeBtn);
+    overlay.appendChild(iframe);
+    document.body.appendChild(overlay);
+
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = "https://www.microsoft.com/store/purchase/buynowui/buynow?noCanonical=true&market=US&locale=en-US&clientName=XboxCom";
+    form.target = iframeName;
+    form.style.display = "none";
+
+    const fields = {
+      data: JSON.stringify({ usePurchaseSdk: true }),
+      market: "US",
+      locale: "en-US",
+      xToken: xToken,
+      pageFormat: "full",
+      products: JSON.stringify([{
+        productId: productId,
+        skuId: skuId,
+        availabilityId: availabilityId
+      }]),
+      campaignId: "xboxcomct",
+      callerApplicationId: "XboxCom",
+      urlRef: "https://www.xbox.com/",
+      clientType: "XboxCom",
+      layout: "Modal",
+      cssOverride: "XboxCom2NewUI",
+      theme: "dark",
+      sdkVersion: "5.10.6",
+      GPC_DataSharingOptIn: "true",
+      parentHostName: "www.xbox.com"
+    };
+
+    for (const [key, val] of Object.entries(fields)) {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = key;
+      input.value = val;
+      form.appendChild(input);
+    }
+
+    document.body.appendChild(form);
+    form.submit();
+    form.remove();
+    console.log("[XBOX-INJ] BuyNow iframe submitted for", productId, "SKU", skuId);
+  }
+
+  // Current page state
+  let currentProductId = null;
+  let currentTrialInfo = null;
+  let checking = false;
+  let retryCount = 0;
+  const MAX_RETRIES = 30;
+
+  async function checkAndInject() {
+    const productId = getProductIdFromUrl();
+    if (!productId) return;
+
+    // If product ID changed (SPA navigation), reset
+    if (productId !== currentProductId) {
+      currentProductId = productId;
+      currentTrialInfo = null;
+      checking = false;
+      retryCount = 0;
+
+      // Remove old button
+      const old = document.getElementById(WRAPPER_ID);
+      if (old) old.remove();
+    }
+
+    // Already have a button or already checking
+    if (document.getElementById(WRAPPER_ID) || checking) return;
+
+    // Need to check for trial
+    if (currentTrialInfo === null) {
+      checking = true;
+      console.log("[XBOX-INJ] Checking trial availability for:", productId);
+
+      const result = await checkTrialAvailability(productId);
+      checking = false;
+
+      if (result && result.error) {
+        retryCount++;
+        console.log("[XBOX-INJ] API error:", result.error, `- retry ${retryCount}/${MAX_RETRIES}`);
+        if (retryCount >= MAX_RETRIES) {
+          currentTrialInfo = false;
+          console.log("[XBOX-INJ] Max retries reached, giving up");
+        }
+        return;
+      }
+
+      if (result && result.trialInfo) {
+        currentTrialInfo = result.trialInfo;
+        console.log("[XBOX-INJ] Trial found!", JSON.stringify(currentTrialInfo));
+      } else {
+        currentTrialInfo = false;
+        console.log("[XBOX-INJ] No trial available for this game");
+        return;
+      }
+    }
+
+    if (!currentTrialInfo) return;
+
+    // Wait for the actions panel to exist
+    const panel = document.querySelector('[class*="desktopProductActionsPanel"]')
+      || document.querySelector('[class*="ProductActionsPanel"]');
+    if (!panel) return;
+
+    // Create the button
+    const dialog = document.createElement("dialog");
+    dialog.id = WRAPPER_ID;
+    dialog.style.cssText = `
+      position: fixed !important;
+      bottom: 40px !important;
+      right: 40px !important;
+      top: auto !important;
+      left: auto !important;
+      z-index: 2147483647 !important;
+      border: none !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      background: transparent !important;
+      overflow: visible !important;
+    `;
+
+    dialog.innerHTML = `
+      <button id="injected-trial-btn" style="
+        display: inline-flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        min-width: 180px !important;
+        height: 75px !important;
+        padding: 10px 28px !important;
+        background-color: #107c10 !important;
+        color: white !important;
+        border: 2px solid #0e6b0e !important;
+        border-radius: 6px !important;
+        cursor: pointer !important;
+        font-family: 'Segoe UI', sans-serif !important;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.4) !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+      ">
+        <span style="font-size:16px !important;font-weight:700 !important;text-transform:uppercase !important;letter-spacing:0.5px !important;color:white !important;">GET</span>
+        <span style="font-size:13px !important;font-weight:400 !important;margin-top:3px !important;color:white !important;">Free trial</span>
+      </button>
+    `;
+
+    const trial = currentTrialInfo;
+
+    dialog.querySelector("button").addEventListener("click", async () => {
+      console.log("[XBOX-INJ] GET clicked for", trial.productId, "SKU", trial.skuId);
+
+      const xToken = await getXToken();
+      if (!xToken) {
+        alert("Auth token not captured yet. Refresh and try again.");
+        return;
+      }
+
+      openBuyNowIframe(xToken, trial.productId, trial.skuId, trial.availabilityId);
+    });
+
+    document.documentElement.appendChild(dialog);
+    dialog.show();
+    console.log("[XBOX-INJ] Trial button shown for", trial.productId);
+  }
+
+  // Listen for postMessage from BuyNow iframe
+  window.addEventListener("message", (event) => {
+    if (event.origin && event.origin.includes("microsoft.com")) {
+      console.log("[XBOX-INJ] postMessage from BuyNow:", event.data);
+
+      const data = event.data;
+      if (data && (data.type === "purchaseComplete" || data.status === "success" ||
+          (typeof data === "string" && data.includes("purchased")))) {
+        const overlay = document.getElementById("trial-purchase-overlay");
+        if (overlay) overlay.remove();
+        alert("Free trial claimed successfully! Refresh the page.");
+      }
+
+      if (data && (data.type === "close" || data.type === "cancel" || data.action === "close")) {
+        const overlay = document.getElementById("trial-purchase-overlay");
+        if (overlay) overlay.remove();
+      }
+    }
+  });
+
+  // Poll for changes (SPA navigation + dynamic content)
+  setInterval(() => checkAndInject(), 1000);
+  const observer = new MutationObserver(() => checkAndInject());
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+})();
+'''
+
+    # Write extension files
+    files_written = 0
+    for fname, content_str in [("manifest.json", manifest), ("background.js", background), ("content.js", content)]:
+        fpath = os.path.join(ext_dir, fname)
+        try:
+            with open(fpath, "w", encoding="utf-8") as f:
+                f.write(content_str)
+            files_written += 1
+        except Exception as e:
+            print(f"  [!] Failed to write {fname}: {e}")
+            return
+
+    print(f"  [+] Extension files written to:")
+    print(f"      {ext_dir}")
+    print()
+
+    # Try to open Chrome extensions page
+    print("  Opening Chrome extensions page...")
+    try:
+        # Try common Chrome paths
+        chrome_paths = [
+            os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
+            os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        ]
+        chrome_exe = None
+        for p in chrome_paths:
+            if os.path.isfile(p):
+                chrome_exe = p
+                break
+
+        if chrome_exe:
+            subprocess.Popen([chrome_exe, "chrome://extensions/"])
+            print("  [+] Chrome extensions page opened.")
+        else:
+            # Fallback: use os.startfile or webbrowser
+            import webbrowser
+            webbrowser.open("chrome://extensions/")
+            print("  [+] Attempted to open Chrome extensions page.")
+    except Exception:
+        print("  [!] Could not open Chrome automatically.")
+
+    print()
+    print("  To finish installation:")
+    print("    1. Enable 'Developer mode' (toggle in top-right corner)")
+    print("    2. Click 'Load unpacked'")
+    print(f"    3. Select the folder: {ext_dir}")
+    print("    4. Visit any game page on xbox.com to activate")
+    print()
+    print("  The extension captures your auth token when you browse xbox.com,")
+    print("  then checks each game page for hidden free trials.")
+
+
 def recover_gfwl_keys():
     """
     Recover GFWL product keys from Token.bin files using Windows DPAPI.
@@ -19575,6 +20183,7 @@ def interactive_menu():
         print("  Windows/Store:")
         print("    [q] Windows Gaming Repair Tool")
         print("    [r] Windows Store Reset Tool")
+        print("    [w] Game Pass Free Trial Button Fixer (Chrome Extension Install)")
         print()
         print("    [0] Quit")
         print("    [?] Credits")
@@ -19970,6 +20579,12 @@ def interactive_menu():
                     print(f"  [!] Error: {_e}")
             else:
                 print("  Cancelled.")
+            continue
+        elif pu == "w":
+            try:
+                install_trial_button_extension()
+            except Exception as _e:
+                print(f"  [!] Error: {_e}")
             continue
         elif pu == "s":
             _t0 = time.time()

@@ -2,6 +2,11 @@
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
 
+## What's New in v2.1.1
+
+### Game Pass Free Trial Button Fixer (Chrome Extension)
+- **New utility `[w]`** — There is currently a bug on the Xbox Web Store where games that have both Game Pass access and a separate free trial available will hide the "Get Free Trial" button if you are subscribed to Game Pass. This bundled Chrome extension fixes it by detecting hidden trial SKUs (SKU 0011) via the productActions and productDetails APIs, then injecting a floating "GET Free Trial" button on the page. Select `[w]` from the main menu to install — it writes the extension files locally and opens Chrome's extensions page with instructions to load it as an unpacked extension.
+
 ## What's New in v2.1
 
 ### XCT Live Collection Sync
