@@ -7187,13 +7187,6 @@ def process_account(gamertag, method=None, prompt_upload=True):
             "gamertag": x.get("gamertag", ""),
         } for x in invalid_items]
         inv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invalidid.json")
-        # Merge with existing file (other accounts' invalids)
-        if os.path.isfile(inv_path):
-            existing = load_json(inv_path)
-            if isinstance(existing, list):
-                # Remove old entries for this gamertag, then add new ones
-                existing = [e for e in existing if e.get("gamertag") != gamertag]
-                inv_export = existing + inv_export
         save_json(inv_path, inv_export)
         print(f"  Unresolved IDs: {len(invalid_items)} → {inv_path}")
 
@@ -8809,11 +8802,6 @@ def process_all_accounts():
 
     results = []
     all_libraries = []
-
-    # Clear collated invalidid.json at start of batch run
-    inv_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invalidid.json")
-    if os.path.isfile(inv_root):
-        os.remove(inv_root)
 
     total = len(gamertags)
     for idx, gt in enumerate(gamertags, 1):
