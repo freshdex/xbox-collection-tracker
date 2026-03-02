@@ -25,6 +25,7 @@ Usage:
 import base64
 import concurrent.futures
 import glob
+import gzip
 import hashlib
 import io
 import json
@@ -60,7 +61,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "2.0"
+VERSION = "2.1"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -231,6 +232,7 @@ TAGS_FILE = os.path.join(SCRIPT_DIR, "tags.json")
 EXCHANGE_RATES_FILE = os.path.join(SCRIPT_DIR, "exchange_rates.json")
 CDN_SYNC_CONFIG_FILE = os.path.join(SCRIPT_DIR, "cdn_sync_config.json")
 CDN_SYNC_API_BASE = "https://cdn.freshdex.app/api/v1"
+XCT_LIVE_API_BASE = "https://xct.live/api/v1"
 CDN_LEADERBOARD_CACHE_FILE = os.path.join(SCRIPT_DIR, "cdn_leaderboard_cache.json")
 CDN_SYNC_META_FILE = os.path.join(SCRIPT_DIR, "cdn_sync_meta.json")
 CDN_SYNC_LOG_FILE = os.path.join(SCRIPT_DIR, "cdn_sync_log.json")
@@ -3881,7 +3883,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Saved Filters
         '<div class="mkt-sf"><select id="mkt-saved" onchange="_mktLoadSaved(this.value)" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px"><option value="">Saved Filters</option><option value="__save__">Save Current Filter...</option></select></div>\n'
         # Search (compact, in sidebar)
-        '<div class="mkt-sf"><input type="text" id="mkt-search" placeholder="Search..." oninput="mktPage=0;filterMKT()" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px;box-sizing:border-box"></div>\n'
+        '<div class="mkt-sf"><input type="text" id="mkt-search" placeholder="Search..." oninput="mktPage=0;if(window._xctHosted){clearTimeout(_mktDebounce);_mktDebounce=setTimeout(filterMKT,300)}else{filterMKT()}" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px;box-sizing:border-box"></div>\n'
         # Sort
         '<div class="mkt-sf"><div class="mkt-sf-label">Sort By</div>'
         '<select id="mkt-sort" onchange="mktPage=0;filterMKT()">'
@@ -4043,16 +4045,31 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
     if default_tab:
         html += f'<script>var _defaultTab="{default_tab}";</script>\n'
     html += '<script src="data.js"></script>\n'
-
+    # Fallback declarations if data.js fails to load (e.g. 502)
+    html += (
+        '<script>'
+        "if(typeof LIB==='undefined'){var LIB=[],GP=[],PH=[],MKT=[],HISTORY=[],"
+        "DEFAULT_FLAGS={},ACCOUNTS=[],RATES={},GC_FACTOR=0.81,"
+        "CDN_DB=[],GFWL=[],CDN_LEADERBOARD=[],CDN_LB_STATS={},"
+        "CDN_SYNC_META={},CDN_SYNC_USER='',CDN_SYNC_LOG=[]}"
+        '</script>\n'
+    )
 
     html += (
         '<script>\n'
         "let gpF='all',mktPage=0;\n"
-        "const MKT_PAGE_SIZE=100;\n"
+        "const MKT_PAGE_SIZE=50;\n"
         "let views={gp:'list',lib:'list',ph:'list',mkt:'list'};\n"
         "const LS_KEY='" + ls_key + "';\n"
         "let libSortCol=null,libSortDir='asc';\n"
         "let mktSortCol=null,mktSortDir='asc';\n"
+        # Store API client + state
+        "var _mktDebounce=null,_mktAbort=null,_mktTotal=0;\n"
+        "var _storeApi={"
+        "fetch:function(path,auth){"
+        "var h={};if(auth&&window._xctApiKey)h['Authorization']='Bearer '+window._xctApiKey;"
+        "return fetch('/api/v1/store/'+path,{headers:h}).then(function(r){"
+        "if(!r.ok)throw new Error(r.status);return r.json()})}};\n"
         "const _expandedTids=new Set();\n"
         "function toggleDlcGroup(tid,event){event.stopPropagation();"
         "if(_expandedTids.has(tid))_expandedTids.delete(tid);else _expandedTids.add(tid);"
@@ -4165,6 +4182,11 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "boxes.forEach(c=>{c.checked=vs.has(c.value)});"
         "getCBVals(id)}\n"
 
+        "function _setRoute(slug,qs){"
+        "var url=window._xctHosted?'/'+slug+(qs?'?'+qs:''):"
+        "location.pathname+location.search+'#'+slug+(qs?'?'+qs:'');"
+        "history.replaceState(null,'',url)}\n"
+
         "function _mktSerializeFilters(){"
         "const p=new URLSearchParams();"
         "const q=document.getElementById('mkt-search').value;"
@@ -4182,14 +4204,13 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-trial').checked)p.set('trial','1');"
         "if(document.getElementById('mkt-ach').checked)p.set('ach','1');"
         "if(document.getElementById('mkt-group').checked)p.set('group','1');"
-        "const qs=p.toString();"
-        "if(window._xctHosted){history.replaceState(null,'','/marketplace'+(qs?'?'+qs:''))}"
-        "else{location.hash='marketplace'+(qs?'?'+qs:'')}}\n"
+        "_setRoute('store',p.toString())}\n"
 
-        "function _mktDeserializeFilters(){"
-        "let qs='';"
+        "function _mktDeserializeFilters(qsArg){"
+        "let qs=typeof qsArg==='string'?qsArg:'';"
+        "if(!qs){"
         "if(window._xctHosted){qs=location.search.slice(1)}"
-        "else{const h=location.hash.replace(/^#/,'');const qi=h.indexOf('?');if(qi>=0)qs=h.slice(qi+1)}"
+        "else{const h=location.hash.replace(/^#/,'');const qi=h.indexOf('?');if(qi>=0)qs=h.slice(qi+1)}}"
         "if(!qs)return false;"
         "const p=new URLSearchParams(qs);"
         "if(p.has('q'))document.getElementById('mkt-search').value=p.get('q');"
@@ -4203,6 +4224,76 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('trial')==='1')document.getElementById('mkt-trial').checked=true;"
         "if(p.get('ach')==='1')document.getElementById('mkt-ach').checked=true;"
         "if(p.get('group')==='1')document.getElementById('mkt-group').checked=true;"
+        "return true}\n"
+
+        # -- Library filter serialization --
+        "function _libSerializeFilters(){"
+        "const p=new URLSearchParams();"
+        "const q=document.getElementById('lib-search').value;"
+        "if(q)p.set('q',q);"
+        "const so=document.getElementById('lib-sort').value;"
+        "if(so&&so!=='name')p.set('sort',so);"
+        "const cbMap=[['lib-gamertag','gt'],['lib-status','status'],['lib-type','type'],"
+        "['lib-cat','cat'],['lib-plat','plat'],['lib-pub','pub'],['lib-dev','dev'],"
+        "['lib-ryear','ry'],['lib-ayear','ay'],['lib-sku','sku'],['lib-delist','dl']];"
+        "cbMap.forEach(([id,key])=>{const v=_mktGetCBChecked(id);if(v)p.set(key,v.join(','))});"
+        "['gp','dlc','cdn','trial','ach'].forEach(k=>{"
+        "const el=document.getElementById('lib-'+k);if(el){const v=el.value;if(v)p.set(k,v)}});"
+        "_setRoute('library',p.toString())}\n"
+
+        "function _libDeserializeFilters(qs){"
+        "if(!qs)return false;"
+        "const p=new URLSearchParams(qs);"
+        "if(p.has('q'))document.getElementById('lib-search').value=p.get('q');"
+        "if(p.has('sort'))document.getElementById('lib-sort').value=p.get('sort');"
+        "const cbMap=[['lib-gamertag','gt'],['lib-status','status'],['lib-type','type'],"
+        "['lib-cat','cat'],['lib-plat','plat'],['lib-pub','pub'],['lib-dev','dev'],"
+        "['lib-ryear','ry'],['lib-ayear','ay'],['lib-sku','sku'],['lib-delist','dl']];"
+        "cbMap.forEach(([id,key])=>{if(p.has(key))_mktSetCBChecked(id,p.get(key).split(','))});"
+        "['gp','dlc','cdn','trial','ach'].forEach(k=>{"
+        "const el=document.getElementById('lib-'+k);if(el&&p.has(k))el.value=p.get(k)});"
+        "return true}\n"
+
+        # -- Play History filter serialization --
+        "function _phSerializeFilters(){"
+        "const p=new URLSearchParams();"
+        "const q=document.getElementById('ph-search').value;"
+        "if(q)p.set('q',q);"
+        "const so=document.getElementById('ph-sort').value;"
+        "if(so&&so!=='playDesc')p.set('sort',so);"
+        "const v=_mktGetCBChecked('ph-gamertag');if(v)p.set('gt',v.join(','));"
+        "_setRoute('playhistory',p.toString())}\n"
+
+        "function _phDeserializeFilters(qs){"
+        "if(!qs)return false;"
+        "const p=new URLSearchParams(qs);"
+        "if(p.has('q'))document.getElementById('ph-search').value=p.get('q');"
+        "if(p.has('sort'))document.getElementById('ph-sort').value=p.get('sort');"
+        "if(p.has('gt'))_mktSetCBChecked('ph-gamertag',p.get('gt').split(','));"
+        "return true}\n"
+
+        # -- Game Pass filter serialization --
+        "function _gpSerializeFilters(){"
+        "const p=new URLSearchParams();"
+        "const q=document.getElementById('gp-search').value;"
+        "if(q)p.set('q',q);"
+        "if(gpF&&gpF!=='all')p.set('f',gpF);"
+        "_setRoute('gamepass',p.toString())}\n"
+
+        "function _gpDeserializeFilters(qs){"
+        "if(!qs)return false;"
+        "const p=new URLSearchParams(qs);"
+        "if(p.has('q'))document.getElementById('gp-search').value=p.get('q');"
+        "if(p.has('f')){"
+        "gpF=p.get('f');"
+        "document.querySelectorAll('#gamepass .pill').forEach(p2=>{"
+        "var t=p2.textContent.toLowerCase();"
+        "p2.classList.toggle('active',"
+        "gpF==='notOwned'?t.includes('not owned'):"
+        "gpF==='recent'?t.includes('recently'):"
+        "gpF==='popular'?t.includes('most popular'):"
+        "gpF==='owned'?t==='owned':"
+        "t==='all')})}"
         "return true}\n"
 
         # -- Saved Filters --
@@ -4289,6 +4380,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # -- fill: global helper for checkbox dropdown panels --
         "function fill(id,items,filterFn){const wrap=document.getElementById(id);if(!wrap)return;"
         "const panel=wrap.querySelector('.cb-panel');if(!panel)return;"
+        "panel.innerHTML='';"
         "items.forEach(([v,l])=>{const lbl=document.createElement('label');"
         "lbl.innerHTML='<input type=\"checkbox\" value=\"'+v+'\" checked onchange=\"'+filterFn+'()\"> '+l;"
         "panel.appendChild(lbl)});"
@@ -4321,6 +4413,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Global helpers used by detail modals (must be at global scope)
         "const _today=new Date().toISOString().slice(0,10);"
         "function _https(u){return u&&u.startsWith('http://')?'https://'+u.slice(7):u}\n"
+        "function _imgResize(u,w,h){if(!u)return u;return u+(u.includes('?')?'&':'?')+'w='+w+'&h='+h}\n"
         "function _storeUrl(pid){return'https://www.microsoft.com/store/productid/'+pid}\n"
         # -- My Regions state + functions --
         "let _myRegions=[];\n"
@@ -4398,7 +4491,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "return lbl}\n"
         "if(_allGtSet.size>1){\n"
         "const el=document.getElementById('lib-gamertag');"
-        "el.style.display='';const panel=el.querySelector('.cb-panel');\n"
+        "el.style.display='';const panel=el.querySelector('.cb-panel');"
+        "panel.innerHTML='';\n"
         # Native gamertags
         "const nKeys=Object.keys(nGts).sort((a,b)=>(nGtV[b]||0)-(nGtV[a]||0));\n"
         "nKeys.forEach(g=>panel.appendChild(_gtLabel(g,nGts[g],nGtV[g]||0)));\n"
@@ -4428,6 +4522,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const phGtKeys=Object.keys(phGts);\n"
         "if(phGtKeys.length>1){const el=document.getElementById('ph-gamertag');"
         "el.style.display='';const panel=el.querySelector('.cb-panel');"
+        "panel.innerHTML='';"
         "phGtKeys.sort().forEach(g=>{const lbl=document.createElement('label');"
         "lbl.innerHTML='<input type=\"checkbox\" value=\"'+g+'\" checked onchange=\"filterPH()\"> '+g+' ('+phGts[g]+')';"
         "panel.appendChild(lbl)});"
@@ -4450,10 +4545,43 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(PH.length){document.getElementById('tab-ph').style.display='';document.getElementById('tab-ph-cnt').textContent=PH.length}\n"
         "if(GP.length){document.getElementById('tab-gp').style.display='';document.getElementById('tab-gp-cnt').textContent=GP.length}\n"
         "if(HISTORY.length){document.getElementById('tab-hist').style.display='';document.getElementById('tab-hist-cnt').textContent=HISTORY.length+' scans'}\n"
-        # Marketplace dropdowns
+        # Marketplace dropdowns (API mode or local mode)
         "var _MKT_TAGS=typeof _MKT_TAGS!=='undefined'?_MKT_TAGS:{};\n"
         "var _MKT_LAST_SCAN=typeof _MKT_LAST_SCAN!=='undefined'?_MKT_LAST_SCAN:null;\n"
-        "if(typeof MKT!=='undefined'&&MKT.length){\n"
+        # API mode: fetch filters from server, then trigger first load
+        "if(window._xctHosted){\n"
+        "document.getElementById('tab-mkt').style.display='';\n"
+        # Static cb-drops (same in both modes)
+        "fillStatic('mkt-price',[['free','Free'],['under10','Under $10'],['under20','Under $20'],['under40','Under $40'],['over40','$40+'],['sale','On Sale']],'filterMKT');\n"
+        "fillStatic('mkt-subs',[['gp','Game Pass'],['ea','EA Play'],['none','No Subscription']],'filterMKT');\n"
+        "fillStatic('mkt-mp',[['online','Online MP'],['local','Local MP'],['coop','Online Co-op'],['localcoop','Local Co-op'],['crossgen','Cross-Gen']],'filterMKT');\n"
+        "fillStatic('mkt-owned',[['owned','Owned'],['notowned','Not Owned']],'filterMKT');\n"
+        "fillStatic('mkt-preorder',[['released','Released'],['priced','Pre-Order (priced)'],['noPrice','Pre-Order (no price)']],'filterMKT',['released']);\n"
+        "fillStatic('mkt-bundle',[['bundles','Bundles'],['notbundle','Not Bundles']],'filterMKT');\n"
+        "fillStatic('mkt-region',[['myregions','In My Regions'],['notmy','Not in My Regions']],'filterMKT');\n"
+        # Fetch dynamic dropdowns from API
+        "fetch('/api/v1/store/filters').then(function(r){return r.json()}).then(function(data){\n"
+        "fill('mkt-channel',data.channels.map(function(c){return[c.value,c.value+' ('+c.count+')']}),'filterMKT');\n"
+        "fill('mkt-type',data.types.map(function(t){return[t.value,t.value+' ('+t.count+')']}),'filterMKT');\n"
+        "document.querySelectorAll('#mkt-type .cb-panel input').forEach(c=>{c.checked=c.value==='Game'});\n"
+        "fill('mkt-plat',data.platforms.map(function(p){return[p.value,p.value+' ('+p.count+')']}),'filterMKT');\n"
+        "fill('mkt-pub',data.publishers.map(function(p){return[p.value,p.value+' ('+p.count+')']}),'filterMKT');\n"
+        "fill('mkt-dev',data.developers.map(function(d){return[d.value,d.value+' ('+d.count+')']}),'filterMKT');\n"
+        "fill('mkt-cat',data.categories.map(function(c){return[c.value,c.value+' ('+c.count+')']}),'filterMKT');\n"
+        "document.getElementById('tab-mkt-cnt').textContent=data.totalProducts;\n"
+        # Scan status banner
+        "if(data.lastScan&&data.lastScan.completedAt){"
+        "var ago=Math.round((Date.now()-new Date(data.lastScan.completedAt).getTime())/60000);"
+        "var agoStr=ago<60?ago+' minutes ago':Math.round(ago/60)+' hours ago';"
+        "document.getElementById('mkt-scan-banner').textContent="
+        "'Last scan: '+agoStr+' ('+(data.totalProducts||0).toLocaleString()+' products)'}\n"
+        # Deserialize URL filters, then trigger initial load
+        "_mktDeserializeFilters();\n"
+        "filterMKT();\n"
+        "}).catch(function(e){console.error('[store] filters error:',e)})\n"
+        "}\n"
+        # Local mode: existing single-pass MKT array code
+        "else if(typeof MKT!=='undefined'&&MKT.length){\n"
         # Single-pass: field mapping, pre-index, owned/GP/demo/preOrder/bundle/sale + dropdown counts
         "const _ownedPids=new Set(LIB.map(x=>x.productId));\n"
         "const _gpPids=new Set(GP.map(x=>x.productId));\n"
@@ -4527,13 +4655,11 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));"
         "document.getElementById(id).classList.add('active');el.classList.add('active');"
         "if(typeof _loadTabData==='function')_loadTabData(id);"
-        "var _slugMap={library:'library',marketplace:'marketplace',gamepass:'gamepass',"
+        "var _slugMap={library:'library',marketplace:'store',gamepass:'gamepass',"
         "playhistory:'playhistory',history:'scanlog',gamertags:'gamertags',"
         "gfwl:'gfwl',cdnsync:'xvcdb',imports:'imports',achievements:'achievements',admin:'admin'};"
         "var slug=_slugMap[id]||id;"
-        "if(id!=='marketplace'){"
-        "if(window._xctHosted){history.replaceState(null,'','/'+(slug==='library'?'':slug))}"
-        "else{location.hash=slug==='library'?'':slug}}}\n"
+        "_setRoute(slug,'')}\n"
 
         # -- Import/Export JS (IndexedDB for library data, localStorage for metadata index) --
         "const IMP_DB_NAME='xct_imports_db',IMP_DB_VER=1,IMP_STORE='imports',IMP_IDX_KEY='xct_imp_idx';\n"
@@ -4725,7 +4851,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const owned=item.owned?'<span class=\"badge owned\">OWNED</span>':'<span class=\"badge new\">NOT OWNED</span>';\n"
         "const colls=(item.collections||[]).map(c=>'<span class=\"badge gp\">'+c+'</span>').join('');\n"
         "const img=item.heroImage||item.boxArt||'';\n"
-        "const imgTag=img?`<img class=\"card-img\" src=\"${img}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:"
+        "const imgTag=img?`<img class=\"card-img\" src=\"${_imgResize(img,330,186)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:"
         "'<div class=\"card-img\" style=\"display:flex;align-items:center;justify-content:center;color:#333;font-size:36px\">'+(item.title||'?')[0]+'</div>';\n"
         "const usdP=_p(item.priceUSD);\n"
         "const priceTag=usdP?"
@@ -4737,7 +4863,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div style="margin:4px 0">${priceTag}</div>'
         '<div class="card-desc">${item.description||\'\'}</div>'
         '<div class="card-badges">${owned}${colls}</div></div></div>`;\n'
-        "const thumbImg=img?`<img src=\"${img}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';\n"
+        "const thumbImg=img?`<img src=\"${_imgResize(img,80,80)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';\n"
         "const ownedBadge=item.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>'"
         ":'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';\n"
         'lh+=`<div class="lv-row" onclick="showGPDetail(${i})">${thumbImg}'
@@ -4748,7 +4874,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="lv-status">${ownedBadge}</div></div>`;\n'
         '});\n'
         "g.innerHTML=gh;l.innerHTML=lh;\n"
-        "document.getElementById('gp-cbar').innerHTML=`<span>${c}</span> of ${GP.length} shown`}\n"
+        "document.getElementById('gp-cbar').innerHTML=`<span>${c}</span> of ${GP.length} shown`;"
+        "if(document.getElementById('gamepass').classList.contains('active'))_gpSerializeFilters()}\n"
         '\n'
 
         # -- showGPDetail --
@@ -5033,7 +5160,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "function _renderRow(item,extraCls,dlcCount){"
         "const fl=manualFlags[item.productId];"
         "const sc2=item.status==='Active'?'s-active':item.status==='Expired'?'s-expired':'s-revoked';"
-        "const imgTag=item.image?`<img src=\"${item.image}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'<div></div>';"
+        "const imgTag=item.image?`<img src=\"${_imgResize(item.image,80,80)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'<div></div>';"
         "let imgHtml=imgTag;"
         "if(dlcCount>0){const tid=item.xboxTitleId;const exp=_expandedTids.has(tid);imgHtml=`<div class=\"dlc-img-wrap\">${imgTag}<button class=\"dlc-toggle\" onclick=\"toggleDlcGroup('${tid}',event)\">${exp?'\\u2212':'+'}</button></div>`}"
         "const usdR=_p(item.priceUSD);"
@@ -5082,7 +5209,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         'for(let i=0;i<shown;i++){const item=filtered[i];\n'
         'const flagged=manualFlags[item.productId];\n'
         "const sc=item.status==='Active'?'s-active':item.status==='Expired'?'s-expired':'s-revoked';\n"
-        "const img=item.image?`<img src=\"${item.image}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'<div></div>';\n"
+        "const img=item.image?`<img src=\"${_imgResize(item.image,330,186)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'<div></div>';\n"
         "const usd=_p(item.priceUSD);\n"
         "const pr=usd?`<div class=\"lp\"><span class=\"usd\">${usd}</span></div>`:'';\n"
         "const gpBadge=item.onGamePass?'<span class=\"badge gp\" style=\"font-size:9px;margin-left:4px\">GP</span>':'';\n"
@@ -5125,7 +5252,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "lh+=_renderRow(item,'',0)\n"
         "}}\n"
         "g.innerHTML=gh;l.innerHTML=lh;\n"
-        "document.getElementById('lib-cbar').innerHTML=_buildSummaryTable(_pf,filtered)}\n"
+        "document.getElementById('lib-cbar').innerHTML=_buildSummaryTable(_pf,filtered);"
+        "if(document.getElementById('library').classList.contains('active'))_libSerializeFilters()}\n"
         '\n'
 
         "function closeModal(){document.getElementById('modal').classList.remove('active')}\n"
@@ -5163,7 +5291,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "<div></div><div></div><div></div><div></div><div></div><div></div>"
         "</div>';\n"
         'for(let i=0;i<shown;i++){const item=filtered[i];\n'
-        "const img=item.image?`<img src=\"${item.image}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'<div></div>';\n"
+        "const img=item.image?`<img src=\"${_imgResize(item.image,80,80)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'<div></div>';\n"
         "const lpD=(item.lastTimePlayed||'').substring(0,10);\n"
         "const platStr=(item.platforms||[]).join(', ')||'';\n"
         "const gpTag=item.onGamePass?'<span class=\"badge gp\" style=\"font-size:9px;margin-left:4px\">GP</span>':'';\n"
@@ -5179,7 +5307,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div></div><div></div><div></div><div></div><div></div><div></div></div>`}\n'
         "g.innerHTML=gh;l.innerHTML=lh;\n"
         "document.getElementById('ph-cbar').innerHTML=`<span>${filtered.length}</span>"
-        "${filtered.length>shown?' (showing '+shown+')':''} play history items`}\n"
+        "${filtered.length>shown?' (showing '+shown+')':''} play history items`;"
+        "if(document.getElementById('playhistory').classList.contains('active'))_phSerializeFilters()}\n"
         '\n'
 
         # -- Regional pricing helpers --
@@ -5278,7 +5407,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "return grouped}\n"
         '\n'
 
-        'function filterMKT(){\n'
+        'function filterMKT(){if(window._xctHosted){_filterMKTApi()}else{_filterMKTLocal()}}\n'
+        'function _filterMKTLocal(){\n'
         "if(typeof MKT==='undefined'||!MKT.length)return;\n"
         "const q=document.getElementById('mkt-search').value.toLowerCase();\n"
         "const chVals=getCBVals('mkt-channel');\n"
@@ -5433,7 +5563,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const altBadge=altCount>0?'<span class=\"badge\" style=\"font-size:9px;background:#455a64;color:#fff;cursor:pointer\" onclick=\"event.stopPropagation();_mktToggleAlts(this)\">'+altCount+' edition'+(altCount>1?'s':'')+'</span>':'';\n"
         "const chBadges=(item.channels||[]).slice(0,3).map(c=>'<span class=\"badge gp\" style=\"font-size:9px\">'+c+'</span>').join('');\n"
         "const img=item.heroImage||item.boxArt||'';\n"
-        "const imgTag=img?`<img class=\"card-img\" src=\"${img}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:"
+        "const imgTag=img?`<img class=\"card-img\" src=\"${_imgResize(img,330,186)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:"
         "'<div class=\"card-img\" style=\"display:flex;align-items:center;justify-content:center;color:#333;font-size:36px\">'+(item.title||'?')[0]+'</div>';\n"
         "const usd=_p(item.priceUSD);\n"
         "const _usHref=`https://www.xbox.com/en-us/games/store/p/${item.productId}`;\n"
@@ -5451,7 +5581,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div style="margin:4px 0">${priceTag}</div>'
         '${bestCard}${ratingStr}'
         '<div class="card-badges">${owned}${gpBadge}${bundleBadge}${xcloudBadge}${altBadge}${chBadges}</div></div></div>`;\n'
-        "const thumbImg=img?`<img src=\"${img}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';\n"
+        "const thumbImg=img?`<img src=\"${_imgResize(img,80,80)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';\n"
         'lh+=`<div class="lv-row" onclick="showMKTDetail(${item._idx})">${thumbImg}'
         '<div class="lv-title" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}'
         '${altCount>0?\'<span style="font-size:10px;color:#78909c;margin-left:6px;cursor:pointer" onclick="event.stopPropagation();_mktToggleAlts(this)">\'+altCount+\' ed.</span>\':\'\'}</div>'
@@ -5470,7 +5600,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const aSale=alt.currentPriceUSD>0&&alt.currentPriceUSD<alt.priceUSD?"
         "`<a href=\"${aHref}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">${_p(alt.currentPriceUSD)}</a>`:'';"
         "const aImg=alt.heroImage||alt.boxArt||'';"
-        "const aThumb=aImg?`<img src=\"${aImg}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';"
+        "const aThumb=aImg?`<img src=\"${_imgResize(aImg,80,80)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';"
         "const aBundleBadge=alt._isBundle?'<span class=\"badge\" style=\"font-size:9px;background:#e65100;color:#fff\">BUNDLE</span>':'';"
         "lh+=`<div class=\"lv-row mkt-alt\" style=\"display:none;background:#1a1a2e;border-left:3px solid #455a64\" onclick=\"showMKTDetail(${alt._idx})\">${aThumb}"
         "<div class=\"lv-title\" style=\"padding-left:12px;font-size:12px\" title=\"${(alt.title||'').replace(/\"/g,'&quot;')}\">${alt.title||'Unknown'}</div>"
@@ -5508,10 +5638,168 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "while(next&&next.classList.contains('mkt-alt')){"
         "next.style.display=next.style.display==='none'?'':'none';"
         "next=next.nextElementSibling}}\n"
+
+        # -- API-backed filterMKT --
+        "function _filterMKTApi(){\n"
+        "if(_mktAbort){try{_mktAbort.abort()}catch(e){}}\n"
+        "const ac=new AbortController();_mktAbort=ac;\n"
+        # Show loading spinner
+        "var loadEl=document.getElementById('mkt-loading');"
+        "if(loadEl)loadEl.style.display='block';\n"
+        # Collect filter state from DOM
+        "const p=new URLSearchParams();\n"
+        "const q=(document.getElementById('mkt-search').value||'').trim();\n"
+        "if(q)p.set('q',q);\n"
+        "const so=document.getElementById('mkt-sort').value;\n"
+        "if(so)p.set('sort',so);\n"
+        "p.set('page',mktPage);\n"
+        "p.set('per_page',MKT_PAGE_SIZE);\n"
+        # cb-drops
+        "const cbMap=[['mkt-channel','ch'],['mkt-type','type'],['mkt-plat','plat'],"
+        "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
+        "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
+        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-region','regions']];\n"
+        "cbMap.forEach(function(pair){var v=_mktGetCBChecked(pair[0]);if(v)p.set(pair[1],v.join(','))});\n"
+        # binary checkboxes
+        "if(document.getElementById('mkt-xcloud').checked)p.set('xcloud','1');\n"
+        "if(document.getElementById('mkt-trial').checked)p.set('trial','1');\n"
+        "if(document.getElementById('mkt-ach').checked)p.set('ach','1');\n"
+        "if(document.getElementById('mkt-group')&&document.getElementById('mkt-group').checked)p.set('group','1');\n"
+        # Fetch
+        "var h={};if(window._xctApiKey)h['Authorization']='Bearer '+window._xctApiKey;\n"
+        "fetch('/api/v1/store/products?'+p.toString(),{headers:h,signal:ac.signal})"
+        ".then(function(r){if(!r.ok)throw new Error(r.status);return r.json()})"
+        ".then(function(data){\n"
+        "if(loadEl)loadEl.style.display='none';\n"
+        "_mktTotal=data.total||0;\n"
+        "var products=data.products||[];\n"
+        "var totalPages=data.totalPages||1;\n"
+        "if(mktPage>=totalPages)mktPage=Math.max(0,totalPages-1);\n"
+        # Render products
+        "const g=document.getElementById('mkt-grid'),l=document.getElementById('mkt-list');\n"
+        "let gh='',lh='<div class=\"lv-head\"><div></div>"
+        "<div data-sort onclick=\"sortMktCol(\\'title\\')\">Title'+mktColArrow('title')+'</div>"
+        "<div data-sort onclick=\"sortMktCol(\\'publisher\\')\">Publisher'+mktColArrow('publisher')+'</div>"
+        "<div data-sort onclick=\"sortMktCol(\\'release\\')\">Release'+mktColArrow('release')+'</div>"
+        "<div data-sort style=\"text-align:right\" onclick=\"sortMktCol(\\'usd\\')\">USD'+mktColArrow('usd')+'</div>"
+        "'+_RORD.map(m=>'<div style=\"text-align:right;font-size:10px\">'+m+'</div>').join('')+'"
+        "<div style=\"text-align:center\">Status</div></div>';\n"
+        "products.forEach(function(item){\n"
+        # Pre-process item for rendering (add fields the card/row templates expect)
+        "if(item.imageBoxArt&&!item.boxArt)item.boxArt=item.imageBoxArt;\n"
+        "if(item.imageHero&&!item.heroImage)item.heroImage=item.imageHero;\n"
+        "if(!item.priceUSD&&item.regionalPrices&&item.regionalPrices.US)item.priceUSD=item.regionalPrices.US.msrp||0;\n"
+        "if(!item.currentPriceUSD&&item.regionalPrices&&item.regionalPrices.US){var sp=item.regionalPrices.US.salePrice;if(sp>0)item.currentPriceUSD=sp}\n"
+        "item._isBundle=!!item.isBundle;\n"
+        "item._onSale=!!item._onSale;\n"
+        "var altCount=item.altCount||0;\n"
+        # Card rendering (same as local mode)
+        "const owned=item.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>'"
+        ":'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';\n"
+        "const gpBadge=item.onGP?'<span class=\"badge gp\" style=\"font-size:9px\">GAME PASS</span>':'';\n"
+        "const bundleBadge=item._isBundle?'<span class=\"badge\" style=\"font-size:9px;background:#e65100;color:#fff\">BUNDLE</span>':'';\n"
+        "const xcloudBadge=item.xCloudStreamable?'<span class=\"badge\" style=\"font-size:9px;background:#6a1b9a;color:#fff\">xCLOUD</span>':'';\n"
+        "const altBadge=altCount>0?'<span class=\"badge\" style=\"font-size:9px;background:#455a64;color:#fff;cursor:pointer\" onclick=\"event.stopPropagation();_mktToggleEditions(this,\\''+item.xboxTitleId+'\\',\\''+item.productId+'\\')\">'+altCount+' edition'+(altCount>1?'s':'')+'</span>':'';\n"
+        "const chBadges=(item.channels||[]).slice(0,3).map(c=>'<span class=\"badge gp\" style=\"font-size:9px\">'+c+'</span>').join('');\n"
+        "const img=item.heroImage||item.boxArt||'';\n"
+        "const imgTag=img?`<img class=\"card-img\" src=\"${img}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:"
+        "'<div class=\"card-img\" style=\"display:flex;align-items:center;justify-content:center;color:#333;font-size:36px\">'+(item.title||'?')[0]+'</div>';\n"
+        "const usd=_p(item.priceUSD);\n"
+        "const _usHref=`https://www.xbox.com/en-us/games/store/p/${item.productId}`;\n"
+        "const saleTag=item.currentPriceUSD>0&&item.currentPriceUSD<item.priceUSD?"
+        "`<a href=\"${_usHref}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">${_p(item.currentPriceUSD)}</a>`:'';\n"
+        "const priceTag=usd?"
+        "`<span style=\"color:#42a5f5;font-weight:600\">${usd}</span>${saleTag}`:"
+        "'<span style=\"color:#555;font-size:11px\">Free</span>';\n"
+        "const br=item.bestRegion||_bestReg(item);\n"
+        "const bestCard=br?`<div style=\"margin:2px 0;color:#e91e63;font-weight:600;font-size:11px\">Best: $${(typeof br.usd==='number'?br.usd:0).toFixed(2)} (${br.mkt})</div>`:'';\n"
+        "const ratingStr=item.averageRating>0?`<div style=\"font-size:10px;color:#aaa\">${item.averageRating.toFixed(1)} (${(item.ratingCount||0).toLocaleString()})</div>`:'';\n"
+        "const pid=item.productId;\n"
+        # Grid card
+        'gh+=`<div class="card" onclick="showMKTDetail(\'${pid}\')">${imgTag}<div class="card-body">'
+        '<div class="card-name" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}</div>'
+        '<div class="card-meta">${item.publisher||\'\'} | ${(item.releaseDate||\'\').substring(0,10)}</div>'
+        '<div style="margin:4px 0">${priceTag}</div>'
+        '${bestCard}${ratingStr}'
+        '<div class="card-badges">${owned}${gpBadge}${bundleBadge}${xcloudBadge}${altBadge}${chBadges}</div></div></div>`;\n'
+        # List row
+        "const thumbImg=img?`<img src=\"${img.replace(/\\?w=330&h=186/,'?w=80&h=80')}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';\n"
+        'lh+=`<div class="lv-row" onclick="showMKTDetail(\'${pid}\')">${thumbImg}'
+        '<div class="lv-title" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}'
+        '${altCount>0?\'<span style="font-size:10px;color:#78909c;margin-left:6px;cursor:pointer" onclick="event.stopPropagation();_mktToggleEditions(this,\\\'\'+item.xboxTitleId+\'\\\',\\\'\'+pid+\'\\\')">\'+(altCount)+\' ed.</span>\':\'\'}</div>'
+        '<div class="lv-pub">${item.publisher||\'\'}</div>'
+        '<div class="lv-type">${(item.releaseDate||\'\').substring(0,10)}</div>'
+        '<div class="lv-usd">${usd?`<a href="${_usHref}" target="_blank" onclick="event.stopPropagation()" style="color:#42a5f5;text-decoration:none">${usd}</a>`:\'\'} ${saleTag}</div>'
+        "${_RORD.map(m=>_regCell(item,m)).join('')}"
+        '<div class="lv-status">${owned}${gpBadge}${bundleBadge}</div></div>`;\n'
+        "});\n"
+        # Write to DOM
+        "g.innerHTML=gh;l.innerHTML=lh;\n"
+        "document.getElementById('mkt-cbar').textContent=data.total+' products';\n"
+        # Pagination
+        "let pgH='';\n"
+        "if(totalPages>1){\n"
+        "pgH+='<button style=\"padding:6px 12px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;cursor:pointer'+(mktPage===0?';opacity:.4;cursor:default':'')+`\" ${mktPage===0?'disabled':''} onclick=\"mktGoPage(${mktPage-1})\">&#9664; Prev</button>`;\n"
+        "const maxBtns=9,half=Math.floor(maxBtns/2);\n"
+        "let lo=Math.max(0,mktPage-half),hi=Math.min(totalPages-1,lo+maxBtns-1);\n"
+        "lo=Math.max(0,hi-maxBtns+1);\n"
+        "if(lo>0)pgH+='<button style=\"padding:6px 10px;background:#222;color:#aaa;border:1px solid #444;border-radius:4px;cursor:pointer\" onclick=\"mktGoPage(0)\">1</button><span style=\"color:#666\">...</span>';\n"
+        "for(var pi=lo;pi<=hi;pi++){"
+        "var active=pi===mktPage?'background:#107c10;color:#fff;font-weight:bold':'background:#222;color:#ccc';"
+        "pgH+='<button style=\"padding:6px 10px;'+active+';border:1px solid #555;border-radius:4px;cursor:pointer\" onclick=\"mktGoPage('+pi+')\">'+String(pi+1)+'</button>'}\n"
+        "if(hi<totalPages-1)pgH+='<span style=\"color:#666\">...</span><button style=\"padding:6px 10px;background:#222;color:#aaa;border:1px solid #444;border-radius:4px;cursor:pointer\" onclick=\"mktGoPage('+(totalPages-1)+')\">'+totalPages+'</button>';\n"
+        "pgH+='<button style=\"padding:6px 12px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;cursor:pointer'+(mktPage>=totalPages-1?';opacity:.4;cursor:default':'')+`\" ${mktPage>=totalPages-1?'disabled':''} onclick=\"mktGoPage(${mktPage+1})\">Next &#9654;</button>`}\n"
+        "document.getElementById('mkt-pager').innerHTML=pgH;\n"
+        "if(document.getElementById('marketplace').classList.contains('active'))_mktSerializeFilters();\n"
+        "})"  # end .then(data)
+        ".catch(function(e){if(e.name==='AbortError')return;"
+        "console.error('[store] API error:',e);"
+        "if(loadEl)loadEl.style.display='none'})}\n"
         '\n'
 
-        # -- showMKTDetail --
-        'function showMKTDetail(i){\n'
+        # -- API edition toggle --
+        "function _mktToggleEditions(el,tid,excludePid){"
+        "var row=el.closest('.lv-row')||el.closest('.card');"
+        "if(!row)return;"
+        # If already expanded, toggle visibility
+        "var next=row.nextElementSibling;"
+        "if(next&&next.classList.contains('mkt-alt')){"
+        "while(next&&next.classList.contains('mkt-alt')){"
+        "next.style.display=next.style.display==='none'?'':'none';"
+        "next=next.nextElementSibling}return}\n"
+        # Fetch from API
+        "var h={};if(window._xctApiKey)h['Authorization']='Bearer '+window._xctApiKey;"
+        "fetch('/api/v1/store/editions/'+encodeURIComponent(tid)+'?exclude='+encodeURIComponent(excludePid),{headers:h})"
+        ".then(function(r){return r.json()}).then(function(editions){\n"
+        "var frag=document.createDocumentFragment();\n"
+        "editions.forEach(function(alt){"
+        "var d=document.createElement('div');"
+        "d.className='lv-row mkt-alt';"
+        "d.style.cssText='background:#1a1a2e;border-left:3px solid #455a64';"
+        "d.onclick=function(){showMKTDetail(alt.productId)};"
+        "var aOwned=alt.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>':'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';"
+        "var aUsd=_p(alt.priceUSD);"
+        "var aHref='https://www.xbox.com/en-us/games/store/p/'+alt.productId;"
+        "var aSale=alt.currentPriceUSD>0&&alt.currentPriceUSD<alt.priceUSD?"
+        "'<a href=\"'+aHref+'\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">'+_p(alt.currentPriceUSD)+'</a>':'';"
+        "var aImg=alt.imageBoxArt||'';"
+        "var aThumb=aImg?'<img src=\"'+aImg+'\" loading=\"lazy\" onerror=\"this.style.display=\\'none\\'\">':'';"
+        "d.innerHTML=aThumb+"
+        "'<div class=\"lv-title\" style=\"padding-left:12px;font-size:12px\">'+(alt.title||'Unknown')+'</div>'"
+        "+'<div class=\"lv-pub\">'+(alt.publisher||'')+'</div>'"
+        "+'<div class=\"lv-type\">'+(alt.releaseDate||'').substring(0,10)+'</div>'"
+        "+'<div class=\"lv-usd\">'+(aUsd?'<a href=\"'+aHref+'\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#42a5f5;text-decoration:none\">'+aUsd+'</a>':'')+' '+aSale+'</div>'"
+        "+_RORD.map(function(m){return _regCell(alt,m)}).join('')"
+        "+'<div class=\"lv-status\">'+aOwned+'</div>';"
+        "frag.appendChild(d)});\n"
+        "row.parentNode.insertBefore(frag,row.nextSibling);\n"
+        "}).catch(function(e){console.error('[store] editions error:',e)})}\n"
+        '\n'
+
+        # -- showMKTDetail (dual-mode) --
+        "function showMKTDetail(i){\n"
+        "if(window._xctHosted&&typeof i==='string'){"
+        "_showMKTDetailApi(i);return}\n"
         'const item=MKT[i];if(!item)return;\n'
         "const img=item.heroImage||item.boxArt||'';\n"
         "document.getElementById('modal-hero').src=img;\n"
@@ -5549,6 +5837,58 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "</div>\n"
         "${_regionTbl(item)}`;\n"
         "document.getElementById('modal').classList.add('active')}\n"
+
+        # -- showMKTDetail API mode --
+        "function _showMKTDetailApi(pid){\n"
+        "var h={};if(window._xctApiKey)h['Authorization']='Bearer '+window._xctApiKey;\n"
+        "fetch('/api/v1/store/product/'+encodeURIComponent(pid),{headers:h})"
+        ".then(function(r){return r.json()}).then(function(item){\n"
+        "if(!item||item.error)return;\n"
+        # Pre-process
+        "if(item.imageBoxArt&&!item.boxArt)item.boxArt=item.imageBoxArt;\n"
+        "if(item.imageHero&&!item.heroImage)item.heroImage=item.imageHero;\n"
+        "if(!item.priceUSD&&item.regionalPrices&&item.regionalPrices.US)item.priceUSD=item.regionalPrices.US.msrp||0;\n"
+        "if(!item.currentPriceUSD&&item.regionalPrices&&item.regionalPrices.US){var sp=item.regionalPrices.US.salePrice;if(sp>0)item.currentPriceUSD=sp}\n"
+        "item._isBundle=!!item.isBundle;\n"
+        "item._onSale=!!item._onSale;\n"
+        # Render modal (same as local mode)
+        "const img=item.heroImage||item.boxArt||'';\n"
+        "document.getElementById('modal-hero').src=img;\n"
+        "document.getElementById('modal-hero').style.display=img?'block':'none';\n"
+        "const owned=item.owned?'<span class=\"badge owned\">IN YOUR LIBRARY</span>'"
+        ":'<span class=\"badge new\">NOT OWNED</span>';\n"
+        "const gpTag=item.onGP?'<span class=\"badge gp\">GAME PASS</span>':'';\n"
+        "const bundleTag=item._isBundle?'<span class=\"badge\" style=\"background:#e65100;color:#fff\">BUNDLE</span>':'';\n"
+        "const xcloudTag=item.xCloudStreamable?'<span class=\"badge\" style=\"background:#6a1b9a;color:#fff\">xCLOUD</span>':'';\n"
+        "const eaTag=item.isEAPlay?'<span class=\"badge\" style=\"background:#ff6f00;color:#fff\">EA PLAY</span>':'';\n"
+        "const saleTag=item._onSale?'<span class=\"badge\" style=\"background:#2e7d32;color:#fff\">ON SALE</span>':'';\n"
+        "const chBadges=(item.channels||[]).map(c=>'<span class=\"badge gp\">'+c+'</span>').join(' ');\n"
+        "const platBadges=(item.platforms||[]).map(p=>{"
+        "const cls=p.includes('Series')?'series':p.includes('360')?'x360':p==='PC'?'pc':p.includes('One')?'one':'mobile';"
+        "return '<span class=\"badge '+cls+'\">'+p+'</span>'}).join(' ');\n"
+        "const ratingHtml=item.averageRating>0?"
+        "'<div><span class=\"lbl\">Rating:</span></div><div class=\"val\">'+item.averageRating.toFixed(1)+' / 5 ('+(item.ratingCount||0).toLocaleString()+' ratings)</div>':'';\n"
+        "const descHtml=(item.shortDescription||item.description)?"
+        "'<div style=\"grid-column:1/3;margin-top:6px;padding:8px;background:#1a1a2e;border-radius:6px;font-size:12px;color:#bbb;line-height:1.4\">'+(item.shortDescription||item.description)+'</div>':'';\n"
+        "document.getElementById('modal-body').innerHTML=`\n"
+        '<div class="modal-title">${item.title||\'Unknown\'}</div>\n'
+        '<div class="modal-pub">${item.publisher||\'\'} ${item.developer&&item.developer!==item.publisher?\'/  \'+item.developer:\'\'}</div>\n'
+        '<div style="margin-bottom:10px">${owned} ${gpTag} ${bundleTag} ${xcloudTag} ${eaTag} ${saleTag} ${chBadges} ${platBadges}</div>\n'
+        '<div class="modal-info">\n'
+        '<div><span class="lbl">Product ID:</span></div><div class="val">${item.productId}</div>\n'
+        "${item.xboxTitleId?'<div><span class=\"lbl\">Xbox Title ID:</span></div><div class=\"val\">'+item.xboxTitleId+'</div>':''}\n"
+        '<div><span class="lbl">Release:</span></div><div class="val">${(item.releaseDate||\'\').substring(0,10)}</div>\n'
+        '<div><span class="lbl">Type:</span></div><div class="val">${item.productKind||\'\'}</div>\n'
+        '<div><span class="lbl">Category:</span></div><div class="val">${item.category||\'\'}</div>\n'
+        "${ratingHtml}\n"
+        "${item.priceUSD>0?'<div><span class=\"lbl\">Price:</span></div><div class=\"val\" style=\"color:#42a5f5;font-weight:600\">'+_p(item.priceUSD)+'</div>':''}\n"
+        "${item.currentPriceUSD>0&&item.currentPriceUSD<item.priceUSD?'<div><span class=\"lbl\">Sale:</span></div><div class=\"val\" style=\"color:#4caf50;font-weight:600\">'+_p(item.currentPriceUSD)+'</div>':''}\n"
+        '<div><span class="lbl">Store:</span></div><div class="val"><a href="${_storeUrl(item.productId)}" target="_blank">${item.productId}</a></div>\n'
+        "${descHtml}\n"
+        "</div>\n"
+        "${_regionTbl(item)}`;\n"
+        "document.getElementById('modal').classList.add('active');\n"
+        "}).catch(function(e){console.error('[store] detail error:',e)})}\n"
         '\n'
 
         # -- renderHistory --
@@ -6021,19 +6361,33 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
 
     html += (
         '_loadImports().catch(()=>{}).then(()=>{\n'
-        'try{initDropdowns();_mktInitSaved();_mktDeserializeFilters();filterLib();filterPH();filterGP();filterMKT();renderHistory();renderImports();}catch(e){console.error("init error",e)}\n'
-        'renderGFWL();\n'
-        '_cdnSyncBuildFlat();renderCDNSync();renderCDNLeaderboard();renderCDNSyncLog();\n'
+        'try{initDropdowns();_mktInitSaved();\n'
         "var _revSlug={library:'library',store:'marketplace',marketplace:'marketplace',gamepass:'gamepass',"
         "playhistory:'playhistory',scanlog:'history',gamertags:'gamertags',"
         "gfwl:'gfwl',xvcdb:'cdnsync',imports:'imports'};\n"
+        "function _deserializeTab(t,qs){"
+        "if(t==='marketplace'){_mktDeserializeFilters(qs);filterMKT()}"
+        "else if(t==='library'){_libDeserializeFilters(qs);filterLib()}"
+        "else if(t==='playhistory'){_phDeserializeFilters(qs);filterPH()}"
+        "else if(t==='gamepass'){_gpDeserializeFilters(qs);filterGP()}}\n"
         "function _hashNav(){var _dt=typeof _defaultTab!=='undefined'?_defaultTab:'library';"
-        "var s=(location.hash.replace('#','')||_dt).split('?')[0];"
+        "var raw,qs='';"
+        "if(window._xctHosted){"
+        "raw=location.pathname.replace(/^\\//, '');qs=location.search.slice(1)}"
+        "else{"
+        "var h=location.hash.replace('#','');var qi=h.indexOf('?');"
+        "raw=qi>=0?h.slice(0,qi):h;qs=qi>=0?h.slice(qi+1):''}"
+        "var s=raw||_dt;"
         "var t=_revSlug[s]||_dt;"
+        "var cur=document.querySelector('.section.active');"
+        "if(cur&&cur.id===t&&!qs)return;"
         "var el=document.querySelector('.tab[onclick*=\"'+t+'\"]');"
-        "if(el)switchTab(t,el)}\n"
-        "_hashNav();\n"
+        "if(el){switchTab(t,el);if(qs)_deserializeTab(t,qs)}}\n"
+        '_hashNav();filterLib();filterPH();filterGP();if(!window._xctHosted)filterMKT();renderHistory();renderImports();}catch(e){console.error("init error",e)}\n'
+        'renderGFWL();\n'
+        '_cdnSyncBuildFlat();renderCDNSync();renderCDNLeaderboard();renderCDNSyncLog();\n'
         "window.addEventListener('hashchange',_hashNav);\n"
+        "if(window._xctHosted)window.addEventListener('popstate',_hashNav);\n"
         "document.getElementById('loading-overlay').style.display='none';\n"
         '});\n'
         '</script>\n'
@@ -6179,22 +6533,22 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
         cdn_sync_log = server_log
 
     content = (
-        "const LIB=" + json.dumps(library, ensure_ascii=False) + ";\n"
-        "const GP=" + json.dumps(gp_items, ensure_ascii=False) + ";\n"
-        "const PH=" + json.dumps(play_history, ensure_ascii=False) + ";\n"
-        "const MKT=" + json.dumps(marketplace, ensure_ascii=False) + ";\n"
-        "const HISTORY=" + json.dumps(scan_history, ensure_ascii=False) + ";\n"
-        "const DEFAULT_FLAGS=" + json.dumps(DEFAULT_FLAGS, ensure_ascii=False) + ";\n"
-        "const ACCOUNTS=" + json.dumps(accounts_meta, ensure_ascii=False) + ";\n"
-        "const RATES=" + json.dumps(rates, ensure_ascii=False) + ";\n"
-        "const GC_FACTOR=" + str(GC_FACTOR) + ";\n"
-        "const CDN_DB=" + json.dumps(cdn_db, ensure_ascii=False) + ";\n"
-        "const GFWL=" + json.dumps(gfwl_data, ensure_ascii=False) + ";\n"
-        "const CDN_LEADERBOARD=" + json.dumps(cdn_leaderboard, ensure_ascii=False) + ";\n"
-        "const CDN_LB_STATS=" + json.dumps(cdn_lb_stats, ensure_ascii=False) + ";\n"
-        "const CDN_SYNC_META=" + json.dumps(cdn_sync_meta, ensure_ascii=False) + ";\n"
-        "const CDN_SYNC_USER=" + json.dumps(cdn_sync_user, ensure_ascii=False) + ";\n"
-        "const CDN_SYNC_LOG=" + json.dumps(cdn_sync_log, ensure_ascii=False) + ";\n"
+        "var LIB=" + json.dumps(library, ensure_ascii=False) + ";\n"
+        "var GP=" + json.dumps(gp_items, ensure_ascii=False) + ";\n"
+        "var PH=" + json.dumps(play_history, ensure_ascii=False) + ";\n"
+        "var MKT=" + json.dumps(marketplace, ensure_ascii=False) + ";\n"
+        "var HISTORY=" + json.dumps(scan_history, ensure_ascii=False) + ";\n"
+        "var DEFAULT_FLAGS=" + json.dumps(DEFAULT_FLAGS, ensure_ascii=False) + ";\n"
+        "var ACCOUNTS=" + json.dumps(accounts_meta, ensure_ascii=False) + ";\n"
+        "var RATES=" + json.dumps(rates, ensure_ascii=False) + ";\n"
+        "var GC_FACTOR=" + str(GC_FACTOR) + ";\n"
+        "var CDN_DB=" + json.dumps(cdn_db, ensure_ascii=False) + ";\n"
+        "var GFWL=" + json.dumps(gfwl_data, ensure_ascii=False) + ";\n"
+        "var CDN_LEADERBOARD=" + json.dumps(cdn_leaderboard, ensure_ascii=False) + ";\n"
+        "var CDN_LB_STATS=" + json.dumps(cdn_lb_stats, ensure_ascii=False) + ";\n"
+        "var CDN_SYNC_META=" + json.dumps(cdn_sync_meta, ensure_ascii=False) + ";\n"
+        "var CDN_SYNC_USER=" + json.dumps(cdn_sync_user, ensure_ascii=False) + ";\n"
+        "var CDN_SYNC_LOG=" + json.dumps(cdn_sync_log, ensure_ascii=False) + ";\n"
     )
     with open(data_js_path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -6495,11 +6849,12 @@ def prompt_data_source(gamertag):
 # Process a single account
 # ===========================================================================
 
-def process_account(gamertag, method=None):
+def process_account(gamertag, method=None, prompt_upload=True):
     """Run the full pipeline for a single account.
 
     method: "both" (Collections+TitleHub merged), "collection", "titlehub",
             or None (prompt user, default=both).
+    prompt_upload: if True, offer to upload collection to XCT Live after processing.
     """
     debug(f"process_account: gamertag={gamertag} method={method}")
     set_account_paths(gamertag)
@@ -6622,30 +6977,55 @@ def process_account(gamertag, method=None):
                     save_json(CATALOG_V3_US_FILE, v3_data)
             print(f"  Resolved {filled}/{len(invalid_ids)} invalid IDs from Display Catalog")
 
-            # Hardcoded known non-game products that no catalog API will resolve
-            KNOWN_PRODUCTS = {
-                "CFQ7TTC0L7S5": {"title": "Microsoft 365 Business Basic",
-                                 "publisher": "Microsoft Corporation",
-                                 "type": "Subscription"},
-                "9VWGNH0VBZMG": {"title": "Twitch",
-                                 "publisher": "Twitch Interactive, Inc.",
-                                 "type": "App"},
-            }
-            still_invalid = [pid for pid in invalid_ids
-                             if pid in catalog_us and catalog_us[pid].get("_invalid")]
-            hardcoded = 0
-            for pid in still_invalid:
-                if pid in KNOWN_PRODUCTS:
-                    catalog_us[pid] = KNOWN_PRODUCTS[pid]
-                    hardcoded += 1
-            if hardcoded:
-                if CATALOG_V3_US_FILE and os.path.isfile(CATALOG_V3_US_FILE):
+        # Backfill: Catalog v3 silently drops non-game content (movies, TV, apps).
+        # These IDs appear in neither Products nor InvalidIds — find and resolve them.
+        missing_ids = [pid for pid in product_ids if pid not in catalog_us]
+        if missing_ids:
+            print(f"  Catalog v3 silently dropped {len(missing_ids)} IDs "
+                  f"(movies/TV/apps?), trying Display Catalog...")
+            miss_backfill = {}
+            for i in range(0, len(missing_ids), 20):
+                miss_backfill.update(fetch_catalog_batch(
+                    missing_ids[i:i + 20], "US", "en-US"))
+            filled = 0
+            if miss_backfill:
+                filled = sum(1 for pid in missing_ids
+                             if pid in miss_backfill and miss_backfill[pid].get("title"))
+                catalog_us.update(miss_backfill)
+                if filled and CATALOG_V3_US_FILE and os.path.isfile(CATALOG_V3_US_FILE):
                     v3_data = load_json(CATALOG_V3_US_FILE)
-                    for pid in still_invalid:
-                        if pid in KNOWN_PRODUCTS:
-                            v3_data[pid] = KNOWN_PRODUCTS[pid]
+                    for pid in missing_ids:
+                        if pid in miss_backfill and miss_backfill[pid].get("title"):
+                            v3_data[pid] = miss_backfill[pid]
                     save_json(CATALOG_V3_US_FILE, v3_data)
-                print(f"  Resolved {hardcoded} more from known product list")
+            still_missing = len(missing_ids) - filled
+            print(f"  Resolved {filled}/{len(missing_ids)} dropped IDs from Display Catalog"
+                  + (f" ({still_missing} unresolvable)" if still_missing else ""))
+
+        # Hardcoded known non-game products that no catalog API will resolve
+        KNOWN_PRODUCTS = {
+            "CFQ7TTC0L7S5": {"title": "Microsoft 365 Business Basic",
+                             "publisher": "Microsoft Corporation",
+                             "type": "Subscription"},
+            "9VWGNH0VBZMG": {"title": "Twitch",
+                             "publisher": "Twitch Interactive, Inc.",
+                             "type": "App"},
+        }
+        still_unresolved = [pid for pid in product_ids
+                            if pid not in catalog_us or catalog_us[pid].get("_invalid")]
+        hardcoded = 0
+        for pid in still_unresolved:
+            if pid in KNOWN_PRODUCTS:
+                catalog_us[pid] = KNOWN_PRODUCTS[pid]
+                hardcoded += 1
+        if hardcoded:
+            if CATALOG_V3_US_FILE and os.path.isfile(CATALOG_V3_US_FILE):
+                v3_data = load_json(CATALOG_V3_US_FILE)
+                for pid in still_unresolved:
+                    if pid in KNOWN_PRODUCTS:
+                        v3_data[pid] = KNOWN_PRODUCTS[pid]
+                save_json(CATALOG_V3_US_FILE, v3_data)
+            print(f"  Resolved {hardcoded} more from known product list")
 
     # -- Step 3a.5: Detect free trials via Display Catalog v7 --
     # Catalog v3 doesn't expose trial info; Display Catalog does.
@@ -6776,6 +7156,22 @@ def process_account(gamertag, method=None):
     print(f"  Trial entitlements: {trial_count}")
     print(f"  Catalog demos: {demo_count}")
 
+    # -- Export unresolved IDs for debugging --
+    invalid_items = [x for x in library
+                     if x.get("catalogInvalid") or x.get("title") == x.get("productId")]
+    if invalid_items:
+        inv_export = [{
+            "productId": x["productId"],
+            "productKind": x.get("productKind", ""),
+            "title": x.get("title", ""),
+            "status": x.get("status", ""),
+            "acquiredDate": x.get("acquiredDate", ""),
+            "gamertag": x.get("gamertag", ""),
+        } for x in invalid_items]
+        inv_path = os.path.join(account_dir(gamertag), "invalidid.json")
+        save_json(inv_path, inv_export)
+        print(f"  Unresolved IDs: {len(inv_export)} → {inv_path}")
+
     # -- Compute value summaries --
     total_usd = sum((x.get("priceUSD") or 0) for x in library)
     priced    = sum(1 for x in library if (x.get("priceUSD") or 0) > 0)
@@ -6861,6 +7257,21 @@ def process_account(gamertag, method=None):
     if len(combined_library) > len(library):
         print(f"  Combined: {len(combined_library)} items (all gamertags)")
     print(f"  Completed in {elapsed:.1f}s")
+    print()
+
+    # Offer to upload collection to XCT Live
+    if prompt_upload:
+        try:
+            upload_ans = input("  Upload collection to XCT Live? [Y/n] ").strip().lower()
+            if upload_ans not in ("n", "no"):
+                upload_collection_live(
+                    library=combined_library,
+                    play_history=combined_ph,
+                    scan_history=combined_history,
+                    accounts_meta=acct_meta,
+                )
+        except (EOFError, KeyboardInterrupt):
+            pass
     print()
 
     return OUTPUT_HTML_COMBINED, library
@@ -8391,7 +8802,7 @@ def process_all_accounts():
 
         # Process account with chosen method
         try:
-            html_file, lib = process_account(gt, method=method)
+            html_file, lib = process_account(gt, method=method, prompt_upload=False)
             results.append((gt, True, html_file))
             all_libraries.extend(lib)
         except Exception as e:
@@ -8440,6 +8851,28 @@ def process_all_accounts():
         file_url = "file:///" + combined_path.replace("\\", "/").replace(" ", "%20")
         print(f"[*] Opening in browser: {file_url}")
         webbrowser.open(file_url)
+
+    # Offer to upload collection to XCT Live (once after all accounts)
+    if all_libraries:
+        try:
+            # Collect combined play history for upload
+            all_ph = []
+            for gt in gamertags:
+                ph_file = account_path(gt, "play_history.json")
+                if os.path.isfile(ph_file):
+                    ph = load_json(ph_file)
+                    if ph:
+                        all_ph.extend(ph)
+            upload_ans = input("\n  Upload collection to XCT Live? [Y/n] ").strip().lower()
+            if upload_ans not in ("n", "no"):
+                upload_collection_live(
+                    library=all_libraries,
+                    play_history=all_ph,
+                    scan_history=all_scan_history,
+                    accounts_meta=acct_meta,
+                )
+        except (EOFError, KeyboardInterrupt):
+            pass
 
 
 def process_contentaccess_only(gamertag):
@@ -14486,6 +14919,133 @@ def process_cdn_sync():
     print()
 
 
+def _xct_live_get_api_key():
+    """Get an XCT Live API key, reusing CDN sync credentials.
+    Returns api_key string or None on failure/cancel."""
+    config = _cdn_sync_load_config()
+    if config.get("api_key"):
+        return config["api_key"]
+    # No CDN sync config — prompt for credentials
+    print("  XCT Live uses the same account as CDN Sync.")
+    print("  Register a username or log in with your existing CDN Sync credentials.\n")
+    username = input("  Username: ").strip()
+    if not username:
+        print("  Cancelled.")
+        return None
+    passphrase = input("  Passphrase: ").strip()
+    if not passphrase:
+        print("  Passphrase is required for XCT Live.")
+        return None
+    try:
+        api_key, points, created = _cdn_sync_register(username, passphrase=passphrase)
+        config = {"username": username, "api_key": api_key, "passphrase_set": True}
+        _cdn_sync_save_config(config)
+        if created:
+            print(f"  [+] Registered as '{username}'")
+        else:
+            print(f"  [+] Logged in as '{username}' ({points} points)")
+        return api_key
+    except ValueError as e:
+        print(f"  [!] {e}")
+        return None
+    except ConnectionError as e:
+        print(f"  [!] {e}")
+        return None
+
+
+def upload_collection_live(library=None, play_history=None, scan_history=None, accounts_meta=None):
+    """Upload collection data to XCT Live (xct.live).
+    If data args are None, loads from cached files (all accounts combined)."""
+    print("\n  [XCT Live — Upload Collection]\n")
+
+    api_key = _xct_live_get_api_key()
+    if not api_key:
+        return
+
+    # Load data from cache if not provided
+    if library is None:
+        accounts = load_accounts()
+        if not accounts:
+            print("  [!] No gamertags configured.")
+            return
+        library = []
+        play_history = []
+        scan_history = []
+        for gt in accounts:
+            lib_file = account_path(gt, "library.json")
+            if os.path.isfile(lib_file):
+                lib = load_json(lib_file)
+                if lib:
+                    library.extend(lib)
+            ph_file = account_path(gt, "play_history.json")
+            if os.path.isfile(ph_file):
+                ph = load_json(ph_file)
+                if ph:
+                    play_history.extend(ph)
+            set_account_paths(gt)
+            scan_history.extend(load_all_scans(gt, max_scans=50))
+        accounts_meta = collect_account_metadata()
+
+    if not library:
+        print("  [!] No library data to upload. Process a gamertag first.")
+        return
+
+    payload = {"library": library}
+    if play_history:
+        payload["playHistory"] = play_history
+    if scan_history:
+        scan_history_trimmed = sorted(scan_history, key=lambda s: s.get("timestamp", ""), reverse=True)[:100]
+        payload["history"] = scan_history_trimmed
+    if accounts_meta:
+        payload["accounts"] = accounts_meta
+
+    raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    print(f"  Uploading {len(library)} library items", end="")
+    if play_history:
+        print(f", {len(play_history)} play history", end="")
+    print("...", flush=True)
+
+    # Gzip compress
+    compressed = gzip.compress(raw)
+
+    url = XCT_LIVE_API_BASE + "/collection/upload"
+    req = urllib.request.Request(url, data=compressed, headers={
+        "Content-Type": "application/json",
+        "Content-Encoding": "gzip",
+        "Authorization": f"Bearer {api_key}",
+    }, method="POST")
+    try:
+        with urllib.request.urlopen(req, context=SSL_CTX, timeout=60) as resp:
+            result = json.loads(resp.read())
+        print(f"  [+] Uploaded to XCT Live: {result.get('items', 0)} items")
+        if result.get("playHistory"):
+            print(f"      Play history: {result['playHistory']} entries")
+        if result.get("history"):
+            print(f"      Scan history: {result['history']} scans")
+        print(f"      View at: https://xct.live")
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        msg = f"HTTP {e.code}"
+        try:
+            msg = json.loads(body).get("error", msg)
+        except Exception:
+            pass
+        if e.code == 401:
+            print(f"  [!] Authentication failed: {msg}")
+            print("      Your CDN Sync API key may not be valid for XCT Live.")
+            print("      Try deleting cdn_sync_config.json and re-registering.")
+        else:
+            print(f"  [!] Upload failed: {msg}")
+    except urllib.error.URLError:
+        print("  [!] Could not reach xct.live. Check your internet connection.")
+    except Exception as e:
+        print(f"  [!] Upload error: {e}")
+
+
 def process_gfwl_download():
     """
     Download GFWL (Games for Windows - LIVE) game packages.
@@ -19000,6 +19560,7 @@ def interactive_menu():
         print("    [l] Scrape XVCs from Xbox One / Series X|S USB Hard Drive")
         print("    [t] Scrape XVCs from Locally Installed Windows Games")
         print("    [s] Sync CDN.json with Freshdex CDN Database")
+        print("    [x] Upload Collection to XCT Live")
         print()
         print("  CDN Installers:")
         print("    [u] Game Downgrader")
@@ -19417,6 +19978,14 @@ def interactive_menu():
                 _op_summary("CDN Sync", detail="Done", elapsed=time.time() - _t0)
             except Exception as _e:
                 _op_summary("CDN Sync", success=False, detail=str(_e), elapsed=time.time() - _t0)
+            continue
+        elif pu == "x":
+            _t0 = time.time()
+            try:
+                upload_collection_live()
+                _op_summary("XCT Live Upload", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("XCT Live Upload", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         elif pu == "t":
             _t0 = time.time()

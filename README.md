@@ -2,6 +2,16 @@
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
 
+## What's New in v2.1
+
+### XCT Live Collection Sync
+- **Upload collection to XCT Live** — After processing a gamertag, XCT prompts to upload your collection to [xct.live](https://xct.live). Uses the same username and passphrase as CDN Sync (shared account system). Also available as `[x]` from the main menu to upload from cached data at any time.
+- **API-backed store page** — The XCT Live store tab now loads products via paginated API calls instead of a monolithic data file. Filters, search, sort, and pagination all happen server-side, sending only 50 products at a time. The browser no longer needs to download or parse the full 18K product catalog.
+
+### Catalog Enrichment
+- **Movie/TV/app resolution** — Catalog v3 silently drops non-game content (movies, TV shows, apps) without marking them as invalid. A new Display Catalog backfill pass catches all product IDs that v3 ignored and resolves them. Tested with 17/17 movie IDs successfully resolved (e.g. "Fantastic Beasts", "Wonder Woman", "Dune").
+- **`invalidid.json` export** — After each scan, unresolved product IDs are saved to `accounts/{gamertag}/invalidid.json`. Send this file to the developer to help identify and add missing products.
+
 ## What's New in v2.0
 
 ### Marketplace Filters
