@@ -2297,12 +2297,7 @@ def admin_scan_trigger(conn=None, cur=None, contributor=None, api_key=None):
 
     data = request.get_json(silent=True) or {}
 
-    cmd = ["docker", "run", "--rm", "--network", "host",
-           "--name", f"xct-scanner-manual-{int(time.time())}",
-           "-e", f"DATABASE_URL={os.environ.get('DATABASE_URL', '')}",
-           "-e", "SCANNER_ACCOUNT_DIR=/app/scanner_account",
-           "-v", "/opt/xct-live/scanner_account:/app/scanner_account",
-           "freshdex-xct-live", "python3", "marketplace_scanner.py"]
+    cmd = ["python3", "marketplace_scanner.py"]
 
     scan_type = data.get("type", "full")
     if scan_type == "nz_new":
@@ -2319,7 +2314,8 @@ def admin_scan_trigger(conn=None, cur=None, contributor=None, api_key=None):
         cmd.append("scan")
 
     threading.Thread(
-        target=lambda: subprocess.run(cmd, timeout=3600, capture_output=True),
+        target=lambda: subprocess.run(cmd, timeout=3600, capture_output=True,
+                                       cwd="/app"),
         daemon=True
     ).start()
 
@@ -2336,19 +2332,14 @@ def admin_subs_update(conn=None, cur=None, contributor=None, api_key=None):
     data = request.get_json(silent=True) or {}
     tier = data.get("tier", "all")
 
-    cmd = ["docker", "run", "--rm", "--network", "host",
-           "--name", f"xct-subs-{int(time.time())}",
-           "-e", f"DATABASE_URL={os.environ.get('DATABASE_URL', '')}",
-           "-e", "SCANNER_ACCOUNT_DIR=/app/scanner_account",
-           "-v", "/opt/xct-live/scanner_account:/app/scanner_account",
-           "freshdex-xct-live", "python3", "marketplace_scanner.py",
-           "subs-only"]
+    cmd = ["python3", "marketplace_scanner.py", "subs-only"]
 
     if tier != "all":
         cmd.append(f"--tier={tier}")
 
     threading.Thread(
-        target=lambda: subprocess.run(cmd, timeout=300, capture_output=True),
+        target=lambda: subprocess.run(cmd, timeout=300, capture_output=True,
+                                       cwd="/app"),
         daemon=True
     ).start()
 
