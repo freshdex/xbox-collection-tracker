@@ -4767,7 +4767,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const _ownedPids=new Set(LIB.map(x=>x.productId));\n"
         "const _gpPids=new Set(GP.map(x=>x.productId));\n"
         "const _demoPids=new Set();\n"
-        "const mChs={},mTypes={},mPlats={},mPubs={},mDevs={},mCats={};\n"
+        "const mChs={},mTypes={},mPlats={},mPubs={},mDevs={},mCats={},mSubs={};\n"
         "for(let i=0;i<MKT.length;i++){const x=MKT[i];\n"
         # Pre-index for O(1) lookup in render
         "x._idx=i;\n"
@@ -4795,6 +4795,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(!x._onSale&&x.currentPriceUSD>0&&x.currentPriceUSD<x.priceUSD)x._onSale=true;\n"
         # Dropdown counts
         "(x.channels||[]).forEach(c=>{mChs[c]=(mChs[c]||0)+1});"
+        "(x.subscriptions||[]).forEach(s=>{mSubs[s]=(mSubs[s]||0)+1});"
         "let tk=x.productKind||'';if(tk==='Durable')tk='DLC';if(tk)mTypes[tk]=(mTypes[tk]||0)+1;"
         "(x.platforms||[]).forEach(p=>{mPlats[p]=(mPlats[p]||0)+1});"
         "const pub=x.publisher||'';if(pub)mPubs[pub]=(mPubs[pub]||0)+1;"
@@ -4819,7 +4820,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "fill('mkt-cat',Object.entries(mCats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>[c,c+' ('+n+')']),\'filterMKT\');\n"
         # Static cb-drops for marketplace
         "fillStatic('mkt-price',[['free','Free'],['under10','Under $10'],['under20','Under $20'],['under40','Under $40'],['over40','$40+'],['sale','On Sale']],'filterMKT');\n"
-        "fillStatic('mkt-subs',[['gp','Game Pass'],['ea','EA Play'],['none','No Subscription']],'filterMKT');\n"
+        "if(Object.keys(mSubs).length){"
+        "const subEntries=Object.entries(mSubs).sort((a,b)=>b[1]-a[1]).map(([s,n])=>[s,s+' ('+n+')']);"
+        "const noSubCount=MKT.filter(x=>!(x.subscriptions&&x.subscriptions.length)).length;"
+        "if(noSubCount)subEntries.push(['none','No Subscription ('+noSubCount+')']);"
+        "fill('mkt-subs',subEntries,'filterMKT');"
+        "}else{"
+        "fillStatic('mkt-subs',[['gp','Game Pass'],['ea','EA Play'],['none','No Subscription']],'filterMKT');"
+        "}\n"
         "fillStatic('mkt-mp',[['online','Online MP'],['local','Local MP'],['coop','Online Co-op'],['localcoop','Local Co-op'],['crossgen','Cross-Gen']],'filterMKT');\n"
         "fillStatic('mkt-owned',[['owned','Owned'],['notowned','Not Owned']],'filterMKT');\n"
         "fillStatic('mkt-preorder',[['released','Released'],['priced','Pre-Order (priced)'],['noPrice','Pre-Order (no price)']],'filterMKT',['released']);\n"
@@ -5644,11 +5652,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(priceVals.includes('sale')&&item._onSale)pp=true;"
         "if(!pp)return false}\n"
         # Subscriptions cb-drop
-        "if(subsVals){let sp=false;"
-        "if(subsVals.includes('gp')&&item.onGP)sp=true;"
-        "if(subsVals.includes('ea')&&item.isEAPlay)sp=true;"
-        "if(subsVals.includes('none')&&!item.onGP&&!item.isEAPlay)sp=true;"
-        "if(!sp)return false}\n"
+        "if(subsVals){const iSubs=item.subscriptions||[];"
+        "if(iSubs.length){if(!iSubs.some(s=>subsVals.includes(s)))return false}"
+        "else{if(!subsVals.includes('none'))return false}}\n"
         # Multiplayer cb-drop
         "if(mpVals){const caps=item.capabilities||[];let mp=false;"
         "if(mpVals.includes('online')&&caps.some(c=>c==='XblOnlineMultiplayer'||c.includes('OnlineMultiplayer')))mp=true;"
@@ -5745,7 +5751,12 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const altCount=pageGroups?pageGroups[i].alts.length:0;\n"
         "const owned=item.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>'"
         ":'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';\n"
-        "const gpBadge=item.onGP?'<span class=\"badge gp\" style=\"font-size:9px\">GAME PASS</span>':'';\n"
+        "const _ss=item.subscriptions||[];"
+        "const gpBadge=(_ss.some(s=>s.includes('Game Pass'))||item.onGP)?'<span class=\"badge gp\" style=\"font-size:9px\">GAME PASS</span>':'';\n"
+        "const eaBadge=(_ss.includes('EA Play')||item.isEAPlay)?'<span class=\"badge\" style=\"font-size:9px;background:#ff6f00;color:#fff\">EA PLAY</span>':'';\n"
+        "const ubiBadge=_ss.some(s=>s.includes('Ubisoft'))?'<span class=\"badge\" style=\"font-size:9px;background:#0070ff;color:#fff\">UBI+</span>':'';\n"
+        "const gtaBadge=_ss.includes('GTA+')?'<span class=\"badge\" style=\"font-size:9px;background:#90ee02;color:#000\">GTA+</span>':'';\n"
+        "const gwgBadge=_ss.includes('Games with Gold')?'<span class=\"badge\" style=\"font-size:9px;background:#d4af37;color:#000\">GWG</span>':'';\n"
         "const bundleBadge=item._isBundle?'<span class=\"badge\" style=\"font-size:9px;background:#e65100;color:#fff\">BUNDLE</span>':'';\n"
         "const xcloudBadge=item.xCloudStreamable?'<span class=\"badge\" style=\"font-size:9px;background:#6a1b9a;color:#fff\">xCLOUD</span>':'';\n"
         "const altBadge=altCount>0?'<span class=\"badge\" style=\"font-size:9px;background:#455a64;color:#fff;cursor:pointer\" onclick=\"event.stopPropagation();_mktToggleAlts(this)\">'+altCount+' edition'+(altCount>1?'s':'')+'</span>':'';\n"
@@ -5768,7 +5779,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="card-meta">${item.publisher||\'\'} | ${(item.releaseDate||\'\').substring(0,10)}</div>'
         '<div style="margin:4px 0">${priceTag}</div>'
         '${bestCard}${ratingStr}'
-        '<div class="card-badges">${owned}${gpBadge}${bundleBadge}${xcloudBadge}${altBadge}${chBadges}</div></div></div>`;\n'
+        '<div class="card-badges">${owned}${gpBadge}${eaBadge}${ubiBadge}${gtaBadge}${gwgBadge}${bundleBadge}${xcloudBadge}${altBadge}${chBadges}</div></div></div>`;\n'
         "const thumbImg=img?`<img src=\"${_imgResize(img,80,80)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';\n"
         'lh+=`<div class="lv-row" onclick="showMKTDetail(${item._idx})">${thumbImg}'
         '<div class="lv-title" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}'
@@ -5777,7 +5788,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="lv-type">${(item.releaseDate||\'\').substring(0,10)}</div>'
         '<div class="lv-usd">${usd?`<a href="${_usHref}" target="_blank" onclick="event.stopPropagation()" style="color:#42a5f5;text-decoration:none">${usd}</a>`:\'\'} ${saleTag}</div>'
         "${_RORD.map(m=>_regCell(item,m)).join('')}"
-        '<div class="lv-status">${owned}${gpBadge}${bundleBadge}</div></div>`;\n'
+        '<div class="lv-status">${owned}${gpBadge}${eaBadge}${ubiBadge}${bundleBadge}</div></div>`;\n'
 
         # Render alt rows (hidden by default) when grouping
         "if(pageGroups&&pageGroups[i].alts.length>0){"
@@ -5884,7 +5895,12 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Card rendering (same as local mode)
         "const owned=item.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>'"
         ":'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';\n"
-        "const gpBadge=item.onGP?'<span class=\"badge gp\" style=\"font-size:9px\">GAME PASS</span>':'';\n"
+        "const _ss=item.subscriptions||[];"
+        "const gpBadge=(_ss.some(s=>s.includes('Game Pass'))||item.onGP)?'<span class=\"badge gp\" style=\"font-size:9px\">GAME PASS</span>':'';\n"
+        "const eaBadge=(_ss.includes('EA Play')||item.isEAPlay)?'<span class=\"badge\" style=\"font-size:9px;background:#ff6f00;color:#fff\">EA PLAY</span>':'';\n"
+        "const ubiBadge=_ss.some(s=>s.includes('Ubisoft'))?'<span class=\"badge\" style=\"font-size:9px;background:#0070ff;color:#fff\">UBI+</span>':'';\n"
+        "const gtaBadge=_ss.includes('GTA+')?'<span class=\"badge\" style=\"font-size:9px;background:#90ee02;color:#000\">GTA+</span>':'';\n"
+        "const gwgBadge=_ss.includes('Games with Gold')?'<span class=\"badge\" style=\"font-size:9px;background:#d4af37;color:#000\">GWG</span>':'';\n"
         "const bundleBadge=item._isBundle?'<span class=\"badge\" style=\"font-size:9px;background:#e65100;color:#fff\">BUNDLE</span>':'';\n"
         "const xcloudBadge=item.xCloudStreamable?'<span class=\"badge\" style=\"font-size:9px;background:#6a1b9a;color:#fff\">xCLOUD</span>':'';\n"
         "const altBadge=altCount>0?'<span class=\"badge\" style=\"font-size:9px;background:#455a64;color:#fff;cursor:pointer\" onclick=\"event.stopPropagation();_mktToggleEditions(this,\\''+item.xboxTitleId+'\\',\\''+item.productId+'\\')\">'+altCount+' edition'+(altCount>1?'s':'')+'</span>':'';\n"
@@ -5909,7 +5925,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="card-meta">${item.publisher||\'\'} | ${(item.releaseDate||\'\').substring(0,10)}</div>'
         '<div style="margin:4px 0">${priceTag}</div>'
         '${bestCard}${ratingStr}'
-        '<div class="card-badges">${owned}${gpBadge}${bundleBadge}${xcloudBadge}${altBadge}${chBadges}</div></div></div>`;\n'
+        '<div class="card-badges">${owned}${gpBadge}${eaBadge}${ubiBadge}${gtaBadge}${gwgBadge}${bundleBadge}${xcloudBadge}${altBadge}${chBadges}</div></div></div>`;\n'
         # List row
         "const thumbImg=img?`<img src=\"${img.replace(/\\?w=330&h=186/,'?w=80&h=80')}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';\n"
         'lh+=`<div class="lv-row" onclick="showMKTDetail(\'${pid}\')">${thumbImg}'
@@ -5919,7 +5935,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="lv-type">${(item.releaseDate||\'\').substring(0,10)}</div>'
         '<div class="lv-usd">${usd?`<a href="${_usHref}" target="_blank" onclick="event.stopPropagation()" style="color:#42a5f5;text-decoration:none">${usd}</a>`:\'\'} ${saleTag}</div>'
         "${_RORD.map(m=>_regCell(item,m)).join('')}"
-        '<div class="lv-status">${owned}${gpBadge}${bundleBadge}</div></div>`;\n'
+        '<div class="lv-status">${owned}${gpBadge}${eaBadge}${ubiBadge}${bundleBadge}</div></div>`;\n'
         "});\n"
         # Write to DOM
         "g.innerHTML=gh;l.innerHTML=lh;\n"
@@ -5994,10 +6010,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('modal-hero').style.display=img?'block':'none';\n"
         "const owned=item.owned?'<span class=\"badge owned\">IN YOUR LIBRARY</span>'"
         ":'<span class=\"badge new\">NOT OWNED</span>';\n"
-        "const gpTag=item.onGP?'<span class=\"badge gp\">GAME PASS</span>':'';\n"
+        "const _ss=item.subscriptions||[];"
+        "const gpTag=(_ss.some(s=>s.includes('Game Pass'))||item.onGP)?'<span class=\"badge gp\">GAME PASS</span>':'';\n"
         "const bundleTag=item._isBundle?'<span class=\"badge\" style=\"background:#e65100;color:#fff\">BUNDLE</span>':'';\n"
         "const xcloudTag=item.xCloudStreamable?'<span class=\"badge\" style=\"background:#6a1b9a;color:#fff\">xCLOUD</span>':'';\n"
-        "const eaTag=item.isEAPlay?'<span class=\"badge\" style=\"background:#ff6f00;color:#fff\">EA PLAY</span>':'';\n"
+        "const eaTag=(_ss.includes('EA Play')||item.isEAPlay)?'<span class=\"badge\" style=\"background:#ff6f00;color:#fff\">EA PLAY</span>':'';\n"
+        "const ubiTag=_ss.some(s=>s.includes('Ubisoft'))?'<span class=\"badge\" style=\"background:#0070ff;color:#fff\">UBISOFT+</span>':'';\n"
+        "const gtaTag=_ss.includes('GTA+')?'<span class=\"badge\" style=\"background:#90ee02;color:#000\">GTA+</span>':'';\n"
+        "const gwgTag=_ss.includes('Games with Gold')?'<span class=\"badge\" style=\"background:#d4af37;color:#000\">GWG</span>':'';\n"
         "const saleTag=item._onSale?'<span class=\"badge\" style=\"background:#2e7d32;color:#fff\">ON SALE</span>':'';\n"
         "const chBadges=(item.channels||[]).map(c=>'<span class=\"badge gp\">'+c+'</span>').join(' ');\n"
         "const platBadges=(item.platforms||[]).map(p=>{"
@@ -6010,7 +6030,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('modal-body').innerHTML=`\n"
         '<div class="modal-title">${item.title||\'Unknown\'}</div>\n'
         '<div class="modal-pub">${item.publisher||\'\'} ${item.developer&&item.developer!==item.publisher?\'/  \'+item.developer:\'\'}</div>\n'
-        '<div style="margin-bottom:10px">${owned} ${gpTag} ${bundleTag} ${xcloudTag} ${eaTag} ${saleTag} ${chBadges} ${platBadges}</div>\n'
+        '<div style="margin-bottom:10px">${owned} ${gpTag} ${bundleTag} ${xcloudTag} ${eaTag} ${ubiTag} ${gtaTag} ${gwgTag} ${saleTag} ${chBadges} ${platBadges}</div>\n'
         '<div class="modal-info">\n'
         '<div><span class="lbl">Product ID:</span></div><div class="val">${item.productId}</div>\n'
         "${item.xboxTitleId?'<div><span class=\"lbl\">Xbox Title ID:</span></div><div class=\"val\">'+item.xboxTitleId+'</div>':''}\n"
@@ -6045,10 +6065,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('modal-hero').style.display=img?'block':'none';\n"
         "const owned=item.owned?'<span class=\"badge owned\">IN YOUR LIBRARY</span>'"
         ":'<span class=\"badge new\">NOT OWNED</span>';\n"
-        "const gpTag=item.onGP?'<span class=\"badge gp\">GAME PASS</span>':'';\n"
+        "const _ss=item.subscriptions||[];"
+        "const gpTag=(_ss.some(s=>s.includes('Game Pass'))||item.onGP)?'<span class=\"badge gp\">GAME PASS</span>':'';\n"
         "const bundleTag=item._isBundle?'<span class=\"badge\" style=\"background:#e65100;color:#fff\">BUNDLE</span>':'';\n"
         "const xcloudTag=item.xCloudStreamable?'<span class=\"badge\" style=\"background:#6a1b9a;color:#fff\">xCLOUD</span>':'';\n"
-        "const eaTag=item.isEAPlay?'<span class=\"badge\" style=\"background:#ff6f00;color:#fff\">EA PLAY</span>':'';\n"
+        "const eaTag=(_ss.includes('EA Play')||item.isEAPlay)?'<span class=\"badge\" style=\"background:#ff6f00;color:#fff\">EA PLAY</span>':'';\n"
+        "const ubiTag=_ss.some(s=>s.includes('Ubisoft'))?'<span class=\"badge\" style=\"background:#0070ff;color:#fff\">UBISOFT+</span>':'';\n"
+        "const gtaTag=_ss.includes('GTA+')?'<span class=\"badge\" style=\"background:#90ee02;color:#000\">GTA+</span>':'';\n"
+        "const gwgTag=_ss.includes('Games with Gold')?'<span class=\"badge\" style=\"background:#d4af37;color:#000\">GWG</span>':'';\n"
         "const saleTag=item._onSale?'<span class=\"badge\" style=\"background:#2e7d32;color:#fff\">ON SALE</span>':'';\n"
         "const chBadges=(item.channels||[]).map(c=>'<span class=\"badge gp\">'+c+'</span>').join(' ');\n"
         "const platBadges=(item.platforms||[]).map(p=>{"
@@ -6061,7 +6085,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('modal-body').innerHTML=`\n"
         '<div class="modal-title">${item.title||\'Unknown\'}</div>\n'
         '<div class="modal-pub">${item.publisher||\'\'} ${item.developer&&item.developer!==item.publisher?\'/  \'+item.developer:\'\'}</div>\n'
-        '<div style="margin-bottom:10px">${owned} ${gpTag} ${bundleTag} ${xcloudTag} ${eaTag} ${saleTag} ${chBadges} ${platBadges}</div>\n'
+        '<div style="margin-bottom:10px">${owned} ${gpTag} ${bundleTag} ${xcloudTag} ${eaTag} ${ubiTag} ${gtaTag} ${gwgTag} ${saleTag} ${chBadges} ${platBadges}</div>\n'
         '<div class="modal-info">\n'
         '<div><span class="lbl">Product ID:</span></div><div class="val">${item.productId}</div>\n'
         "${item.xboxTitleId?'<div><span class=\"lbl\">Xbox Title ID:</span></div><div class=\"val\">'+item.xboxTitleId+'</div>':''}\n"
@@ -7855,19 +7879,18 @@ def process_marketplace(gamertag, channels=None):
             continue
 
         item_channels = []
-        # DynamicChannel labels
+        # DynamicChannel labels only
         for ch, pids in channel_pids.items():
             if pid in pids:
                 item_channels.append(MARKETPLACE_CHANNELS.get(ch, ch))
-        # Subscription tier labels
+
+        # Subscription tier labels (separate field)
+        item_subs = []
         if pid in sub_channels:
-            for label in sorted(sub_channels[pid]):
-                if label not in item_channels:
-                    item_channels.append(label)
-        # Games with Gold label
+            item_subs = sorted(sub_channels[pid])
         if pid in gwg_pids:
-            if "Games with Gold" not in item_channels:
-                item_channels.append("Games with Gold")
+            if "Games with Gold" not in item_subs:
+                item_subs.append("Games with Gold")
 
         mkt_items.append({
             "productId": pid,
@@ -7884,6 +7907,7 @@ def process_marketplace(gamertag, channels=None):
             "heroImage": cat.get("heroImage", ""),
             "productKind": _norm_kind(cat.get("productKind", "")),
             "channels": item_channels,
+            "subscriptions": item_subs,
             "owned": pid in owned_pids,
             "hasTrialSku": cat.get("hasTrialSku", False),
             "hasAchievements": any(c.get("id") == "XblAchievements" for c in cat.get("capabilities", []) if isinstance(c, dict)),
@@ -8083,6 +8107,10 @@ def process_marketplace_all_regions(gamertag):
             continue
 
         meta = pid_meta[pid]
+        # Separate subscription labels from DynamicChannel labels
+        _sub_labels = set(SUBSCRIPTION_CHANNELS.values()) | {"Games with Gold"}
+        item_channels = sorted(ch for ch in meta["channels"] if ch not in _sub_labels)
+        item_subs = sorted(ch for ch in meta["channels"] if ch in _sub_labels)
         mkt_items.append({
             "productId": pid,
             "title": cat.get("title", ""),
@@ -8097,7 +8125,8 @@ def process_marketplace_all_regions(gamertag):
             "boxArt": cat.get("boxArt", ""),
             "heroImage": cat.get("heroImage", ""),
             "productKind": _norm_kind(cat.get("productKind", "")),
-            "channels": sorted(meta["channels"]),
+            "channels": item_channels,
+            "subscriptions": item_subs,
             "regions": sorted(meta["regions"]),
             "owned": pid in owned_pids,
             "xboxTitleId": next((a["id"] for a in cat.get("alternateIds", [])
@@ -8557,6 +8586,15 @@ def _merge_marketplace(existing, new_items):
                 if ch not in merged:
                     merged.append(ch)
             by_pid[pid]["channels"] = merged
+            # Merge subscriptions
+            old_subs = by_pid[pid].get("subscriptions", [])
+            new_subs = item.get("subscriptions", [])
+            merged_subs = list(old_subs)
+            for s in new_subs:
+                if s not in merged_subs:
+                    merged_subs.append(s)
+            if merged_subs:
+                by_pid[pid]["subscriptions"] = merged_subs
             # Update owned status (may have changed)
             by_pid[pid]["owned"] = item.get("owned", by_pid[pid].get("owned", False))
             updated += 1
