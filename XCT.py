@@ -300,8 +300,8 @@ SUBSCRIPTION_CHANNELS = {
     "console":           "Game Pass Console",
     "eaaccess":          "EA Play",
     "ubisoftplus":       "Ubisoft+ Classics",
-    "nakuconsole":       "Ubisoft+ Premium",
-    "nakupc":            "Ubisoft+ Premium",
+    "nakuconsole":       "Ubisoft+ Premium (Console)",
+    "nakupc":            "Ubisoft+ Premium (PC)",
     "gtaplus":           "GTA+",
 }
 
@@ -4734,7 +4734,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('tab-mkt').style.display='';\n"
         # Static cb-drops (same in both modes)
         "fillStatic('mkt-price',[['free','Free'],['under10','Under $10'],['under20','Under $20'],['under40','Under $40'],['over40','$40+'],['sale','On Sale']],'filterMKT');\n"
-        "fillStatic('mkt-subs',[['gp','Game Pass'],['ea','EA Play'],['none','No Subscription']],'filterMKT');\n"
+        "fillStatic('mkt-subs',[],'filterMKT');\n"
         "fillStatic('mkt-mp',[['online','Online MP'],['local','Local MP'],['coop','Online Co-op'],['localcoop','Local Co-op'],['crossgen','Cross-Gen']],'filterMKT');\n"
         "fillStatic('mkt-owned',[['owned','Owned'],['notowned','Not Owned']],'filterMKT');\n"
         "fillStatic('mkt-preorder',[['released','Released'],['priced','Pre-Order (priced)'],['noPrice','Pre-Order (no price)']],'filterMKT',['released']);\n"
@@ -4749,6 +4749,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "fill('mkt-pub',data.publishers.map(function(p){return[p.value,p.value+' ('+p.count+')']}),'filterMKT');\n"
         "fill('mkt-dev',data.developers.map(function(d){return[d.value,d.value+' ('+d.count+')']}),'filterMKT');\n"
         "fill('mkt-cat',data.categories.map(function(c){return[c.value,c.value+' ('+c.count+')']}),'filterMKT');\n"
+        "if(data.subscriptions&&data.subscriptions.length){"
+        "fill('mkt-subs',data.subscriptions.map(function(s){return[s.value,s.value+' ('+s.count+')']}),'filterMKT');"
+        "}\n"
         "document.getElementById('tab-mkt-cnt').textContent=data.totalProducts;\n"
         # Scan status banner
         "if(data.lastScan&&data.lastScan.completedAt){"
