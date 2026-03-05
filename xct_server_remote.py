@@ -2236,7 +2236,16 @@ def admin_scans(conn=None, cur=None, contributor=None, api_key=None):
     try:
         cur.execute("""
             SELECT s.*,
-                   (SELECT COUNT(*) FROM marketplace_changelog c WHERE c.scan_id = s.id) AS change_count
+                   (SELECT COUNT(*) FROM marketplace_changelog c
+                    WHERE c.scan_id = s.id) AS change_count,
+                   (SELECT COUNT(*) FROM marketplace_changelog c
+                    WHERE c.scan_id = s.id AND c.change_type = 'new_product') AS new_products,
+                   (SELECT COUNT(*) FROM marketplace_changelog c
+                    WHERE c.scan_id = s.id AND c.change_type = 'removed') AS removed_products,
+                   (SELECT COUNT(*) FROM marketplace_changelog c
+                    WHERE c.scan_id = s.id AND c.change_type = 'field_changed') AS field_changes,
+                   (SELECT COUNT(*) FROM marketplace_changelog c
+                    WHERE c.scan_id = s.id AND c.change_type = 'price_changed') AS price_changes
             FROM marketplace_scans s
             ORDER BY s.started_at DESC
             LIMIT 50
@@ -2248,6 +2257,32 @@ def admin_scans(conn=None, cur=None, contributor=None, api_key=None):
                     sc[k] = sc[k].isoformat()
 
         return jsonify(scans=scans)
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/v1/admin/scans/<int:scan_id>/changelog", methods=["GET"])
+@require_auth
+def admin_scan_changelog(scan_id, conn=None, cur=None, contributor=None, api_key=None):
+    """Get changelog entries for a specific scan. Freshdex admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+
+    try:
+        cur.execute("""
+            SELECT change_type, product_id, title, field_name,
+                   old_value, new_value, market, created_at
+            FROM marketplace_changelog
+            WHERE scan_id = %s
+            ORDER BY change_type, title
+            LIMIT 500
+        """, (scan_id,))
+        rows = [dict(r) for r in cur.fetchall()]
+        for r in rows:
+            if r.get("created_at"):
+                r["created_at"] = r["created_at"].isoformat()
+        return jsonify(changes=rows)
     except Exception as e:
         conn.rollback()
         return jsonify(error=str(e)), 500
@@ -3650,6 +3685,7 @@ def add_cors_headers(response):
 @app.route("/api/v1/admin/scans", methods=["OPTIONS"])
 @app.route("/api/v1/admin/scan", methods=["OPTIONS"])
 @app.route("/api/v1/admin/subs", methods=["OPTIONS"])
+@app.route("/api/v1/admin/scans/<int:scan_id>/changelog", methods=["OPTIONS"])
 @app.route("/api/v1/store/filters", methods=["OPTIONS"])
 @app.route("/api/v1/store/products", methods=["OPTIONS"])
 @app.route("/api/v1/store/product/<product_id>", methods=["OPTIONS"])
