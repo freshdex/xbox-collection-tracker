@@ -293,8 +293,8 @@ MARKETPLACE_CHANNELS = {
 
 # Subscription tier names (from catalog.gamepass.com/subscriptions) → display labels
 SUBSCRIPTION_CHANNELS = {
-    "gamepasscore":      "Game Pass Core",
-    "gamepassstandard":  "Game Pass Standard",
+    "gamepasscore":      "Game Pass Essential",
+    "gamepassstandard":  "Game Pass Premium",
     "ultimate":          "Game Pass Ultimate",
     "pc":                "Game Pass PC",
     "console":           "Game Pass Console",
@@ -4237,10 +4237,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div style="font-size:12px;color:#888;margin-bottom:8px">Update individual tier:</div>\n'
         '<div style="display:flex;flex-wrap:wrap;gap:6px">\n'
         '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'ultimate\')">Ultimate</button>\n'
-        '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'gamepassstandard\')">Standard</button>\n'
+        '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'gamepassstandard\')">Premium</button>\n'
         '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'pc\')">PC</button>\n'
         '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'console\')">Console</button>\n'
-        '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'gamepasscore\')">Core</button>\n'
+        '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'gamepasscore\')">Essential</button>\n'
         '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'eaaccess\')">EA Play</button>\n'
         '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'ubisoftplus\')">Ubisoft+ Classics</button>\n'
         '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'nakuconsole\')">Ubisoft+ Console</button>\n'
@@ -5635,13 +5635,13 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(!gps.length)return '<span class=\"badge gp\" style=\"'+fs+'\">GAME PASS</span>';"
         "let best;"
         "if(gps.some(s=>s.includes('Ultimate')))best='GP ULTIMATE';"
-        "else if(gps.some(s=>s.includes('Standard')))best='GP STANDARD';"
+        "else if(gps.some(s=>s.includes('Premium')))best='GP PREMIUM';"
         "else if(gps.some(s=>s.includes('PC'))&&gps.some(s=>s.includes('Console')))best='GP ULTIMATE';"
         "else if(gps.some(s=>s.includes('PC')))best='GP PC';"
         "else if(gps.some(s=>s.includes('Console')))best='GP CONSOLE';"
-        "else if(gps.some(s=>s.includes('Core')))best='GP CORE';"
+        "else if(gps.some(s=>s.includes('Essential')))best='GP ESSENTIAL';"
         "else best='GAME PASS';"
-        "const colors={'GP ULTIMATE':'#1b5e20','GP STANDARD':'#107c10','GP PC':'#0d47a1','GP CONSOLE':'#4a148c','GP CORE':'#bf360c'};"
+        "const colors={'GP ULTIMATE':'#1b5e20','GP PREMIUM':'#107c10','GP PC':'#0d47a1','GP CONSOLE':'#4a148c','GP ESSENTIAL':'#bf360c'};"
         "const bg=colors[best]||'#107c10';"
         "return '<span class=\"badge\" style=\"'+fs+'background:'+bg+';color:#fff\">'+best+'</span>'}\n"
         "function _mktBuildGroups(items){\n"
@@ -5728,8 +5728,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Subscriptions cb-drop (with tier hierarchy expansion)
         "if(subsVals){"
         "let _sv=subsVals;"
-        "if(_sv.includes('Game Pass Ultimate'))_sv=_sv.concat(['Game Pass Standard','Game Pass PC','Game Pass Console','Game Pass Core'].filter(x=>!_sv.includes(x)));"
-        "if(_sv.includes('Game Pass Standard'))_sv=_sv.concat(['Game Pass Core'].filter(x=>!_sv.includes(x)));"
+        "if(_sv.includes('Game Pass Ultimate'))_sv=_sv.concat(['Game Pass Premium','Game Pass PC','Game Pass Console','Game Pass Essential'].filter(x=>!_sv.includes(x)));"
+        "if(_sv.includes('Game Pass Premium'))_sv=_sv.concat(['Game Pass Essential'].filter(x=>!_sv.includes(x)));"
         "const iSubs=item.subscriptions||[];"
         "if(iSubs.length){if(!iSubs.some(s=>_sv.includes(s)))return false}"
         "else{if(!_sv.includes('none'))return false}}\n"
