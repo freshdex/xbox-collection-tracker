@@ -3868,6 +3868,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="tab" id="tab-gfwl" onclick="switchTab(\'gfwl\',this)" style="display:none">GFWL <span class="cnt" id="tab-gfwl-cnt"></span></div>\n'
         '<div class="tab" id="tab-cdnsync" onclick="switchTab(\'cdnsync\',this)" style="display:none">XVC <span class="cnt" id="tab-cdnsync-cnt"></span></div>\n'
         '<div class="tab" id="tab-imp" onclick="switchTab(\'imports\',this)" style="display:none">Imports <span class="cnt" id="tab-imp-cnt"></span></div>\n'
+        '<div class="tab" id="tab-admin" onclick="switchTab(\'admin\',this)" style="display:none">Admin</div>\n'
         '<select id="lib-cur" class="tab-cur" onchange="_onCur()">'
         '<option value="USD" selected>USD $</option>'
         '<option value="EUR">EUR €</option>'
@@ -4210,6 +4211,48 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '</div>\n'
         '<div id="cdnsync-log" style="display:none">\n'
         '<div id="cdnlog-list"></div>\n'
+        '</div>\n'
+        '</div>\n'
+
+        # -- Admin section (hosted mode only, shown for admin users) --
+        '<div class="section" id="admin">\n'
+        '<h2>Admin Panel</h2>\n'
+        '<p class="sub" style="color:#888">Marketplace scan controls and subscription management</p>\n'
+        '<div style="display:flex;flex-wrap:wrap;gap:12px;margin:16px 0">\n'
+        '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:16px;flex:1;min-width:280px">\n'
+        '<h3 style="margin:0 0 12px;font-size:14px;color:#ccc">Marketplace Scans</h3>\n'
+        '<div style="display:flex;flex-wrap:wrap;gap:8px">\n'
+        '<button class="xct-iobtn" onclick="_adminScan(\'full\')">Full Scan</button>\n'
+        '<button class="xct-iobtn" onclick="_adminScan(\'prices_only\')">Prices Only</button>\n'
+        '<button class="xct-iobtn" onclick="_adminScan(\'force_browse\')">Force Browse</button>\n'
+        '<button class="xct-iobtn" onclick="_adminScan(\'nz_new\')">NZ New</button>\n'
+        '</div>\n'
+        '<div id="admin-scan-status" style="margin-top:10px;font-size:12px;color:#888"></div>\n'
+        '</div>\n'
+        '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:16px;flex:1;min-width:280px">\n'
+        '<h3 style="margin:0 0 12px;font-size:14px;color:#ccc">Subscriptions</h3>\n'
+        '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">\n'
+        '<button class="xct-iobtn" onclick="_adminSubsUpdate(\'all\')">Update All Subscriptions</button>\n'
+        '</div>\n'
+        '<div style="font-size:12px;color:#888;margin-bottom:8px">Update individual tier:</div>\n'
+        '<div style="display:flex;flex-wrap:wrap;gap:6px">\n'
+        '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'ultimate\')">Ultimate</button>\n'
+        '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'gamepassstandard\')">Standard</button>\n'
+        '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'pc\')">PC</button>\n'
+        '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'console\')">Console</button>\n'
+        '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'gamepasscore\')">Core</button>\n'
+        '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'eaaccess\')">EA Play</button>\n'
+        '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'ubisoftplus\')">Ubisoft+ Classics</button>\n'
+        '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'nakuconsole\')">Ubisoft+ Console</button>\n'
+        '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'nakupc\')">Ubisoft+ PC</button>\n'
+        '<button class="xct-iobtn" style="font-size:11px;padding:4px 10px" onclick="_adminSubsUpdate(\'gtaplus\')">GTA+</button>\n'
+        '</div>\n'
+        '<div id="admin-subs-status" style="margin-top:10px;font-size:12px;color:#888"></div>\n'
+        '</div>\n'
+        '</div>\n'
+        '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:16px;margin-top:8px">\n'
+        '<h3 style="margin:0 0 12px;font-size:14px;color:#ccc">Recent Scans</h3>\n'
+        '<div id="admin-scans-list" style="font-size:12px;color:#aaa"></div>\n'
         '</div>\n'
         '</div>\n'
 
@@ -6637,6 +6680,49 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(window._xctHosted)window.addEventListener('popstate',_hashNav);\n"
         "document.getElementById('loading-overlay').style.display='none';\n"
         '});\n'
+
+        # -- Admin panel JS --
+        "function _adminScan(type){\n"
+        "var s=document.getElementById('admin-scan-status');\n"
+        "s.textContent='Triggering '+type+' scan...';\n"
+        "s.style.color='#ff0';\n"
+        "fetch('/api/v1/admin/scan',{method:'POST',headers:{'Authorization':'Bearer '+window._xctApiKey,'Content-Type':'application/json'},body:JSON.stringify({type:type})})"
+        ".then(function(r){return r.json()}).then(function(d){\n"
+        "if(d.ok){s.textContent='Scan triggered: '+d.type;s.style.color='#4caf50'}"
+        "else{s.textContent='Error: '+(d.error||'unknown');s.style.color='#f44'}\n"
+        "}).catch(function(e){s.textContent='Error: '+e.message;s.style.color='#f44'})}\n"
+
+        "function _adminSubsUpdate(tier){\n"
+        "var s=document.getElementById('admin-subs-status');\n"
+        "s.textContent='Updating '+(tier==='all'?'all subscriptions':tier)+'...';\n"
+        "s.style.color='#ff0';\n"
+        "fetch('/api/v1/admin/subs',{method:'POST',headers:{'Authorization':'Bearer '+window._xctApiKey,'Content-Type':'application/json'},body:JSON.stringify({tier:tier})})"
+        ".then(function(r){return r.json()}).then(function(d){\n"
+        "if(d.ok){s.textContent=d.message;s.style.color='#4caf50'}"
+        "else{s.textContent='Error: '+(d.error||'unknown');s.style.color='#f44'}\n"
+        "}).catch(function(e){s.textContent='Error: '+e.message;s.style.color='#f44'})}\n"
+
+        "function _adminLoadScans(){\n"
+        "fetch('/api/v1/admin/scans',{headers:{'Authorization':'Bearer '+window._xctApiKey}})"
+        ".then(function(r){return r.json()}).then(function(d){\n"
+        "var el=document.getElementById('admin-scans-list');\n"
+        "if(!d.scans||!d.scans.length){el.textContent='No recent scans';return}\n"
+        "var h='<table style=\"width:100%;border-collapse:collapse\">';\n"
+        "h+='<tr style=\"border-bottom:1px solid #333\"><th style=\"text-align:left;padding:4px 8px\">Time</th><th>Status</th><th>Products</th><th>New</th><th>Duration</th></tr>';\n"
+        "d.scans.forEach(function(s){\n"
+        "var ago=Math.round((Date.now()-new Date(s.completed_at||s.started_at).getTime())/60000);\n"
+        "var agoStr=ago<60?ago+'m ago':Math.round(ago/60)+'h ago';\n"
+        "var col=s.status==='completed'?'#4caf50':s.status==='running'?'#ff0':'#f44';\n"
+        "h+='<tr style=\"border-bottom:1px solid #222\"><td style=\"padding:4px 8px\">'+agoStr+'</td>';\n"
+        "h+='<td style=\"text-align:center;color:'+col+'\">'+s.status+'</td>';\n"
+        "h+='<td style=\"text-align:center\">'+(s.products_total||'-')+'</td>';\n"
+        "h+='<td style=\"text-align:center\">'+(s.products_new||'-')+'</td>';\n"
+        "h+='<td style=\"text-align:center\">'+(s.duration_seconds?Math.round(s.duration_seconds)+'s':'-')+'</td></tr>'});\n"
+        "h+='</table>';el.innerHTML=h\n"
+        "}).catch(function(e){document.getElementById('admin-scans-list').textContent='Error: '+e.message})}\n"
+
+        "function _loadTabData(id){if(id==='admin')_adminLoadScans()}\n"
+
         '</script>\n'
     )
 
@@ -21950,19 +22036,18 @@ def _oh_fetch_all_via_cdp(sock, cdp_send):
 
     Returns list of raw order dicts.
     """
-    # Continuation tokens are predictable: M{N}L0R0D0 where N = 0, 10, 20...
-    # Blast them all in parallel instead of sequential pagination.
+    # Debug: fetch first page and capture full response structure + continuation token
     JS_FETCH_ALL = r"""
     (async () => {
         const csrf = document.querySelector('input[name=__RequestVerificationToken]')?.value
                   || document.querySelector('meta[name=__RequestVerificationToken]')?.content
                   || '';
         if (!csrf) {
-            window.__xct = {error: 'no_csrf', done: true, orders: [], pages: 0};
+            window.__xct = {error: 'no_csrf', done: true, orders: [], pages: 0, debug: []};
             return;
         }
 
-        window.__xct = {done: false, orders: [], pages: 0, error: null};
+        window.__xct = {done: false, orders: [], pages: 0, error: null, debug: []};
 
         async function fetchPage(continuationToken) {
             const params = new URLSearchParams({
@@ -21984,7 +22069,7 @@ def _oh_fetch_all_via_cdp(sock, cdp_send):
                 credentials: 'same-origin',
             });
 
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            if (!resp.ok) return {orders: [], continuationToken: null, error: resp.status, keys: []};
 
             const text = await resp.text();
             let data;
@@ -21994,61 +22079,51 @@ def _oh_fetch_all_via_cdp(sock, cdp_send):
                 if (missing) padded += '='.repeat(4 - missing);
                 data = JSON.parse(atob(padded));
             } catch(e) {
-                data = JSON.parse(text);
+                try { data = JSON.parse(text); } catch(e2) {
+                    return {orders: [], continuationToken: null, error: 'parse_fail', keys: [], raw: text.substring(0, 200)};
+                }
             }
             return {
                 orders: data.orders || [],
                 continuationToken: data.continuationToken || null,
+                error: null,
+                keys: Object.keys(data),
             };
         }
 
+        // Fetch first 5 pages sequentially, logging everything
         let ct = null;
-        let emptyRun = 0;
-        while (true) {
-            let result;
-            try {
-                result = await fetchPage(ct);
-            } catch(e) {
-                // Retry once after a short delay (handles transient 429/5xx)
-                await new Promise(r => setTimeout(r, 3000));
-                try {
-                    result = await fetchPage(ct);
-                } catch(e2) {
-                    window.__xct.error = e2.message + ' (after retry)';
-                    break;
-                }
-            }
-
+        for (let i = 0; i < 5; i++) {
+            const result = await fetchPage(ct);
             window.__xct.pages++;
-
+            const dbg = {
+                page: i,
+                usedToken: ct,
+                gotToken: result.continuationToken,
+                orderCount: result.orders.length,
+                error: result.error,
+                keys: result.keys,
+            };
             if (result.orders.length > 0) {
+                dbg.firstOrderDate = result.orders[0].localSubmittedDate;
+                dbg.lastOrderDate = result.orders[result.orders.length - 1].localSubmittedDate;
                 window.__xct.orders.push(...result.orders);
-                emptyRun = 0;
-            } else {
-                emptyRun++;
             }
-
-            document.title = 'XCT: ' + window.__xct.orders.length + ' orders (' + window.__xct.pages + ' pages)';
+            if (result.raw) dbg.raw = result.raw;
+            window.__xct.debug.push(dbg);
+            document.title = 'XCT debug: page ' + i + ' done';
 
             if (!result.continuationToken) break;
-            // Safety: if we get 20 consecutive empty pages with continuation tokens, stop
-            if (emptyRun >= 20) {
-                window.__xct.error = '20 consecutive empty pages - stopping';
-                break;
-            }
-
             ct = result.continuationToken;
-
-            // Small delay to avoid rate limiting
-            await new Promise(r => setTimeout(r, 300));
+            await new Promise(r => setTimeout(r, 500));
         }
 
         window.__xct.done = true;
-        document.title = 'XCT: Done - ' + window.__xct.orders.length + ' orders';
+        document.title = 'XCT: Debug done - ' + window.__xct.orders.length + ' orders';
     })()
     """
 
-    print("  [*] Fetching all order history (sequential with retry)...")
+    print("  [*] Fetching order history (debug mode - first 5 pages)...")
 
     # Fire and forget
     cdp_send("Runtime.evaluate", {
@@ -22088,6 +22163,29 @@ def _oh_fetch_all_via_cdp(sock, cdp_send):
             else:
                 print(f"  [+] Complete: {count} orders across {pages} pages")
             break
+
+    # Extract debug info
+    debug_resp = cdp_send("Runtime.evaluate", {
+        "expression": "JSON.stringify(window.__xct?.debug || [])",
+        "returnByValue": True,
+    }, timeout=10)
+    debug_json = debug_resp.get("result", {}).get("result", {}).get("value", "[]")
+    try:
+        debug_pages = json.loads(debug_json)
+        if debug_pages:
+            print(f"\n  === DEBUG: Page-by-page response ===")
+            for dp in debug_pages:
+                print(f"    Page {dp.get('page')}: orders={dp.get('orderCount')}, "
+                      f"error={dp.get('error')}, keys={dp.get('keys')}")
+                print(f"      Used token: {dp.get('usedToken')}")
+                print(f"      Got token:  {dp.get('gotToken')}")
+                if dp.get('firstOrderDate'):
+                    print(f"      Date range: {dp.get('firstOrderDate')} -> {dp.get('lastOrderDate')}")
+                if dp.get('raw'):
+                    print(f"      Raw (first 200): {dp.get('raw')}")
+            print()
+    except Exception as e:
+        print(f"  [!] Debug parse error: {e}")
 
     # Extract the orders
     extract_resp = cdp_send("Runtime.evaluate", {
