@@ -4051,9 +4051,6 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
 
         # -- Marketplace section --
         '<div class="section" id="marketplace">\n'
-        '<div id="mkt-loading" style="display:none;text-align:center;padding:60px 0;color:#888;font-size:14px">'
-        '<div class="spinner" style="margin:0 auto 12px;width:28px;height:28px;border:3px solid #333;border-top-color:#107c10;border-radius:50%;animation:spin .8s linear infinite"></div>'
-        '<div id="mkt-loading-text">Loading marketplace...</div></div>\n'
         '<div class="mkt-layout">\n'
         # -- Left sidebar filters --
         '<div class="mkt-sidebar">\n'
@@ -4132,6 +4129,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '</div>\n'
         # -- Right content area --
         '<div class="mkt-content">\n'
+        '<div id="mkt-loading" style="display:none;text-align:center;padding:60px 0;color:#888;font-size:14px">'
+        '<div class="spinner" style="margin:0 auto 12px;width:28px;height:28px;border:3px solid #333;border-top-color:#107c10;border-radius:50%;animation:spin .8s linear infinite"></div>'
+        '<div id="mkt-loading-text">Loading marketplace...</div></div>\n'
         '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
         '<div class="cbar" id="mkt-cbar" style="margin:0;font-size:12px"></div>'
         '<div style="margin-left:auto" class="view-toggle"><button class="view-btn" onclick="setView(\'mkt\',\'grid\',this)" title="Grid">&#9638;</button>'
@@ -21964,10 +21964,7 @@ def _oh_fetch_all_via_cdp(sock, cdp_send):
 
         window.__xct = {done: false, orders: [], pages: 0, error: null};
 
-        const BATCH = 50;  // parallel requests per wave
-        const STEP = 10;   // continuation token increment
-
-        async function fetchPage(offset) {
+        async function fetchPage(continuationToken) {
             const params = new URLSearchParams({
                 period: 'AllTime',
                 orderTypeFilter: 'All',
@@ -21976,7 +21973,7 @@ def _oh_fetch_all_via_cdp(sock, cdp_send):
                 isPiDetailsRequired: 'true',
                 timeZoneOffsetMinutes: '0',
             });
-            if (offset > 0) params.set('continuationToken', 'M' + offset + 'L0R0D0');
+            if (continuationToken) params.set('continuationToken', continuationToken);
 
             const resp = await fetch('/billing/orders/list?' + params.toString(), {
                 headers: {
@@ -21987,7 +21984,7 @@ def _oh_fetch_all_via_cdp(sock, cdp_send):
                 credentials: 'same-origin',
             });
 
-            if (!resp.ok) return {offset, orders: [], hasContinuation: false, error: resp.status};
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
 
             const text = await resp.text();
             let data;
@@ -21997,55 +21994,53 @@ def _oh_fetch_all_via_cdp(sock, cdp_send):
                 if (missing) padded += '='.repeat(4 - missing);
                 data = JSON.parse(atob(padded));
             } catch(e) {
-                try { data = JSON.parse(text); } catch(e2) {
-                    return {offset, orders: [], hasContinuation: false};
-                }
+                data = JSON.parse(text);
             }
             return {
-                offset,
                 orders: data.orders || [],
-                hasContinuation: !!data.continuationToken,
+                continuationToken: data.continuationToken || null,
             };
         }
 
-        let startOffset = 0;
+        let ct = null;
+        let emptyRun = 0;
         while (true) {
-            // Fire a batch of parallel requests
-            const promises = [];
-            for (let i = 0; i < BATCH; i++) {
-                promises.push(fetchPage(startOffset + i * STEP));
-            }
-
-            let results;
+            let result;
             try {
-                results = await Promise.all(promises);
+                result = await fetchPage(ct);
             } catch(e) {
-                window.__xct.error = 'batch_fail: ' + e.message;
-                break;
+                // Retry once after a short delay (handles transient 429/5xx)
+                await new Promise(r => setTimeout(r, 3000));
+                try {
+                    result = await fetchPage(ct);
+                } catch(e2) {
+                    window.__xct.error = e2.message + ' (after retry)';
+                    break;
+                }
             }
 
-            let batchOrders = 0;
-            let anyHasContinuation = false;
-            for (const r of results) {
-                if (r.error) {
-                    window.__xct.error = 'HTTP ' + r.error + ' at offset ' + r.offset;
-                    window.__xct.done = true;
-                    return;
-                }
-                if (r.orders.length > 0) {
-                    window.__xct.orders.push(...r.orders);
-                    batchOrders += r.orders.length;
-                }
-                if (r.hasContinuation) anyHasContinuation = true;
-                window.__xct.pages++;
+            window.__xct.pages++;
+
+            if (result.orders.length > 0) {
+                window.__xct.orders.push(...result.orders);
+                emptyRun = 0;
+            } else {
+                emptyRun++;
             }
 
             document.title = 'XCT: ' + window.__xct.orders.length + ' orders (' + window.__xct.pages + ' pages)';
 
-            // If no page in this batch had a continuation token, we've reached the end
-            if (!anyHasContinuation) break;
+            if (!result.continuationToken) break;
+            // Safety: if we get 20 consecutive empty pages with continuation tokens, stop
+            if (emptyRun >= 20) {
+                window.__xct.error = '20 consecutive empty pages - stopping';
+                break;
+            }
 
-            startOffset += BATCH * STEP;
+            ct = result.continuationToken;
+
+            // Small delay to avoid rate limiting
+            await new Promise(r => setTimeout(r, 300));
         }
 
         window.__xct.done = true;
@@ -22053,7 +22048,7 @@ def _oh_fetch_all_via_cdp(sock, cdp_send):
     })()
     """
 
-    print("  [*] Fetching all order history (parallel, 50 pages per batch)...")
+    print("  [*] Fetching all order history (sequential with retry)...")
 
     # Fire and forget
     cdp_send("Runtime.evaluate", {
