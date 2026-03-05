@@ -4125,14 +4125,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<label class="mkt-tick"><input type="checkbox" id="mkt-xcloud" onchange="mktPage=0;filterMKT()"> Streamable</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-trial" onchange="mktPage=0;filterMKT()"> Has Trial</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-ach" checked onchange="mktPage=0;filterMKT()"> Has Achievements</label>\n'
+        '<label class="mkt-tick"><input type="checkbox" id="mkt-group" onchange="mktPage=0;filterMKT()"> Group editions</label>\n'
+        '<label class="mkt-tick"><input type="checkbox" id="mkt-hideowned-ed" onchange="mktPage=0;filterMKT()"> Hide owned editions</label>\n'
         # Last scan info (moved from top)
         '<div id="mkt-scan-banner" style="font-size:11px;color:#666;margin-top:14px;padding-top:10px;border-top:1px solid #222"></div>\n'
         '</div>\n'
         # -- Right content area --
         '<div class="mkt-content">\n'
         '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
-        '<label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#aaa;cursor:pointer">'
-        '<input type="checkbox" id="mkt-group" onchange="mktPage=0;filterMKT()"> Group editions</label>'
         '<div class="cbar" id="mkt-cbar" style="margin:0;font-size:12px"></div>'
         '<div style="margin-left:auto" class="view-toggle"><button class="view-btn" onclick="setView(\'mkt\',\'grid\',this)" title="Grid">&#9638;</button>'
         '<button class="view-btn active" onclick="setView(\'mkt\',\'list\',this)" title="List">&#9776;</button></div>'
@@ -4341,6 +4341,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('mkt-trial').checked=false;"
         "document.getElementById('mkt-ach').checked=true;"
         "document.getElementById('mkt-group').checked=false;"
+        "document.getElementById('mkt-hideowned-ed').checked=false;"
         "document.getElementById('mkt-search').value='';"
         "document.getElementById('mkt-saved').value='';"
         "mktSortCol=null;mktPage=0;"
@@ -4385,6 +4386,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-trial').checked)p.set('trial','1');"
         "if(document.getElementById('mkt-ach').checked)p.set('ach','1');"
         "if(document.getElementById('mkt-group').checked)p.set('group','1');"
+        "if(document.getElementById('mkt-hideowned-ed').checked)p.set('hoe','1');"
         "_setRoute('store',p.toString())}\n"
 
         "function _mktDeserializeFilters(qsArg){"
@@ -4405,6 +4407,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('trial')==='1')document.getElementById('mkt-trial').checked=true;"
         "if(p.get('ach')==='1')document.getElementById('mkt-ach').checked=true;"
         "if(p.get('group')==='1')document.getElementById('mkt-group').checked=true;"
+        "if(p.get('hoe')==='1')document.getElementById('mkt-hideowned-ed').checked=true;"
         "return true}\n"
 
         # -- Library filter serialization --
@@ -4507,6 +4510,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-trial').checked)p.set('trial','1');"
         "if(document.getElementById('mkt-ach').checked)p.set('ach','1');"
         "if(document.getElementById('mkt-group').checked)p.set('group','1');"
+        "if(document.getElementById('mkt-hideowned-ed').checked)p.set('hoe','1');"
         "_mktSavedFilters.push({name:name,params:p.toString()});"
         "localStorage.setItem('xct_mkt_saved',JSON.stringify(_mktSavedFilters));"
         "_mktInitSaved();sel.value='';return}"
@@ -4522,6 +4526,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('mkt-trial').checked=false;"
         "document.getElementById('mkt-ach').checked=true;"
         "document.getElementById('mkt-group').checked=false;"
+        "document.getElementById('mkt-hideowned-ed').checked=false;"
         "document.getElementById('mkt-search').value='';"
         # Apply saved params
         "const p=new URLSearchParams(found.params);"
@@ -4536,6 +4541,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('trial')==='1')document.getElementById('mkt-trial').checked=true;"
         "if(p.get('ach')==='1')document.getElementById('mkt-ach').checked=true;"
         "if(p.get('group')==='1')document.getElementById('mkt-group').checked=true;"
+        "if(p.get('hoe')==='1')document.getElementById('mkt-hideowned-ed').checked=true;"
         "mktPage=0;filterMKT();sel.value=''}\n"
 
         "function _mktDeleteSaved(name){"
@@ -4769,6 +4775,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Single-pass: field mapping, pre-index, owned/GP/demo/preOrder/bundle/sale + dropdown counts
         "const _ownedPids=new Set(LIB.map(x=>x.productId));\n"
         "const _gpPids=new Set(GP.map(x=>x.productId));\n"
+        "const _ownedTids=new Set(LIB.filter(x=>x.xboxTitleId).map(x=>x.xboxTitleId));\n"
         "const _demoPids=new Set();\n"
         "const mChs={},mTypes={},mPlats={},mPubs={},mDevs={},mCats={},mSubs={};\n"
         "for(let i=0;i<MKT.length;i++){const x=MKT[i];\n"
@@ -4782,7 +4789,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Available regions
         "const regs=new Set(Object.keys(x.regionalPrices||{}));(x.channelRegions||[]).forEach(r=>regs.add(r));x._availableRegions=[...regs];\n"
         # Owned / GP
-        "x.owned=_ownedPids.has(x.productId);x.onGP=_gpPids.has(x.productId);\n"
+        "x.owned=_ownedPids.has(x.productId);x.onGP=_gpPids.has(x.productId);"
+        "if(x.owned&&x.xboxTitleId)_ownedTids.add(x.xboxTitleId);\n"
         # Demo detection
         "if((x.channels||[]).includes('Game Demos'))_demoPids.add(x.productId);\n"
         # Release / preOrder
@@ -5628,6 +5636,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const regionVals=getCBVals('mkt-region');\n"
         "const so=document.getElementById('mkt-sort').value;\n"
         "const doGroup=document.getElementById('mkt-group')&&document.getElementById('mkt-group').checked;\n"
+        "const hideOwnedEd=document.getElementById('mkt-hideowned-ed')&&document.getElementById('mkt-hideowned-ed').checked;\n"
 
         "const g=document.getElementById('mkt-grid');const l=document.getElementById('mkt-list');\n"
         'let filtered=MKT.filter(item=>{\n'
@@ -5645,6 +5654,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(ownVals.includes('owned')&&item.owned)op=true;"
         "if(ownVals.includes('notowned')&&!item.owned)op=true;"
         "if(!op)return false}\n"
+        "if(hideOwnedEd&&!item.owned&&item.xboxTitleId&&_ownedTids.has(item.xboxTitleId))return false;\n"
         # Price cb-drop
         "if(priceVals){let pp=false;const pr=item.priceUSD||0;"
         "if(priceVals.includes('free')&&pr===0)pp=true;"
@@ -5867,6 +5877,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-trial').checked)p.set('trial','1');\n"
         "if(document.getElementById('mkt-ach').checked)p.set('ach','1');\n"
         "if(document.getElementById('mkt-group')&&document.getElementById('mkt-group').checked)p.set('group','1');\n"
+        "if(document.getElementById('mkt-hideowned-ed')&&document.getElementById('mkt-hideowned-ed').checked)p.set('hoe','1');\n"
         # Fetch
         "var h={};if(window._xctApiKey)h['Authorization']='Bearer '+window._xctApiKey;\n"
         "fetch('/api/v1/store/products?'+p.toString(),{headers:h,signal:ac.signal})"
