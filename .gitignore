@@ -11,6 +11,7 @@ exchange_rates.json
 *.json
 !tags.json
 !gfwl_links.json
+!gwg_games.json
 !requirements.txt
 *.html
 *.js

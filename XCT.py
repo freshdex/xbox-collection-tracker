@@ -168,6 +168,7 @@ ACCOUNTS_FILE = os.path.join(SCRIPT_DIR, "accounts.json")
 
 # MSA / Xbox Live auth constants
 CLIENT_ID = "000000004c12ae6f"
+XCCS_APP_ID = "000000004415494b"  # Xbox Android app — required for XCCS remote management
 SCOPE = "service::user.auth.xboxlive.com::MBI_SSL"
 
 # Cache file names (cleared after token refresh)
@@ -288,6 +289,20 @@ MARKETPLACE_CHANNELS = {
     "XboxPlayAnywhere":   "Play Anywhere",
     "GameDemos":          "Game Demos",
     "DealsWithGamePass":  "Deals with GP",
+}
+
+# Subscription tier names (from catalog.gamepass.com/subscriptions) → display labels
+SUBSCRIPTION_CHANNELS = {
+    "gamepasscore":      "Game Pass Core",
+    "gamepassstandard":  "Game Pass Standard",
+    "ultimate":          "Game Pass Ultimate",
+    "pc":                "Game Pass PC",
+    "console":           "Game Pass Console",
+    "eaaccess":          "EA Play",
+    "ubisoftplus":       "Ubisoft+ Classics",
+    "nakuconsole":       "Ubisoft+ Premium",
+    "nakupc":            "Ubisoft+ Premium",
+    "gtaplus":           "GTA+",
 }
 
 # Regional pricing markets (for marketplace price comparison)
@@ -2804,6 +2819,46 @@ def merge_library(entitlements, catalog, gamertag=""):
 # Step 4b: Catalog v3 (replaces Display Catalog batching)
 # ===========================================================================
 
+def _fetch_catalog_ppe(product_ids, market="GB", lang="en-GB"):
+    """Fetch catalog via PPE endpoint (no auth required).
+
+    POST https://catalog-ppe.gamepass.com/v3/products
+    Returns {"products": {pid: info}, "invalid": [pid, ...]} or None on failure.
+    """
+    url = (f"https://catalog-ppe.gamepass.com/v3/products"
+           f"?market={market}&language={lang}&hydration=MobileHighDiamond0")
+
+    BATCH_SIZE = 2000
+    all_products = {}
+    all_invalid = []
+    chunks = [product_ids[i:i + BATCH_SIZE] for i in range(0, len(product_ids), BATCH_SIZE)]
+
+    for ci, chunk in enumerate(chunks):
+        cv = base64.b64encode(os.urandom(12)).decode().rstrip("=") + ".0"
+        body = json.dumps({"Products": chunk}).encode("utf-8")
+        req = urllib.request.Request(url, data=body, headers={
+            "Content-Type": "application/json",
+            "calling-app-name": "Xbox",
+            "calling-app-version": "2603.1.2",
+            "ms-cv": cv,
+            "Accept": "application/json",
+            "User-Agent": "okhttp/4.12.0",
+        })
+        try:
+            with urllib.request.urlopen(req, context=SSL_CTX, timeout=120) as resp:
+                data = json.loads(resp.read())
+            all_products.update(data.get("Products", {}))
+            all_invalid.extend(data.get("InvalidIds", []))
+            if len(chunks) > 1:
+                print(f"    PPE batch {ci + 1}/{len(chunks)}: {len(all_products)} products")
+        except Exception as e:
+            debug(f"  catalog_ppe batch {ci + 1} failed: {e}")
+            if ci == 0 and not all_products:
+                return None
+            continue
+    return {"products": all_products, "invalid": all_invalid}
+
+
 def fetch_catalog_v3(product_ids, auth_token_xl, market="GB", lang="en-GB",
                      cache_file=None, label="Catalog v3"):
     """Fetch rich product metadata via catalog.gamepass.com/v3/products.
@@ -2840,7 +2895,7 @@ def fetch_catalog_v3(product_ids, auth_token_xl, market="GB", lang="en-GB",
             "Authorization": auth_token_xl,
             "Content-Type": "application/json",
             "calling-app-name": "XboxMobile",
-            "calling-app-version": "2602.2.1",
+            "calling-app-version": "2603.1.2",
             "MS-CV": cv,
             "Accept": "application/json",
             "User-Agent": "okhttp/4.12.0",
@@ -2854,7 +2909,17 @@ def fetch_catalog_v3(product_ids, auth_token_xl, market="GB", lang="en-GB",
             debug(f"  catalog_v3 batch {ci + 1} failed: {e}")
             print(f"  Catalog v3 failed: {e}")
             if ci == 0 and not all_products:
-                return None  # First batch failed, abort entirely
+                # Try PPE catalog as fallback (no auth required)
+                print(f"  Trying PPE catalog fallback (no auth)...")
+                ppe_result = _fetch_catalog_ppe(unique_ids, market, lang)
+                if ppe_result is not None:
+                    all_products.update(ppe_result.get("products", {}))
+                    all_invalid.extend(ppe_result.get("invalid", []))
+                    if all_products:
+                        print(f"  PPE fallback: {len(all_products)} products")
+                        break  # PPE fetched everything, skip remaining prod batches
+                if not all_products:
+                    return None
             print(f"  Continuing with {len(all_products)} products from previous batches...")
             continue
 
@@ -3017,7 +3082,7 @@ def _fetch_region_prices(market, info, product_ids, auth_token_xl, cache_dir):
         "Authorization": auth_token_xl,
         "Content-Type": "application/json",
         "calling-app-name": "XboxMobile",
-        "calling-app-version": "2602.2.1",
+        "calling-app-version": "2603.1.2",
         "MS-CV": cv,
         "Accept": "application/json",
         "User-Agent": "okhttp/4.12.0",
@@ -3161,8 +3226,21 @@ def fetch_gamepass_subscriptions(market="GB"):
             data = json.loads(resp.read())
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
         debug(f"  gamepass subscriptions failed: {e}")
-        print(f"  Subscriptions API failed: {e}")
-        return None
+        print(f"  Subscriptions API failed: {e}, trying PPE...")
+        # Fallback to PPE subscriptions endpoint
+        try:
+            ppe_url = f"https://catalog-ppe.gamepass.com/subscriptions?market={market}&subscription=all"
+            ppe_req = urllib.request.Request(ppe_url, headers={
+                "User-Agent": "okhttp/4.12.0",
+                "Accept": "application/json",
+            })
+            with urllib.request.urlopen(ppe_req, context=SSL_CTX, timeout=30) as resp:
+                data = json.loads(resp.read())
+            print("  PPE subscriptions fallback succeeded")
+        except Exception as e2:
+            debug(f"  PPE subscriptions also failed: {e2}")
+            print(f"  PPE subscriptions also failed: {e2}")
+            return None
 
     # Build product -> tier mapping
     product_tiers = {}
@@ -3190,6 +3268,96 @@ def fetch_gamepass_subscriptions(market="GB"):
     }
     save_json(GAMEPASS_FILE, result)
     return result
+
+
+def fetch_subscription_channels(market="GB"):
+    """Fetch subscription tiers and return {productId: [channel_labels]}.
+
+    Uses the public subscriptions endpoint (no auth required).
+    Maps API tier names to display labels via SUBSCRIPTION_CHANNELS.
+    Returns dict of {productId: set(channel_label, ...)}.
+    """
+    gp_data = fetch_gamepass_subscriptions(market=market)
+    if not gp_data or not gp_data.get("items"):
+        return {}
+
+    pid_channels = {}
+    for pid, tiers in gp_data["items"].items():
+        labels = set()
+        for tier in tiers:
+            label = SUBSCRIPTION_CHANNELS.get(tier)
+            if label:
+                labels.add(label)
+        if labels:
+            pid_channels[pid] = labels
+    return pid_channels
+
+
+def load_gwg_games():
+    """Load Games with Gold product IDs from gwg_games.json.
+
+    Returns set of resolved product IDs (skips unresolved titles with null PIDs).
+    """
+    gwg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gwg_games.json")
+    if not os.path.isfile(gwg_path):
+        return set()
+    try:
+        data = load_json(gwg_path)
+        if isinstance(data, list):
+            return set(pid for pid in data if pid)
+        if isinstance(data, dict):
+            titles = data.get("titles", data)
+            pids = set()
+            for key, val in titles.items():
+                if val and isinstance(val, str) and len(val) == 12:
+                    # Value is a resolved product ID
+                    pids.add(val)
+            return pids
+    except Exception:
+        pass
+    return set()
+
+
+def resolve_gwg_titles(catalog):
+    """Attempt to resolve GwG game titles to product IDs using catalog data.
+
+    catalog: dict of {productId: {title: ..., ...}} from catalog v3.
+    Updates gwg_games.json with resolved product IDs. Returns set of PIDs.
+    """
+    gwg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gwg_games.json")
+    if not os.path.isfile(gwg_path):
+        return set()
+
+    data = load_json(gwg_path)
+    if not isinstance(data, dict) or "titles" not in data:
+        return set()
+
+    titles = data["titles"]
+    # Build reverse lookup: lowercase title -> product ID
+    title_to_pid = {}
+    for pid, info in catalog.items():
+        t = (info.get("title") or "").strip()
+        if t:
+            title_to_pid[t.lower()] = pid
+
+    resolved = 0
+    pids = set()
+    for gwg_title, pid in titles.items():
+        if pid and isinstance(pid, str) and len(pid) == 12:
+            pids.add(pid)
+            continue
+        # Try exact match
+        found = title_to_pid.get(gwg_title.lower())
+        if found:
+            titles[gwg_title] = found
+            pids.add(found)
+            resolved += 1
+
+    if resolved > 0:
+        save_json(gwg_path, data)
+        print(f"  GwG auto-resolved: {resolved} titles → product IDs")
+
+    return pids
 
 
 def _read_varint(buf, pos):
@@ -3276,15 +3444,14 @@ def fetch_contentaccess_catalog(auth_token, market="US", offering="CLOUDGAMING")
     debug(f"fetch_contentaccess_catalog: {url}")
     headers = {
         "Authorization": auth_token,
-        "calling-app-name": "XCT",
-        "calling-app-version": "1.0",
+        "calling-app-name": "XboxMobile",
+        "calling-app-version": "2603.1.2",
         "Accept": "*/*",
     }
 
     req = urllib.request.Request(url, headers=headers)
     try:
-        ctx = ssl.create_default_context()
-        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+        with urllib.request.urlopen(req, timeout=30, context=SSL_CTX) as resp:
             raw = resp.read()
             debug(f"  contentaccess response: {len(raw)} bytes")
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as e:
@@ -6938,6 +7105,22 @@ def process_account(gamertag, method=None, prompt_upload=True):
                 save_json(ENTITLEMENTS_FILE, entitlements)
                 print(f"  Updated product IDs: {len(product_ids)}")
 
+    # -- Early exit: skip enrichment if no new entitlements since last scan --
+    prev_scan = load_previous_scan(gamertag)
+    if prev_scan and prev_scan.get("library"):
+        prev_pids = set(item["productId"] for item in prev_scan["library"])
+        curr_pids = set(product_ids)
+        new_pids = curr_pids - prev_pids
+        if not new_pids:
+            elapsed = time.time() - start_time
+            print(f"\n  No new entitlements since last scan — skipping enrichment.")
+            print(f"  Collection: {len(prev_scan['library'])} items (unchanged)")
+            print(f"  Completed in {elapsed:.1f}s")
+            print()
+            return OUTPUT_HTML_FILE if os.path.isfile(OUTPUT_HTML_FILE) else None, prev_scan["library"]
+        else:
+            print(f"  {len(new_pids)} new entitlement(s) since last scan")
+
     # -- Step 3: Catalog enrichment (US market only) --
     catalog_us = None
     if auth_token_xl:
@@ -7028,6 +7211,13 @@ def process_account(gamertag, method=None, prompt_upload=True):
             "9VWGNH0VBZMG": {"title": "Twitch",
                              "publisher": "Twitch Interactive, Inc.",
                              "type": "App"},
+            "CFQ7TTC0TKT2": {"title": "Microsoft Defender for Business servers",
+                             "publisher": "Microsoft Corporation",
+                             "type": "Subscription"},
+            "BTQSPR43SR63": {"title": "Marvel Puzzle Quest: Dark Reign",
+                             "publisher": "D3 Go!",
+                             "type": "Game",
+                             "platforms": ["Xbox One"]},
         }
         still_unresolved = [pid for pid in product_ids
                             if pid not in catalog_us or catalog_us[pid].get("_invalid")]
@@ -7044,14 +7234,6 @@ def process_account(gamertag, method=None, prompt_upload=True):
                         v3_data[pid] = KNOWN_PRODUCTS[pid]
                 save_json(CATALOG_V3_US_FILE, v3_data)
             print(f"  Resolved {hardcoded} more from known product list")
-
-    # -- Step 3a.5: Detect free trials via Display Catalog v7 --
-    # Catalog v3 doesn't expose trial info; Display Catalog does.
-    if catalog_us:
-        trial_count = _apply_trial_detection(catalog_us, TRIAL_CHECK_FILE, "products")
-        # Persist updated hasTrialSku back to v3 cache on disk
-        if trial_count and CATALOG_V3_US_FILE and os.path.isfile(CATALOG_V3_US_FILE):
-            save_json(CATALOG_V3_US_FILE, catalog_us)
 
     # -- Step 3b: Identify Xbox 360 games from contentaccess items --
     # Collect ALL contentaccess-only product IDs (new + previously added)
@@ -7613,7 +7795,30 @@ def process_marketplace(gamertag, channels=None):
             return None, []
 
     if not all_pids:
-        print("[!] No products found across channels")
+        print("[!] No products found across DynamicChannels")
+
+    print(f"  DynamicChannel products: {len(all_pids)}")
+
+    # Fetch subscription tier channels (public, no auth)
+    print("[*] Fetching subscription tier channels...")
+    sub_channels = fetch_subscription_channels(market="GB")
+    sub_pid_count = len(sub_channels)
+    if sub_channels:
+        for pid, labels in sub_channels.items():
+            all_pids.add(pid)
+        print(f"  Subscription channels: {sub_pid_count} products across "
+              f"{len(set(l for ls in sub_channels.values() for l in ls))} tiers")
+    else:
+        print("  Subscription channels: unavailable")
+
+    # Load Games with Gold static list
+    gwg_pids = load_gwg_games()
+    if gwg_pids:
+        all_pids.update(gwg_pids)
+        print(f"  Games with Gold: {len(gwg_pids)} products")
+
+    if not all_pids:
+        print("[!] No products found across any source")
         return None, []
 
     print(f"  Total unique products: {len(all_pids)}")
@@ -7627,6 +7832,14 @@ def process_marketplace(gamertag, channels=None):
 
     # Detect free trials via Display Catalog v7
     _apply_trial_detection(catalog, MKT_TRIAL_CHECK_FILE, "marketplace products")
+
+    # Auto-resolve GwG titles to product IDs using catalog data
+    if catalog:
+        resolved_gwg = resolve_gwg_titles(catalog)
+        if resolved_gwg:
+            gwg_pids.update(resolved_gwg)
+            # Add newly resolved PIDs to all_pids (they're already in catalog)
+            all_pids.update(resolved_gwg)
 
     # Load entitlements to check "owned" status
     owned_pids = set()
@@ -7642,9 +7855,19 @@ def process_marketplace(gamertag, channels=None):
             continue
 
         item_channels = []
+        # DynamicChannel labels
         for ch, pids in channel_pids.items():
             if pid in pids:
                 item_channels.append(MARKETPLACE_CHANNELS.get(ch, ch))
+        # Subscription tier labels
+        if pid in sub_channels:
+            for label in sorted(sub_channels[pid]):
+                if label not in item_channels:
+                    item_channels.append(label)
+        # Games with Gold label
+        if pid in gwg_pids:
+            if "Games with Gold" not in item_channels:
+                item_channels.append("Games with Gold")
 
         mkt_items.append({
             "productId": pid,
@@ -7800,11 +8023,34 @@ def process_marketplace_all_regions(gamertag):
             return None, []
 
     all_pids = set(pid_meta.keys())
+    print(f"\n  DynamicChannel products across all regions: {len(all_pids)}")
+
+    # Fetch subscription tier channels (public, no auth)
+    print("[*] Fetching subscription tier channels...")
+    sub_channels = fetch_subscription_channels(market="GB")
+    if sub_channels:
+        for pid, labels in sub_channels.items():
+            if pid not in pid_meta:
+                pid_meta[pid] = {"channels": set(), "regions": set()}
+            pid_meta[pid]["channels"].update(labels)
+        all_pids = set(pid_meta.keys())
+        print(f"  Subscription channels: {len(sub_channels)} products")
+
+    # Load Games with Gold static list
+    gwg_pids = load_gwg_games()
+    if gwg_pids:
+        for pid in gwg_pids:
+            if pid not in pid_meta:
+                pid_meta[pid] = {"channels": set(), "regions": set()}
+            pid_meta[pid]["channels"].add("Games with Gold")
+        all_pids = set(pid_meta.keys())
+        print(f"  Games with Gold: {len(gwg_pids)} products")
+
     if not all_pids:
-        print("[!] No products found across any region")
+        print("[!] No products found across any source")
         return None, []
 
-    print(f"\n  Total unique products across all regions: {len(all_pids)}")
+    print(f"  Total unique products: {len(all_pids)}")
 
     # Enrich with catalog v3 (US market for English metadata)
     catalog = fetch_catalog_v3(
@@ -7812,6 +8058,16 @@ def process_marketplace_all_regions(gamertag):
         cache_file=None, label="Catalog v3 (all-regions marketplace)")
     if not catalog:
         catalog = {}
+
+    # Auto-resolve GwG titles to product IDs using catalog data
+    if catalog:
+        resolved_gwg = resolve_gwg_titles(catalog)
+        if resolved_gwg:
+            for pid in resolved_gwg:
+                if pid not in pid_meta:
+                    pid_meta[pid] = {"channels": set(), "regions": set()}
+                pid_meta[pid]["channels"].add("Games with Gold")
+            all_pids = set(pid_meta.keys())
 
     # Load entitlements for "owned" status
     owned_pids = set()
@@ -20123,6 +20379,1885 @@ def process_cdn_version_discovery():
 
 
 # ===========================================================================
+# Xbox Remote Tools (XCCS)
+# ===========================================================================
+
+def _xccs_load_auth(gamertag):
+    """Get XCCS auth: XBL3.0 token via Xbox Android AppId + RequestSigner.
+
+    XCCS requires tokens issued with the Xbox Android app's AppId
+    (000000004415494b), not XCT's CLIENT_ID. We reuse the existing MSA
+    refresh token + EC P-256 key but call SISU authorize with the Android
+    AppId to get XCCS-compatible title claims.
+
+    Returns (xbl3_token, signer) or raises RuntimeError.
+    """
+    if not HAS_ECDSA:
+        raise RuntimeError(
+            "ecdsa package required for Xbox Remote Tools.\n"
+            "  Install with: pip install ecdsa"
+        )
+    set_account_paths(gamertag)
+
+    # Load auth state (signer + refresh token + device ID)
+    state_path = account_path(gamertag, "xbox_auth_state.json")
+    if not os.path.isfile(state_path):
+        raise RuntimeError("No auth state file. Re-add account with [c].")
+    state = load_json(state_path)
+    if not state or not state.get("ec_key"):
+        raise RuntimeError("No EC P-256 key in auth state. Re-add account with [c].")
+    if not state.get("refresh_token"):
+        raise RuntimeError("No refresh token in auth state. Re-add account with [c].")
+    signer = RequestSigner.from_state(state["ec_key"])
+    if not signer:
+        raise RuntimeError("Failed to load EC P-256 signing key.")
+
+    # Check for cached XCCS token
+    xccs_token_file = account_path(gamertag, "auth_token_xccs.txt")
+    if os.path.isfile(xccs_token_file):
+        age = time.time() - os.path.getmtime(xccs_token_file)
+        if age < 43200:  # 12 hours
+            with open(xccs_token_file, "r") as f:
+                cached = f.read().strip()
+            if cached:
+                debug(f"  XCCS token loaded from cache ({len(cached)} chars, {int(age/60)}m old)")
+                return cached, signer
+
+    # Generate fresh XCCS token using Xbox Android app's AppId
+    print("  [*] Generating XCCS token (Xbox Android app auth)...")
+
+    # Step 1: Refresh MSA token (must use original CLIENT_ID — refresh token is bound to it)
+    print("  [*] Refreshing MSA token...")
+    msa_resp = msa_request("https://login.live.com/oauth20_token.srf", {
+        "client_id": CLIENT_ID,
+        "scope": SCOPE,
+        "grant_type": "refresh_token",
+        "refresh_token": state["refresh_token"],
+    })
+    msa_token = msa_resp["access_token"]
+    new_refresh = msa_resp.get("refresh_token", state["refresh_token"])
+    # Update refresh token if changed
+    if new_refresh != state["refresh_token"]:
+        state["refresh_token"] = new_refresh
+        save_json(state_path, state)
+
+    # Step 2: Get device token
+    print("  [*] Registering device...")
+    device_id = state.get("device_id")
+    device_token, device_id = get_device_token(signer, device_id)
+
+    # Step 3: SISU authorize with Xbox Android app's AppId
+    print("  [*] SISU authorization (Xbox Android app)...")
+    url = "https://sisu.xboxlive.com/authorize"
+    sisu_data = {
+        "AccessToken": f"t={msa_token}",
+        "AppId": XCCS_APP_ID,
+        "DeviceToken": device_token,
+        "Sandbox": "RETAIL",
+        "SiteName": "user.auth.xboxlive.com",
+        "ProofKey": signer.get_proof_key(),
+    }
+    sisu_headers = {
+        "x-xbl-contract-version": "1",
+        "Content-Type": "application/json",
+    }
+    resp = _signed_request(signer, "POST", url, body_dict=sisu_data, headers=sisu_headers)
+    user_token = resp["UserToken"]["Token"]
+    title_token = resp["TitleToken"]["Token"]
+    gtg = resp.get("AuthorizationToken", {}).get("DisplayClaims", {}).get("xui", [{}])[0].get("gtg", "")
+    print(f"  [+] SISU authorized as {gtg}")
+
+    # Step 4: Get XSTS token for xboxlive.com with Android app title claims
+    print("  [*] Getting XSTS token (xboxlive.com, XCCS)...")
+    xl_token, xl_uhs = get_xsts_token_device_bound(
+        signer, user_token, device_token, title_token, "http://xboxlive.com"
+    )
+    xbl3_xccs = build_xbl3_token(xl_token, xl_uhs)
+    print(f"  [+] XCCS token: {len(xbl3_xccs)} chars")
+
+    # Cache it
+    with open(xccs_token_file, "w") as f:
+        f.write(xbl3_xccs)
+
+    return xbl3_xccs, signer
+
+
+def _xccs_request(signer, token, method, path, body=None, extra_headers=None):
+    """Make a signed XCCS API request. Returns parsed JSON or None on error."""
+    url = "https://xccs.xboxlive.com" + path
+    headers = {
+        "Authorization": token,
+        "skillplatform": "RemoteManagement",
+        "x-xbl-contract-version": "4",
+        "Accept": "application/json",
+        "Accept-Language": "en-GB",
+        "User-Agent": "okhttp/4.12.0",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    try:
+        return _signed_request(signer, method, url, body_dict=body, headers=headers)
+    except urllib.error.HTTPError as e:
+        err_body = ""
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            pass
+        debug(f"  XCCS HTTP {e.code}: {err_body}")
+        if e.code == 401:
+            print(f"    [!] XCCS 401 Unauthorized — refresh your token with [d].")
+        elif e.code == 403:
+            print(f"    [!] XCCS 403 Forbidden: {err_body[:300]}")
+        else:
+            print(f"    [!] XCCS HTTP {e.code}: {err_body[:200]}")
+        return None
+    except Exception as e:
+        debug(f"  XCCS error: {e}")
+        print(f"    [!] XCCS request failed: {e}")
+        return None
+
+
+def _xccs_list_devices(signer, token):
+    """List Xbox consoles registered to this account.
+
+    Returns list of device dicts or empty list.
+    """
+    data = _xccs_request(
+        signer, token, "GET",
+        "/lists/devices?queryCurrentDevice=false&includeStorageDevices=true"
+    )
+    if not data:
+        return []
+    if data.get("status", {}).get("errorCode") != "OK":
+        err = data.get("status", {}).get("errorMessage", "unknown error")
+        print(f"    [!] XCCS error: {err}")
+        return []
+    return data.get("result", []) or []
+
+
+def _xccs_list_installed(signer, token, device_id):
+    """List installed apps/games on a console.
+
+    Returns list of installed app dicts or empty list.
+    """
+    data = _xccs_request(
+        signer, token, "GET",
+        f"/lists/installedApps?deviceId={device_id}"
+    )
+    if not data:
+        return []
+    return data.get("result", []) or []
+
+
+def _xccs_install(signer, token, device_id, product_ids, session_id):
+    """Send InstallPackages command. Returns opId or None."""
+    body = {
+        "destination": "Xbox",
+        "type": "Shell",
+        "command": "InstallPackages",
+        "sessionId": session_id,
+        "sourceId": "com.microsoft.xboxone.smartglass",
+        "parameters": [
+            {"bigCatIdList": ",".join(product_ids)},
+            {"installEvents": "true"},
+        ],
+        "linkedXboxId": device_id,
+    }
+    data = _xccs_request(signer, token, "POST", "/commands", body=body)
+    if not data:
+        return None
+    if data.get("status", {}).get("errorCode") != "OK":
+        err = data.get("status", {}).get("errorMessage", "unknown error")
+        print(f"    [!] Install command rejected: {err}")
+        return None
+    return data.get("opId")
+
+
+def _xccs_uninstall(signer, token, device_id, instance_id, session_id):
+    """Send UninstallPackage command. Returns opId or None."""
+    body = {
+        "destination": "Xbox",
+        "type": "Shell",
+        "command": "UninstallPackage",
+        "sessionId": session_id,
+        "sourceId": "com.microsoft.xboxone.smartglass",
+        "parameters": [
+            {"instanceId": instance_id},
+            {"installEvents": "true"},
+        ],
+        "linkedXboxId": device_id,
+    }
+    data = _xccs_request(signer, token, "POST", "/commands", body=body)
+    if not data:
+        return None
+    if data.get("status", {}).get("errorCode") != "OK":
+        err = data.get("status", {}).get("errorMessage", "unknown error")
+        print(f"    [!] Uninstall command rejected: {err}")
+        return None
+    return data.get("opId")
+
+
+def _xccs_launch_app(signer, token, device_id, aumid, session_id):
+    """Send LaunchApp command. Returns opId or None."""
+    body = {
+        "destination": "Xbox",
+        "type": "Shell",
+        "command": "LaunchApp",
+        "sessionId": session_id,
+        "sourceId": "com.microsoft.xboxone.smartglass",
+        "parameters": [
+            {"aumid": aumid},
+        ],
+        "linkedXboxId": device_id,
+    }
+    data = _xccs_request(signer, token, "POST", "/commands", body=body)
+    if not data:
+        return None
+    if data.get("status", {}).get("errorCode") != "OK":
+        err = data.get("status", {}).get("errorMessage", "unknown error")
+        print(f"    [!] Launch command rejected: {err}")
+        return None
+    return data.get("opId")
+
+
+def _xccs_poll_install(signer, token, device_id):
+    """Poll install/uninstall events on a console.
+
+    Returns list of event dicts or empty list.
+    """
+    data = _xccs_request(
+        signer, token, "GET",
+        f"/consoles/{device_id}/installEvents"
+    )
+    if not data:
+        return []
+    return data.get("installEvents", []) or []
+
+
+def _xccs_poll_op(signer, token, device_id, op_id):
+    """Poll operation status (used for uninstall tracking).
+
+    Returns status string: 'Pending', 'Succeeded', 'Failed', or None.
+    """
+    data = _xccs_request(
+        signer, token, "GET", "/opStatus",
+        extra_headers={
+            "x-xbl-contract-version": "2",
+            "x-xbl-opid": op_id,
+            "x-xbl-deviceid": device_id,
+        }
+    )
+    if not data:
+        return None
+    return data.get("operationStatus")
+
+
+def _xccs_get_console_detail(signer, token, device_id):
+    """Fetch detailed console info (OS version, playback state, etc.)."""
+    return _xccs_request(signer, token, "GET", f"/consoles/{device_id}")
+
+
+def _xccs_select_console(signer, token):
+    """List consoles and let user pick one.
+
+    Returns (device_id, device_name, console_type) or None.
+    """
+    print()
+    print("  [*] Fetching console list...")
+    devices = _xccs_list_devices(signer, token)
+    if not devices:
+        print("  [!] No consoles found.")
+        print("      Make sure Remote Management is enabled in Xbox Settings →")
+        print("      Devices & connections → Remote features.")
+        return None
+
+    # Fetch detail for each console (OS version, playback state)
+    details = {}
+    for dev in devices:
+        did = dev.get("id", "")
+        if did:
+            detail = _xccs_get_console_detail(signer, token, did)
+            if detail:
+                details[did] = detail
+
+    print()
+    print("  Consoles:")
+    for i, dev in enumerate(devices, 1):
+        name = dev.get("name", "Unknown")
+        ctype = dev.get("consoleType", "")
+        power = dev.get("powerState", "?")
+        did = dev.get("id", "")
+        detail = details.get(did, {})
+        locale = dev.get("locale", "")
+        region = dev.get("region", "")
+
+        print(f"    [{i}] {name}  ({ctype}, {power})")
+
+        # Console detail line
+        info_parts = []
+        os_ver = detail.get("osVersion", "")
+        if os_ver:
+            info_parts.append(f"OS: {os_ver}")
+        if locale:
+            info_parts.append(f"Locale: {locale}")
+        if region:
+            info_parts.append(f"Region: {region}")
+        playback = detail.get("playbackState", "")
+        if playback and playback != "Stopped":
+            info_parts.append(f"Playback: {playback}")
+        streaming = dev.get("consoleStreamingEnabled")
+        if streaming:
+            info_parts.append("Streaming: On")
+        wireless_warn = dev.get("wirelessWarning")
+        if wireless_warn:
+            info_parts.append("Wi-Fi")
+        if info_parts:
+            print(f"        {', '.join(info_parts)}")
+
+        # Storage drives — one per line
+        for sd in dev.get("storageDevices", []):
+            free_bytes = sd.get("freeSpaceBytes") or 0
+            total_bytes = sd.get("totalSpaceBytes") or 0
+            free_gb = free_bytes / (1024 ** 3)
+            total_gb = total_bytes / (1024 ** 3)
+            sd_name = sd.get("storageDeviceName", "Storage")
+            is_default = sd.get("isDefault", False)
+            gen9 = sd.get("isGen9Compatible")
+            parts = [f"{free_gb:.1f} GB free / {total_gb:.0f} GB"]
+            if is_default:
+                parts.append("default")
+            if gen9 is True:
+                parts.append("Gen 9")
+            elif gen9 is False:
+                parts.append("Gen 8 only")
+            print(f"        {'*' if is_default else ' '} {sd_name}: {', '.join(parts)}")
+
+    # Auto-select if only one console
+    if len(devices) == 1:
+        dev = devices[0]
+        print(f"\n  [+] Auto-selected {dev.get('name', 'Xbox')}")
+        return (dev["id"], dev.get("name", "Xbox"), dev.get("consoleType", ""))
+
+    print()
+    sp = input(f"  Select console [1-{len(devices)} / 0=back]: ").strip()
+    if sp == "0":
+        return None
+    try:
+        idx = int(sp) - 1
+        if 0 <= idx < len(devices):
+            dev = devices[idx]
+            return (dev["id"], dev.get("name", "Xbox"), dev.get("consoleType", ""))
+    except ValueError:
+        pass
+    print("  Invalid selection.")
+    return None
+
+
+def _xccs_format_size(size_bytes):
+    """Format bytes as human-readable size."""
+    if not size_bytes:
+        return "? GB"
+    gb = size_bytes / (1024 ** 3)
+    if gb >= 1:
+        return f"{gb:.1f} GB"
+    mb = size_bytes / (1024 ** 2)
+    return f"{mb:.0f} MB"
+
+
+def _xccs_monitor_install(signer, token, device_id, product_ids):
+    """Poll install events until all products complete or user cancels."""
+    completed = set()
+    target_ids = set(pid.upper() for pid in product_ids)
+    print()
+    print("  Monitoring install progress (Ctrl+C to stop monitoring)...")
+    print()
+    try:
+        while completed != target_ids:
+            time.sleep(2)
+            events = _xccs_poll_install(signer, token, device_id)
+            if not events:
+                continue
+            for ev in events:
+                etype = ev.get("eventType", "")
+                pid = (ev.get("oneStoreProductId") or "").upper()
+                pname = ev.get("productName", pid)
+
+                if etype == "InstallCompleted":
+                    if pid not in completed:
+                        print(f"\r  [+] {pname}: Install complete!                    ")
+                        completed.add(pid)
+                elif etype == "Downloading":
+                    streamed = ev.get("streamedBytes") or 0
+                    total = ev.get("totalBytes") or 0
+                    if total > 0:
+                        pct = streamed / total * 100
+                        print(
+                            f"\r  [>] {pname}: {pct:5.1f}%  "
+                            f"({_xccs_format_size(streamed)} / {_xccs_format_size(total)})    ",
+                            end="", flush=True
+                        )
+                elif etype == "InstallStarted":
+                    print(f"\r  [>] {pname}: Install started...                    ",
+                          end="", flush=True)
+    except KeyboardInterrupt:
+        print("\n  [*] Stopped monitoring (install continues on console).")
+
+
+def _xccs_search_library(library):
+    """Interactive search/select from library items.
+
+    Returns list of selected product IDs, or empty list to cancel.
+    """
+    # Filter to items with valid product IDs
+    items = [x for x in library if x.get("productId") and len(x["productId"]) >= 8]
+    items.sort(key=lambda x: (x.get("title") or x.get("productId", "")).lower())
+
+    if not items:
+        print("  [!] No games found in library.")
+        return []
+
+    while True:
+        print()
+        print(f"  Your library ({len(items)} items). Type to search, or press Enter to browse:")
+        query = input("  > ").strip()
+        if query == "0":
+            return []
+
+        if query:
+            filtered = [x for x in items
+                        if query.lower() in (x.get("title") or "").lower()
+                        or query.upper() == x.get("productId", "").upper()]
+        else:
+            filtered = items
+
+        if not filtered:
+            print(f"  No matches for '{query}'. Try again or 0=back.")
+            continue
+
+        # Paginate — show 30 at a time
+        page = 0
+        page_size = 30
+        while True:
+            start = page * page_size
+            end = min(start + page_size, len(filtered))
+            page_items = filtered[start:end]
+            print()
+            for i, item in enumerate(page_items, start + 1):
+                title = (item.get("title") or item["productId"])[:40]
+                pid = item["productId"]
+                kind = item.get("productKind", "")
+                print(f"    [{i:>4}] {title:<42} ({pid})  {kind}")
+
+            total_pages = (len(filtered) + page_size - 1) // page_size
+            if total_pages > 1:
+                print(f"\n  Page {page + 1}/{total_pages}", end="")
+                if page < total_pages - 1:
+                    print("  [n]=next", end="")
+                if page > 0:
+                    print("  [p]=prev", end="")
+                print()
+
+            print()
+            sel = input(
+                f"  Select [1-{len(filtered)}, comma-separated / n=next / p=prev / 0=back]: "
+            ).strip()
+            if sel == "0":
+                return []
+            if sel.lower() == "n" and page < total_pages - 1:
+                page += 1
+                continue
+            if sel.lower() == "p" and page > 0:
+                page -= 1
+                continue
+
+            # Parse selection
+            selected = []
+            try:
+                for part in sel.split(","):
+                    part = part.strip()
+                    if "-" in part and part[0] != "-":
+                        a, b = part.split("-", 1)
+                        for n in range(int(a), int(b) + 1):
+                            if 1 <= n <= len(filtered):
+                                selected.append(filtered[n - 1]["productId"])
+                    else:
+                        n = int(part)
+                        if 1 <= n <= len(filtered):
+                            selected.append(filtered[n - 1]["productId"])
+            except ValueError:
+                print("  Invalid selection.")
+                continue
+
+            if selected:
+                # Deduplicate
+                seen = set()
+                unique = []
+                for pid in selected:
+                    if pid not in seen:
+                        seen.add(pid)
+                        unique.append(pid)
+                return unique
+            print("  No valid items selected.")
+
+
+def _xccs_input_product_ids():
+    """Prompt user for product IDs. Returns list of IDs or empty list."""
+    print()
+    print("  Enter product ID(s) (comma-separated, or one per line).")
+    print("  Blank line or 0 to finish:")
+    ids = []
+    while True:
+        line = input("  > ").strip()
+        if not line or line == "0":
+            break
+        for part in line.replace(",", " ").split():
+            part = part.strip().upper()
+            if part and len(part) >= 8:
+                ids.append(part)
+            elif part:
+                print(f"    [!] Skipping '{part}' — too short for a product ID.")
+    # Deduplicate
+    seen = set()
+    unique = []
+    for pid in ids:
+        if pid not in seen:
+            seen.add(pid)
+            unique.append(pid)
+    return unique
+
+
+def process_remote_tools(gamertag):
+    """Xbox Remote Tools — remote install/uninstall/list via XCCS API."""
+    print()
+    print(f"  [*] Loading auth for {gamertag}...")
+    xl_token, signer = _xccs_load_auth(gamertag)
+    print(f"  [+] Auth loaded (token: {len(xl_token)} chars)")
+
+    # Select console
+    console = _xccs_select_console(signer, xl_token)
+    if not console:
+        return
+    device_id, device_name, console_type = console
+    session_id = str(uuid.uuid4())
+
+    while True:
+        print()
+        print(f"  Xbox Remote Tools ({gamertag} → {device_name} [{console_type}]):")
+        print(f"    [1] Install owned game(s)")
+        print(f"    [2] Install entire library")
+        print(f"    [3] Install any game(s)")
+        print(f"    [4] Install hard delisted game(s)")
+        print(f"    [5] Uninstall game(s)")
+        print(f"    [6] List/export installed game(s)")
+        print(f"    [7] Monitor install queue")
+        print(f"    [0] Back")
+        print()
+        pick = input("  Pick: ").strip()
+
+        if pick == "0":
+            break
+
+        elif pick == "1":
+            # Install owned games — search user's library
+            lib_path = account_path(gamertag, "library.json")
+            if not os.path.isfile(lib_path):
+                ent_path = account_path(gamertag, "entitlements.json")
+                if os.path.isfile(ent_path):
+                    lib_path = ent_path
+                else:
+                    print("  [!] No library data found.")
+                    ans = input("  Run a collection scan now? [Y/n]: ").strip().lower()
+                    if ans in ("", "y", "yes"):
+                        try:
+                            process_account(gamertag)
+                        except Exception as scan_e:
+                            print(f"  [!] Scan failed: {scan_e}")
+                            continue
+                        # Re-check after scan
+                        lib_path = account_path(gamertag, "library.json")
+                        if not os.path.isfile(lib_path):
+                            print("  [!] Library still not available after scan.")
+                            continue
+                    else:
+                        continue
+            library = load_json(lib_path)
+            product_ids = _xccs_search_library(library)
+            if not product_ids:
+                continue
+            # Show what will be installed
+            lib_map = {x["productId"]: x for x in library}
+            print()
+            print(f"  Installing {len(product_ids)} game(s):")
+            for pid in product_ids:
+                title = lib_map.get(pid, {}).get("title", pid)
+                print(f"    • {title}  ({pid})")
+            print()
+            confirm = input("  Send install command? [y/N]: ").strip().lower()
+            if confirm != "y":
+                continue
+            op_id = _xccs_install(signer, xl_token, device_id, product_ids, session_id)
+            if op_id:
+                print(f"  [+] Install command sent (opId: {op_id[:8]}...)")
+                _xccs_monitor_install(signer, xl_token, device_id, product_ids)
+            else:
+                print("  [!] Install command failed.")
+
+        elif pick == "2":
+            # Install entire library — sub-menu by category
+            lib_path = account_path(gamertag, "library.json")
+            if not os.path.isfile(lib_path):
+                ent_path = account_path(gamertag, "entitlements.json")
+                if os.path.isfile(ent_path):
+                    lib_path = ent_path
+                else:
+                    print("  [!] No library data found.")
+                    ans = input("  Run a collection scan now? [Y/n]: ").strip().lower()
+                    if ans in ("", "y", "yes"):
+                        try:
+                            process_account(gamertag)
+                        except Exception as scan_e:
+                            print(f"  [!] Scan failed: {scan_e}")
+                            continue
+                        lib_path = account_path(gamertag, "library.json")
+                        if not os.path.isfile(lib_path):
+                            print("  [!] Library still not available after scan.")
+                            continue
+                    else:
+                        continue
+            library = load_json(lib_path)
+            lib_map = {x["productId"]: x for x in library}
+
+            # Categorize all library items
+            XBOX_PLATFORMS = {"Xbox One", "Xbox Series X|S", "Xbox 360"}
+            cats = {
+                "games": [],       # Xbox console games (not trials/demos)
+                "dlc": [],         # Durable / DLC
+                "apps": [],        # Apps
+                "trials": [],      # Trials and demos
+                "other": [],       # Everything else
+            }
+            for x in library:
+                pid = x.get("productId", "")
+                if not pid or len(pid) < 8:
+                    continue
+                kind = x.get("productKind", "")
+                platforms = set(x.get("platforms") or [])
+                is_trial = x.get("isTrial") or x.get("isDemo")
+
+                if kind == "Game" and platforms & XBOX_PLATFORMS:
+                    if is_trial:
+                        cats["trials"].append(pid)
+                    else:
+                        cats["games"].append(pid)
+                elif kind in ("Durable", "DLC"):
+                    cats["dlc"].append(pid)
+                elif kind == "App":
+                    cats["apps"].append(pid)
+                elif kind == "Game" and not (platforms & XBOX_PLATFORMS):
+                    cats["other"].append(pid)  # PC-only games
+                else:
+                    cats["other"].append(pid)
+
+            # Deduplicate each category
+            for k in cats:
+                cats[k] = list(dict.fromkeys(cats[k]))
+
+            print(f"\n  Library breakdown ({len(library)} total):")
+            print(f"    [a] Xbox Games:      {len(cats['games'])}")
+            print(f"    [b] DLC / Durables:  {len(cats['dlc'])}")
+            print(f"    [c] Apps:            {len(cats['apps'])}")
+            print(f"    [d] Trials / Demos:  {len(cats['trials'])}")
+            print(f"    [e] Other (PC-only): {len(cats['other'])}")
+            print(f"    [*] All of the above")
+            print(f"    [0] Back")
+            print()
+            cat_pick = input("  Install which category? ").strip().lower()
+            if cat_pick == "0":
+                continue
+
+            if cat_pick == "a":
+                selected_ids = cats["games"]
+                cat_label = "Xbox games"
+            elif cat_pick == "b":
+                selected_ids = cats["dlc"]
+                cat_label = "DLC / Durables"
+            elif cat_pick == "c":
+                selected_ids = cats["apps"]
+                cat_label = "Apps"
+            elif cat_pick == "d":
+                selected_ids = cats["trials"]
+                cat_label = "Trials / Demos"
+            elif cat_pick == "e":
+                selected_ids = cats["other"]
+                cat_label = "Other"
+            elif cat_pick == "*":
+                selected_ids = []
+                for k in ("games", "dlc", "apps", "trials", "other"):
+                    selected_ids.extend(cats[k])
+                selected_ids = list(dict.fromkeys(selected_ids))
+                cat_label = "all items"
+            else:
+                print("  Invalid selection.")
+                continue
+
+            if not selected_ids:
+                print(f"  [!] No {cat_label} in library.")
+                continue
+
+            # Check what's already installed
+            print(f"\n  [*] Checking what's already installed on {device_name}...")
+            installed = _xccs_list_installed(signer, xl_token, device_id)
+            installed_ids = set(
+                (app.get("oneStoreProductId") or "").upper() for app in installed
+            )
+            not_installed = [pid for pid in selected_ids
+                            if pid.upper() not in installed_ids]
+            print(f"  {cat_label}: {len(selected_ids)} total")
+            print(f"  Already installed: {len(selected_ids) - len(not_installed)}")
+            print(f"  Not yet installed: {len(not_installed)}")
+            if not not_installed:
+                print(f"\n  [+] All {cat_label} already installed!")
+                continue
+            print()
+            confirm = input(
+                f"  Send install command for {len(not_installed)} {cat_label}? [y/N]: "
+            ).strip().lower()
+            if confirm != "y":
+                continue
+
+            # Rolling queue — keep ~QUEUE_SIZE items active, wait for
+            # completions before adding more (console silently drops
+            # installs when the queue is full).
+            QUEUE_SIZE = 3
+            sent = 0
+            failed = 0
+            total = len(not_installed)
+            active = {}  # pid -> title (currently in queue)
+            completed = set()  # pids confirmed done
+            pending = list(not_installed)  # remaining to send
+            print()
+
+            def _fill_queue():
+                """Send installs until queue is full or nothing left."""
+                nonlocal sent, failed
+                while len(active) < QUEUE_SIZE and pending:
+                    pid = pending.pop(0)
+                    title = lib_map.get(pid, {}).get("title", pid)
+                    ni = total - len(pending)
+                    print(f"  [{ni}/{total}] {title[:50]}", end="", flush=True)
+                    op_id = _xccs_install(
+                        signer, xl_token, device_id, [pid], session_id
+                    )
+                    if op_id:
+                        print("  ✓")
+                        active[pid.upper()] = title
+                        sent += 1
+                    else:
+                        print("  FAIL")
+                        failed += 1
+
+            try:
+                _fill_queue()
+                # Poll until all done
+                while active or pending:
+                    time.sleep(3)
+                    events = _xccs_poll_install(signer, xl_token, device_id)
+                    for ev in events:
+                        ev_pid = (ev.get("oneStoreProductId") or "").upper()
+                        etype = ev.get("eventType", "")
+                        if ev_pid in active:
+                            if etype == "InstallCompleted":
+                                pname = active.pop(ev_pid)
+                                completed.add(ev_pid)
+                                print(f"  [+] {pname[:50]}: Installed")
+                            elif etype == "Downloading":
+                                streamed = ev.get("streamedBytes") or 0
+                                tb = ev.get("totalBytes") or 0
+                                pname = active[ev_pid]
+                                if tb > 0:
+                                    pct = streamed / tb * 100
+                                    print(
+                                        f"\r  [>] {pname[:40]:<40}  "
+                                        f"{pct:5.1f}%  "
+                                        f"({_xccs_format_size(streamed)} / "
+                                        f"{_xccs_format_size(tb)})    ",
+                                        end="", flush=True
+                                    )
+                    # Fill any freed slots
+                    if len(active) < QUEUE_SIZE and pending:
+                        print()  # newline after progress
+                        _fill_queue()
+                    # Safety: if active items haven't shown any events
+                    # for a while, they may have been silently installed
+                    # (some small items complete instantly). Check the
+                    # installed list periodically to clear them.
+                    if active and not events:
+                        cur_installed = _xccs_list_installed(
+                            signer, xl_token, device_id
+                        )
+                        cur_ids = set(
+                            (a.get("oneStoreProductId") or "").upper()
+                            for a in cur_installed
+                        )
+                        stale = [p for p in active if p in cur_ids]
+                        for p in stale:
+                            pname = active.pop(p)
+                            completed.add(p)
+                            print(f"  [+] {pname[:50]}: Installed (confirmed)")
+                        if len(active) < QUEUE_SIZE and pending:
+                            _fill_queue()
+            except KeyboardInterrupt:
+                remaining = len(pending) + len(active)
+                print(f"\n\n  [*] Stopped. {remaining} remaining.")
+            print(f"\n  [+] Done: {sent} sent, {len(completed)} confirmed, "
+                  f"{failed} failed — {total} total.")
+
+        elif pick == "3":
+            # Install any game — accept product IDs
+            print()
+            print("  Install any game by product ID.")
+            print("  The console must own or have Game Pass access to the title.")
+            product_ids = _xccs_input_product_ids()
+            if not product_ids:
+                continue
+            print()
+            print(f"  Sending install command for {len(product_ids)} game(s)...")
+            op_id = _xccs_install(signer, xl_token, device_id, product_ids, session_id)
+            if op_id:
+                print(f"  [+] Install command sent (opId: {op_id[:8]}...)")
+                _xccs_monitor_install(signer, xl_token, device_id, product_ids)
+            else:
+                print("  [!] Install command failed.")
+
+        elif pick == "4":
+            # Install hard delisted games
+            print()
+            print("  Hard delisted games can still be installed if you own them.")
+            print("  You need the 12-character product ID (e.g. 9NP1P1WFS0LB).")
+
+            # Show delisted games from user's library if available
+            lib_path = account_path(gamertag, "library.json")
+            if os.path.isfile(lib_path) and DEFAULT_FLAGS:
+                library = load_json(lib_path)
+                delisted = [
+                    x for x in library
+                    if DEFAULT_FLAGS.get(x.get("productId", ""), "").lower() in
+                    ("delisted", "hard delisted")
+                ]
+                if delisted:
+                    delisted.sort(key=lambda x: (x.get("title") or "").lower())
+                    print(f"\n  Delisted games in your library ({len(delisted)}):")
+                    for i, item in enumerate(delisted, 1):
+                        title = (item.get("title") or item["productId"])[:42]
+                        pid = item["productId"]
+                        flag = DEFAULT_FLAGS.get(pid, "")
+                        print(f"    [{i:>3}] {title:<44} ({pid})  [{flag}]")
+                    print()
+                    sel = input(
+                        f"  Select [1-{len(delisted)}, comma-sep] or Enter to type IDs: "
+                    ).strip()
+                    if sel and sel != "0":
+                        product_ids = []
+                        try:
+                            for part in sel.split(","):
+                                n = int(part.strip())
+                                if 1 <= n <= len(delisted):
+                                    product_ids.append(delisted[n - 1]["productId"])
+                        except ValueError:
+                            print("  Invalid selection.")
+                            continue
+                        if product_ids:
+                            print(f"\n  Sending install command for {len(product_ids)} game(s)...")
+                            op_id = _xccs_install(
+                                signer, xl_token, device_id, product_ids, session_id
+                            )
+                            if op_id:
+                                print(f"  [+] Install command sent (opId: {op_id[:8]}...)")
+                                _xccs_monitor_install(
+                                    signer, xl_token, device_id, product_ids
+                                )
+                            else:
+                                print("  [!] Install command failed.")
+                            continue
+
+            # Fall through to manual ID entry
+            product_ids = _xccs_input_product_ids()
+            if not product_ids:
+                continue
+            print(f"\n  Sending install command for {len(product_ids)} game(s)...")
+            op_id = _xccs_install(signer, xl_token, device_id, product_ids, session_id)
+            if op_id:
+                print(f"  [+] Install command sent (opId: {op_id[:8]}...)")
+                _xccs_monitor_install(signer, xl_token, device_id, product_ids)
+            else:
+                print("  [!] Install command failed.")
+
+        elif pick == "5":
+            # Uninstall games
+            print()
+            print(f"  [*] Fetching installed games on {device_name}...")
+            installed = _xccs_list_installed(signer, xl_token, device_id)
+            if not installed:
+                print("  [!] No installed games found (or failed to fetch).")
+                continue
+            # Sort by name
+            installed.sort(key=lambda x: (x.get("name") or "").lower())
+            total_size = sum(x.get("sizeInBytes") or 0 for x in installed)
+            print()
+            print(f"  Installed on {device_name} ({len(installed)} items,"
+                  f" {_xccs_format_size(total_size)} total):")
+            for i, app in enumerate(installed, 1):
+                name = (app.get("name") or app.get("oneStoreProductId", "?"))[:42]
+                size = _xccs_format_size(app.get("sizeInBytes"))
+                ctype = app.get("contentType", "")
+                print(f"    [{i:>3}] {name:<44} {size:>8}  {ctype}")
+            print()
+            sel = input(
+                f"  Select to uninstall [1-{len(installed)}, comma-sep / 0=back]: "
+            ).strip()
+            if sel == "0" or not sel:
+                continue
+            to_uninstall = []
+            try:
+                for part in sel.split(","):
+                    part = part.strip()
+                    if "-" in part and part[0] != "-":
+                        a, b = part.split("-", 1)
+                        for n in range(int(a), int(b) + 1):
+                            if 1 <= n <= len(installed):
+                                to_uninstall.append(installed[n - 1])
+                    else:
+                        n = int(part)
+                        if 1 <= n <= len(installed):
+                            to_uninstall.append(installed[n - 1])
+            except ValueError:
+                print("  Invalid selection.")
+                continue
+            if not to_uninstall:
+                print("  No valid items selected.")
+                continue
+            print()
+            print(f"  Will uninstall {len(to_uninstall)} item(s):")
+            for app in to_uninstall:
+                print(f"    • {app.get('name', '?')}  ({_xccs_format_size(app.get('sizeInBytes'))})")
+            print()
+            confirm = input(f"  Uninstall {len(to_uninstall)} item(s)? [y/N]: ").strip().lower()
+            if confirm != "y":
+                continue
+            for app in to_uninstall:
+                sid = app.get("storageDeviceId", "")
+                uid = app.get("uniqueId", "")
+                if not sid or not uid:
+                    print(f"    [!] {app.get('name', '?')}: missing storage/unique ID, skipping.")
+                    continue
+                instance_id = f"{{{sid}}}#{{{uid}}}"
+                name = app.get("name", "?")
+                print(f"  [*] Uninstalling {name}...")
+                op_id = _xccs_uninstall(
+                    signer, xl_token, device_id, instance_id, session_id
+                )
+                if not op_id:
+                    print(f"    [!] Failed to send uninstall command for {name}.")
+                    continue
+                # Poll until done
+                for _ in range(30):  # max ~60 seconds
+                    time.sleep(2)
+                    status = _xccs_poll_op(signer, xl_token, device_id, op_id)
+                    if status == "Succeeded":
+                        print(f"  [+] {name}: Uninstalled successfully.")
+                        break
+                    elif status == "Failed":
+                        print(f"  [!] {name}: Uninstall failed.")
+                        break
+                    elif status is None:
+                        # Also check install events for UninstallCompleted
+                        events = _xccs_poll_install(signer, xl_token, device_id)
+                        for ev in events:
+                            if ev.get("eventType") == "UninstallCompleted":
+                                print(f"  [+] {name}: Uninstalled successfully.")
+                                break
+                        else:
+                            continue
+                        break
+                else:
+                    print(f"  [?] {name}: Timed out waiting for uninstall status.")
+
+        elif pick == "6":
+            # List/export installed games
+            print()
+            print(f"  [*] Fetching installed games on {device_name}...")
+            installed = _xccs_list_installed(signer, xl_token, device_id)
+            if not installed:
+                print("  [!] No installed games found (or failed to fetch).")
+                continue
+            installed.sort(key=lambda x: (x.get("name") or "").lower())
+            total_size = sum(x.get("sizeInBytes") or 0 for x in installed)
+            print()
+            print(f"  Installed on {device_name} ({len(installed)} items):")
+            print(f"  {'#':>4}  {'Title':<42}  {'Size':>8}  {'Type':<8}  Installed")
+            print(f"  {'─' * 4}  {'─' * 42}  {'─' * 8}  {'─' * 8}  {'─' * 10}")
+            for i, app in enumerate(installed, 1):
+                name = (app.get("name") or app.get("oneStoreProductId", "?"))[:42]
+                size = _xccs_format_size(app.get("sizeInBytes"))
+                ctype = (app.get("contentType") or "")[:8]
+                itime = (app.get("installTime") or "")[:10]
+                print(f"  {i:>4}  {name:<42}  {size:>8}  {ctype:<8}  {itime}")
+            print()
+            print(f"  Total: {len(installed)} items, {_xccs_format_size(total_size)}")
+            print()
+            export = input("  Export to JSON? [y/N]: ").strip().lower()
+            if export == "y":
+                safe_name = device_name.replace(" ", "_").replace("/", "_")
+                export_path = account_path(gamertag, f"installed_{safe_name}.json")
+                export_data = []
+                for app in installed:
+                    export_data.append({
+                        "productId": app.get("oneStoreProductId", ""),
+                        "titleId": app.get("titleId"),
+                        "name": app.get("name", ""),
+                        "contentType": app.get("contentType", ""),
+                        "sizeInBytes": app.get("sizeInBytes"),
+                        "sizeFormatted": _xccs_format_size(app.get("sizeInBytes")),
+                        "installTime": app.get("installTime", ""),
+                        "updateTime": app.get("updateTime", ""),
+                        "lastActiveTime": app.get("lastActiveTime", ""),
+                        "version": app.get("version"),
+                        "storageDeviceId": app.get("storageDeviceId", ""),
+                    })
+                save_json(export_path, export_data)
+                print(f"  [+] Exported to {export_path}")
+
+        elif pick == "7":
+            # Monitor install queue
+            print()
+            print(f"  [*] Taking baseline snapshot of {device_name}...")
+            # Snapshot current state so we only show changes
+            baseline = {}  # pid -> (eventType, streamedBytes)
+            events = _xccs_poll_install(signer, xl_token, device_id)
+            downloading = []
+            queued_count = 0
+            if events:
+                for ev in events:
+                    pid = (ev.get("oneStoreProductId") or "").upper()
+                    etype = ev.get("eventType", "")
+                    streamed = ev.get("streamedBytes") or 0
+                    baseline[pid] = (etype, streamed)
+                    if etype == "Downloading":
+                        pname = ev.get("productName", pid)
+                        total = ev.get("totalBytes") or 0
+                        pct = (streamed / total * 100) if total else 0
+                        downloading.append(
+                            f"    {pname[:42]:<42}  "
+                            f"{pct:5.1f}%  "
+                            f"({_xccs_format_size(streamed)} / "
+                            f"{_xccs_format_size(total)})"
+                        )
+                    elif etype in ("InstallStarted",):
+                        queued_count += 1
+            if downloading or queued_count:
+                print(f"\n  Current activity:")
+                for dl in downloading:
+                    print(dl)
+                if queued_count:
+                    print(f"    + {queued_count} queued")
+            else:
+                print("  No active installs.")
+            print(f"\n  Monitoring for changes (Ctrl+C to stop)...\n")
+            try:
+                while True:
+                    time.sleep(2)
+                    events = _xccs_poll_install(signer, xl_token, device_id)
+                    if not events:
+                        continue
+                    for ev in events:
+                        pid = (ev.get("oneStoreProductId") or "").upper()
+                        etype = ev.get("eventType", "")
+                        pname = ev.get("productName", pid)
+                        streamed = ev.get("streamedBytes") or 0
+                        prev_type, prev_bytes = baseline.get(pid, (None, 0))
+
+                        if etype == "Downloading":
+                            total = ev.get("totalBytes") or 0
+                            if total > 0:
+                                pct = streamed / total * 100
+                                print(
+                                    f"\r  [>] {pname[:40]:<40}  "
+                                    f"{pct:5.1f}%  "
+                                    f"({_xccs_format_size(streamed)} / "
+                                    f"{_xccs_format_size(total)})    ",
+                                    end="", flush=True
+                                )
+                            baseline[pid] = (etype, streamed)
+                        elif etype == "InstallCompleted" and prev_type != "InstallCompleted":
+                            baseline[pid] = (etype, 0)
+                            print(f"\r  [+] {pname}: Installed                              ")
+                        elif etype == "InstallStarted" and prev_type != "InstallStarted":
+                            baseline[pid] = (etype, 0)
+                            print(f"\r  [>] {pname}: Started                                ")
+                        elif etype == "UninstallCompleted" and prev_type != "UninstallCompleted":
+                            baseline[pid] = (etype, 0)
+                            print(f"\r  [-] {pname}: Uninstalled                            ")
+            except KeyboardInterrupt:
+                print("\n\n  [*] Stopped monitoring.")
+
+        else:
+            print("  Invalid option.")
+
+
+# ===========================================================================
+# Microsoft Order History
+# ===========================================================================
+
+ORDER_HISTORY_FILE = "order_history.json"
+ORDER_HISTORY_AUTH_FILE = "order_history_auth.json"
+
+def _oh_extract_auth_from_har(har_path):
+    """Extract account.microsoft.com auth cookies and CSRF token from a HAR file.
+
+    Returns dict with 'cookies' (str) and 'csrf_token' (str), or None.
+    """
+    print(f"[*] Reading HAR file: {har_path}")
+    with open(har_path, "r", encoding="utf-8") as f:
+        har = json.load(f)
+
+    entries = har.get("log", {}).get("entries", [])
+    cookies_str = None
+    csrf_token = None
+
+    # Look for a billing/orders/list request (has both cookies and CSRF)
+    for e in entries:
+        url = e.get("request", {}).get("url", "")
+        if "billing/orders/list" in url or "billing/orders?" in url:
+            for h in e["request"].get("headers", []):
+                if h["name"].lower() == "cookie" and not cookies_str:
+                    cookies_str = h["value"]
+                elif h["name"] == "__RequestVerificationToken" and not csrf_token:
+                    csrf_token = h["value"]
+            if cookies_str and csrf_token:
+                break
+
+    # If no billing/orders/list found, try the initial page load for cookies
+    # and extract CSRF from the HTML response body
+    if not cookies_str:
+        for e in entries:
+            url = e.get("request", {}).get("url", "")
+            if "account.microsoft.com" in url and url.count("/") <= 4:
+                for h in e["request"].get("headers", []):
+                    if h["name"].lower() == "cookie":
+                        cookies_str = h["value"]
+                        break
+                if cookies_str:
+                    break
+
+    if not csrf_token:
+        for e in entries:
+            url = e.get("request", {}).get("url", "")
+            if "account.microsoft.com/billing" in url:
+                body = e.get("response", {}).get("content", {}).get("text", "")
+                if body:
+                    m = re.search(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', body)
+                    if m:
+                        csrf_token = m.group(1)
+                        break
+
+    if not cookies_str:
+        print("[!] Could not find account.microsoft.com cookies in HAR file.")
+        return None
+    if not csrf_token:
+        print("[!] Could not find __RequestVerificationToken in HAR file.")
+        return None
+
+    # Extract key cookie names for display
+    cookie_names = [c.split("=", 1)[0] for c in cookies_str.split("; ")]
+    has_amc = any(n in cookie_names for n in ("AMCSecAuth", "AMCSecAuthJWT"))
+    print(f"[+] Extracted {len(cookie_names)} cookies (AMCSecAuth present: {has_amc})")
+    print(f"[+] CSRF token: {csrf_token[:40]}...")
+
+    return {"cookies": cookies_str, "csrf_token": csrf_token, "extracted_at": time.time()}
+
+
+def _oh_save_auth(gamertag, auth_data):
+    """Save order history auth data to the account directory."""
+    path = account_path(gamertag, ORDER_HISTORY_AUTH_FILE)
+    with open(path, "w") as f:
+        json.dump(auth_data, f, indent=2)
+    print(f"[+] Auth saved to {path}")
+
+
+def _oh_load_auth(gamertag):
+    """Load order history auth data. Returns dict or None."""
+    path = account_path(gamertag, ORDER_HISTORY_AUTH_FILE)
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def _oh_fetch_page(cookies_str, csrf_token, period="AllTime", continuation=None):
+    """Fetch one page of order history. Returns (orders, continuation_token)."""
+    params = {
+        "period": period,
+        "orderTypeFilter": "All",
+        "filterChangeCount": "0",
+        "isInD365Orders": "true",
+        "isPiDetailsRequired": "true",
+        "timeZoneOffsetMinutes": "0",
+    }
+    if continuation:
+        params["continuationToken"] = continuation
+
+    url = "https://account.microsoft.com/billing/orders/list?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url)
+    req.add_header("Cookie", cookies_str)
+    req.add_header("Accept", "application/json, text/plain, */*")
+    req.add_header("X-Requested-With", "XMLHttpRequest")
+    req.add_header("__RequestVerificationToken", csrf_token)
+    req.add_header("User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    req.add_header("Referer", "https://account.microsoft.com/billing/orders?lang=en-GB")
+
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        body = resp.read().decode("utf-8", errors="replace")
+
+    # Response is base64-encoded JSON
+    try:
+        padded = body.strip()
+        missing = len(padded) % 4
+        if missing:
+            padded += "=" * (4 - missing)
+        decoded = json.loads(base64.b64decode(padded).decode("utf-8"))
+    except Exception:
+        decoded = json.loads(body)
+
+    orders = decoded.get("orders", [])
+    ct = decoded.get("continuationToken", "")
+    return orders, ct
+
+
+def _oh_flatten_order(order):
+    """Flatten an order dict into a simplified record for output."""
+    items = order.get("items", [])
+    flat_items = []
+    for item in items:
+        flat_items.append({
+            "title": item.get("localTitle", ""),
+            "productId": item.get("productId", ""),
+            "type": item.get("itemTypeName", ""),
+            "status": item.get("localStatus", item.get("itemState", "")),
+            "isSubscription": item.get("isSubscription", False),
+            "isPurchased": item.get("isPurchased", False),
+            "isCanceled": item.get("isCanceled", False),
+            "isRefundEligible": item.get("isRefundEligible", False),
+            "isPreorder": item.get("isPreorder", False),
+            "isGift": item.get("isGift", False),
+            "quantity": item.get("quantity", 1),
+            "totalListPrice": item.get("totalListPrice", ""),
+            "totalAmountWithoutTax": item.get("totalAmountWithoutTax", ""),
+            "logoLink": item.get("logoLink", ""),
+            "productLink": item.get("productOrParentLink", ""),
+            "partnerName": item.get("partnerName", ""),
+            "description": item.get("description", ""),
+            "debugData": item.get("debugData", ""),
+            "redemptionLinkText": item.get("redemptionLinkText", ""),
+            "tokenDetails": item.get("tokenDetails", []),
+            "fees": item.get("fees", []),
+        })
+
+    ledger = order.get("ledgerItems", [])
+    pi = order.get("paymentInstruments", [])
+
+    return {
+        "orderId": order.get("orderId", ""),
+        "vanityOrderId": order.get("vanityOrderId", ""),
+        "date": order.get("localSubmittedDate", ""),
+        "total": order.get("localTotal", ""),
+        "totalDecimal": order.get("localTotalInDecimal"),
+        "market": order.get("market", ""),
+        "currency": order.get("currencyInfo", {}).get("currencyCode", ""),
+        "hasDigitalItem": order.get("hasDigitalItem", False),
+        "hasPhysicalItem": order.get("hasPhysicalItem", False),
+        "hasPreorder": order.get("hasPreorder", False),
+        "hasMultipleItems": order.get("hasMultipleItems", False),
+        "controlsOrderType": order.get("controlsOrderType"),
+        "supportLinkId": order.get("supportLinkId", ""),
+        "daysFromPurchase": order.get("daysFromPurchase"),
+        "items": flat_items,
+        "ledger": ledger,
+        "paymentInstruments": [{
+            "name": p.get("name", ""),
+            "type": p.get("type", ""),
+            "lastFourDigits": p.get("lastFourDigits", ""),
+        } for p in pi],
+        "address": order.get("address", {}),
+        "taxDocumentUrls": order.get("taxDocumentUrls", []),
+        # Raw fields not shown on microsoft.com
+        "cidHex": order.get("cidHex", ""),
+        "isEUMarket": order.get("isEUMarket", False),
+        "_raw_items": items,  # Keep full raw item data
+    }
+
+
+def fetch_order_history(gamertag, auth_data, period="AllTime"):
+    """Fetch full order history using stored auth. Returns list of order dicts."""
+    cookies_str = auth_data["cookies"]
+    csrf_token = auth_data["csrf_token"]
+
+    all_orders = []
+    continuation = None
+    page = 0
+    empty_run = 0
+
+    print(f"[*] Fetching order history (period={period})...")
+
+    while True:
+        try:
+            orders, ct = _oh_fetch_page(cookies_str, csrf_token, period, continuation)
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                print(f"\n[!] Session expired (HTTP 401). Please capture a new HAR file.")
+                break
+            elif e.code == 412:
+                print(f"\n[!] Invalid period '{period}'. Falling back to 'AllTime'.")
+                if period != "AllTime":
+                    period = "AllTime"
+                    continue
+                break
+            else:
+                print(f"\n[!] HTTP {e.code} on page {page + 1}")
+                break
+        except Exception as e:
+            print(f"\n[!] Error on page {page + 1}: {e}")
+            break
+
+        page += 1
+        all_orders.extend(orders)
+
+        if orders:
+            if empty_run > 0:
+                print()
+                empty_run = 0
+            for o in orders:
+                date = o.get("localSubmittedDate", "?")
+                titles = [i.get("localTitle", "?") for i in o.get("items", [])]
+                total = o.get("localTotal", "")
+                title_str = " | ".join(titles)[:60]
+                print(f"    {date:>22}  {total:>12}  {title_str}")
+        else:
+            empty_run += 1
+            print(f"\r  [.] Page {page} ({len(all_orders)} orders so far, scanning...)", end="", flush=True)
+
+        if not ct:
+            if empty_run > 0:
+                print()
+            break
+
+        continuation = ct
+
+    print(f"\n[+] Fetched {len(all_orders)} orders across {page} pages")
+    return all_orders
+
+
+def _oh_cdp_connect():
+    """Launch Edge with CDP, navigate to billing page, return (ws_socket, cdp_send_fn) or (None, None)."""
+    import websocket as ws_mod
+    edge_exe = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+    if not os.path.isfile(edge_exe):
+        edge_exe = r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+    if not os.path.isfile(edge_exe):
+        print("  [!] Microsoft Edge not found.")
+        return None, None
+
+    edge_profile = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "User Data")
+    if not os.path.isdir(edge_profile):
+        print("  [!] Edge user profile not found.")
+        return None, None
+
+    CDP_PORT = 9222
+    billing_url = "https://account.microsoft.com/billing/orders?period=AllTime&lang=en-GB"
+
+    # Kill any running Edge — CDP flags only apply on fresh launch
+    try:
+        check = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=5)
+        if "msedge.exe" in check.stdout:
+            subprocess.run(["taskkill", "/F", "/IM", "msedge.exe"],
+                           capture_output=True, timeout=10)
+            time.sleep(2)
+    except Exception:
+        pass
+
+    # Prevent Edge from restoring previous tabs (it thinks it "crashed")
+    # Remove session restore files from the default profile
+    for sess_file in ("Last Session", "Last Tabs", "Current Session", "Current Tabs"):
+        p = os.path.join(edge_profile, "Default", sess_file)
+        try:
+            if os.path.isfile(p):
+                os.remove(p)
+        except OSError:
+            pass
+
+    print()
+    print("  [*] Launching Edge to Microsoft billing page...")
+    print("      If you're not already signed in, log in when the page opens.")
+    print("      Once you see your order history, come back here and press Enter.")
+    print()
+
+    proc = subprocess.Popen([
+        edge_exe,
+        f"--remote-debugging-port={CDP_PORT}",
+        "--remote-allow-origins=*",
+        f"--user-data-dir={edge_profile}",
+        "--no-first-run",
+        "--disable-session-crashed-bubble",
+        "--hide-crash-restore-bubble",
+        billing_url,
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    input("  Press Enter once the billing page has loaded... ")
+
+    # Connect to CDP
+    print("  [*] Connecting to Edge CDP...")
+    try:
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{CDP_PORT}/json", timeout=5)
+        tabs = json.loads(resp.read().decode())
+    except Exception as e:
+        print(f"  [!] Cannot connect to Edge CDP: {e}")
+        return None, None
+
+    # Find the billing tab
+    ws_url = None
+    for tab in tabs:
+        tab_url = tab.get("url", "")
+        if "account.microsoft.com" in tab_url and "billing" in tab_url:
+            ws_url = tab.get("webSocketDebuggerUrl")
+            break
+    if not ws_url:
+        for tab in tabs:
+            if "account.microsoft.com" in tab.get("url", ""):
+                ws_url = tab.get("webSocketDebuggerUrl")
+                break
+    if not ws_url:
+        print("  [!] Could not find billing tab. Available tabs:")
+        for tab in tabs:
+            print(f"      - {tab.get('url', '?')}")
+        return None, None
+
+    print(f"  [*] Found billing tab, fetching orders via browser...")
+
+    try:
+        sock = ws_mod.create_connection(ws_url, timeout=30)
+    except Exception as e:
+        print(f"  [!] WebSocket connection failed: {e}")
+        return None, None
+
+    msg_id = [1]  # mutable for closure
+
+    def cdp_send(method, params=None, timeout=60):
+        msg = {"id": msg_id[0], "method": method}
+        if params:
+            msg["params"] = params
+        sock.send(json.dumps(msg))
+        cur_id = msg_id[0]
+        msg_id[0] += 1
+        sock.settimeout(timeout)
+        while True:
+            raw = sock.recv()
+            data = json.loads(raw)
+            if data.get("id") == cur_id:
+                return data
+
+    return sock, cdp_send
+
+
+def _oh_fetch_all_via_cdp(sock, cdp_send):
+    """Fetch all order history in a single JS execution inside Edge.
+
+    Runs the entire pagination loop as one async JS function in the browser,
+    so there's only one CDP round-trip instead of hundreds. The browser
+    handles all auth natively.
+
+    Returns list of raw order dicts.
+    """
+    # Continuation tokens are predictable: M{N}L0R0D0 where N = 0, 10, 20...
+    # Blast them all in parallel instead of sequential pagination.
+    JS_FETCH_ALL = r"""
+    (async () => {
+        const csrf = document.querySelector('input[name=__RequestVerificationToken]')?.value
+                  || document.querySelector('meta[name=__RequestVerificationToken]')?.content
+                  || '';
+        if (!csrf) {
+            window.__xct = {error: 'no_csrf', done: true, orders: [], pages: 0};
+            return;
+        }
+
+        window.__xct = {done: false, orders: [], pages: 0, error: null};
+
+        const BATCH = 50;  // parallel requests per wave
+        const STEP = 10;   // continuation token increment
+
+        async function fetchPage(offset) {
+            const params = new URLSearchParams({
+                period: 'AllTime',
+                orderTypeFilter: 'All',
+                filterChangeCount: '0',
+                isInD365Orders: 'true',
+                isPiDetailsRequired: 'true',
+                timeZoneOffsetMinutes: '0',
+            });
+            if (offset > 0) params.set('continuationToken', 'M' + offset + 'L0R0D0');
+
+            const resp = await fetch('/billing/orders/list?' + params.toString(), {
+                headers: {
+                    'Accept': 'application/json, text/plain, */*',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    '__RequestVerificationToken': csrf,
+                },
+                credentials: 'same-origin',
+            });
+
+            if (!resp.ok) return {offset, orders: [], hasContinuation: false, error: resp.status};
+
+            const text = await resp.text();
+            let data;
+            try {
+                let padded = text.trim();
+                const missing = padded.length % 4;
+                if (missing) padded += '='.repeat(4 - missing);
+                data = JSON.parse(atob(padded));
+            } catch(e) {
+                try { data = JSON.parse(text); } catch(e2) {
+                    return {offset, orders: [], hasContinuation: false};
+                }
+            }
+            return {
+                offset,
+                orders: data.orders || [],
+                hasContinuation: !!data.continuationToken,
+            };
+        }
+
+        let startOffset = 0;
+        while (true) {
+            // Fire a batch of parallel requests
+            const promises = [];
+            for (let i = 0; i < BATCH; i++) {
+                promises.push(fetchPage(startOffset + i * STEP));
+            }
+
+            let results;
+            try {
+                results = await Promise.all(promises);
+            } catch(e) {
+                window.__xct.error = 'batch_fail: ' + e.message;
+                break;
+            }
+
+            let batchOrders = 0;
+            let anyHasContinuation = false;
+            for (const r of results) {
+                if (r.error) {
+                    window.__xct.error = 'HTTP ' + r.error + ' at offset ' + r.offset;
+                    window.__xct.done = true;
+                    return;
+                }
+                if (r.orders.length > 0) {
+                    window.__xct.orders.push(...r.orders);
+                    batchOrders += r.orders.length;
+                }
+                if (r.hasContinuation) anyHasContinuation = true;
+                window.__xct.pages++;
+            }
+
+            document.title = 'XCT: ' + window.__xct.orders.length + ' orders (' + window.__xct.pages + ' pages)';
+
+            // If no page in this batch had a continuation token, we've reached the end
+            if (!anyHasContinuation) break;
+
+            startOffset += BATCH * STEP;
+        }
+
+        window.__xct.done = true;
+        document.title = 'XCT: Done - ' + window.__xct.orders.length + ' orders';
+    })()
+    """
+
+    print("  [*] Fetching all order history (parallel, 50 pages per batch)...")
+
+    # Fire and forget
+    cdp_send("Runtime.evaluate", {
+        "expression": JS_FETCH_ALL,
+        "awaitPromise": False,
+    }, timeout=10)
+
+    # Poll for completion
+    last_count = -1
+    while True:
+        time.sleep(3)
+        try:
+            poll = cdp_send("Runtime.evaluate", {
+                "expression": "JSON.stringify({done: window.__xct?.done, count: window.__xct?.orders?.length || 0, pages: window.__xct?.pages || 0, error: window.__xct?.error})",
+                "returnByValue": True,
+            }, timeout=10)
+            val = poll.get("result", {}).get("result", {}).get("value", "{}")
+            status = json.loads(val)
+        except Exception:
+            continue
+
+        count = status.get("count", 0)
+        pages = status.get("pages", 0)
+        done = status.get("done", False)
+        error = status.get("error")
+
+        if count != last_count:
+            print(f"\r  [*] {count} orders ({pages} pages scanned)...   ", end="", flush=True)
+            last_count = count
+
+        if done:
+            print()
+            if error:
+                print(f"  [!] Error: {error}")
+                if count > 0:
+                    print(f"  [*] Recovered {count} orders before error")
+            else:
+                print(f"  [+] Complete: {count} orders across {pages} pages")
+            break
+
+    # Extract the orders
+    extract_resp = cdp_send("Runtime.evaluate", {
+        "expression": "JSON.stringify(window.__xct?.orders || [])",
+        "returnByValue": True,
+    }, timeout=60)
+
+    orders_json = extract_resp.get("result", {}).get("result", {}).get("value", "[]")
+    try:
+        all_orders = json.loads(orders_json)
+    except json.JSONDecodeError:
+        print("  [!] Failed to parse orders — data may be too large for single transfer")
+        all_orders = []
+
+    # Deduplicate by order ID
+    seen = set()
+    unique_orders = []
+    for o in all_orders:
+        oid = o.get("orderId", "")
+        if oid and oid in seen:
+            continue
+        seen.add(oid)
+        unique_orders.append(o)
+
+    if len(unique_orders) < len(all_orders):
+        print(f"  [*] Deduplicated: {len(all_orders)} -> {len(unique_orders)} orders")
+
+    # Print what we got
+    for o in unique_orders:
+        date = o.get("localSubmittedDate", "?")
+        titles = [i.get("localTitle", "?") for i in o.get("items", [])]
+        total = o.get("localTotal", "")
+        title_str = " | ".join(titles)[:60]
+        print(f"    {date:>22}  {total:>12}  {title_str}")
+
+    print(f"\n[+] Fetched {len(unique_orders)} orders")
+    return unique_orders
+
+
+def process_order_history():
+    """Interactive order history fetch and export."""
+    accounts = load_accounts()
+    gamertags = list(accounts.keys())
+    if not gamertags:
+        print("  [!] No gamertags configured. Use [c] to add one first.")
+        return
+
+    if len(gamertags) == 1:
+        gamertag = gamertags[0]
+    else:
+        print()
+        for i, gt in enumerate(gamertags, 1):
+            print(f"    [{i}] {gt}")
+        print()
+        pick = input(f"  Which account? [1-{len(gamertags)} / 0=back]: ").strip()
+        if pick == "0":
+            return
+        try:
+            idx = int(pick) - 1
+            if 0 <= idx < len(gamertags):
+                gamertag = gamertags[idx]
+            else:
+                print("  Invalid selection.")
+                return
+        except ValueError:
+            print("  Invalid selection.")
+            return
+
+    set_account_paths(gamertag)
+    print()
+
+    has_saved = os.path.isfile(account_path(gamertag, ORDER_HISTORY_FILE))
+
+    print(f"    [1] Fetch via Edge (opens browser, fetches directly)")
+    print(f"    [2] Fetch via saved cookies (HAR import)")
+    if has_saved:
+        print(f"    [3] View saved order history")
+    print(f"    [0] Back")
+    print()
+    choice = input("  Pick: ").strip()
+
+    if choice == "0":
+        return
+    elif choice == "3" and has_saved:
+        _oh_view_history(gamertag)
+        return
+    elif choice == "1":
+        # Fetch directly via Edge CDP — no cookie extraction needed
+        sock, cdp_send = _oh_cdp_connect()
+        if not sock:
+            return
+        try:
+            raw_orders = _oh_fetch_all_via_cdp(sock, cdp_send)
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+    elif choice == "2":
+        # HAR-based cookie import fallback
+        auth = _oh_load_auth(gamertag)
+        if auth:
+            age_hrs = (time.time() - auth.get("extracted_at", 0)) / 3600
+            print(f"  [i] Existing session found ({age_hrs:.1f} hours old)")
+            ans = input("  Use existing session? [Y/n]: ").strip().lower()
+            if ans in ("n", "no"):
+                auth = None
+
+        if not auth:
+            har_files = sorted(glob.glob(os.path.join(os.getcwd(), "*.har")))
+            if not har_files:
+                har_files = sorted(glob.glob(os.path.join(os.getcwd(), "**", "*.har"), recursive=True))
+            if not har_files:
+                print("\n  [!] No .har files found in current directory.")
+                har_path = input("  Enter path to HAR file: ").strip().strip('"')
+                if not har_path or not os.path.isfile(har_path):
+                    print("  [!] File not found.")
+                    return
+            elif len(har_files) == 1:
+                har_path = har_files[0]
+                print(f"\n  Found: {os.path.basename(har_path)}")
+            else:
+                print()
+                for i, hf in enumerate(har_files, 1):
+                    print(f"    [{i}] {os.path.basename(hf)}")
+                print()
+                hp = input(f"  Which HAR file? [1-{len(har_files)}]: ").strip()
+                try:
+                    har_path = har_files[int(hp) - 1]
+                except (ValueError, IndexError):
+                    print("  Invalid selection.")
+                    return
+            print()
+            auth = _oh_extract_auth_from_har(har_path)
+            if not auth:
+                return
+            _oh_save_auth(gamertag, auth)
+
+        print()
+        raw_orders = fetch_order_history(gamertag, auth)
+    else:
+        print("  Invalid selection.")
+        return
+
+    if not raw_orders:
+        print("[!] No orders found.")
+        return
+
+    # Flatten and save
+    orders = [_oh_flatten_order(o) for o in raw_orders]
+
+    out_path = account_path(gamertag, ORDER_HISTORY_FILE)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(orders, f, indent=2, ensure_ascii=False)
+    print(f"[+] Saved {len(orders)} orders to {out_path}")
+
+    # Summary
+    _oh_print_summary(orders)
+
+
+def _oh_view_history(gamertag):
+    """View previously saved order history."""
+    set_account_paths(gamertag)
+    path = account_path(gamertag, ORDER_HISTORY_FILE)
+    if not os.path.isfile(path):
+        print(f"\n  [!] No saved order history for {gamertag}.")
+        print(f"      Use option [2] to import a HAR file first.")
+        return
+
+    with open(path, "r", encoding="utf-8") as f:
+        orders = json.load(f)
+
+    print(f"\n  Loaded {len(orders)} orders from {os.path.basename(path)}")
+    _oh_print_summary(orders)
+
+
+def _oh_print_summary(orders):
+    """Print a summary of order history."""
+    if not orders:
+        return
+
+    # Count by type
+    type_counts = {}
+    total_spend = 0
+    currencies = set()
+    date_range = [None, None]
+
+    for o in orders:
+        for item in o.get("items", []):
+            t = item.get("type", "Unknown")
+            type_counts[t] = type_counts.get(t, 0) + 1
+        if o.get("totalDecimal") is not None:
+            total_spend += o["totalDecimal"]
+        if o.get("currency"):
+            currencies.add(o["currency"])
+        d = o.get("date", "")
+        if d:
+            if date_range[0] is None:
+                date_range[0] = d
+            date_range[1] = d
+
+    print(f"\n  ┌─────────────────────────────────────────────────────┐")
+    print(f"  │  Order History Summary                              │")
+    print(f"  ├─────────────────────────────────────────────────────┤")
+    print(f"  │  Total orders:    {len(orders):>6}                          │")
+    total_items = sum(len(o.get("items", [])) for o in orders)
+    print(f"  │  Total items:     {total_items:>6}                          │")
+    if currencies:
+        cur = ", ".join(sorted(currencies))
+        print(f"  │  Currencies:      {cur:<34}│")
+    if total_spend > 0:
+        print(f"  │  Total spend:     {total_spend:>10.2f}                      │")
+    if date_range[0]:
+        print(f"  │  Date range:      {date_range[0]:<34}│")
+        if date_range[1] and date_range[1] != date_range[0]:
+            print(f"  │                    to {date_range[1]:<31}│")
+    print(f"  ├─────────────────────────────────────────────────────┤")
+    print(f"  │  By type:                                          │")
+    for t, c in sorted(type_counts.items(), key=lambda x: -x[1]):
+        print(f"  │    {t:<30} {c:>6}              │")
+    print(f"  └─────────────────────────────────────────────────────┘")
+
+    # Show latest 10 orders
+    print(f"\n  Latest orders:")
+    for o in orders[:10]:
+        titles = [i.get("title", "?") for i in o.get("items", [])]
+        title_str = " | ".join(titles)[:50]
+        total = o.get("total", "")
+        date = o.get("date", "?")
+        print(f"    {date:>22}  {total:>12}  {title_str}")
+    if len(orders) > 10:
+        print(f"    ... and {len(orders) - 10} more")
+
+    print()
+    input("  Press Enter to continue...")
+
+
+# ===========================================================================
 # Unified Interactive Menu
 # ===========================================================================
 
@@ -20203,6 +22338,14 @@ def interactive_menu():
         print("    [r] Windows Store Reset Tool")
         print("    [w] Game Pass Free Trial Button Fixer (Chrome Extension Install)")
         print()
+        if gamertags:
+            print("  Xbox Remote Tools:")
+            print("    [m] Xbox Remote Tools")
+            print()
+        if gamertags:
+            print("  Account:")
+            print("    [v] Microsoft Order History")
+            print()
         print("    [0] Quit")
         print("    [?] Credits")
         print()
@@ -20604,6 +22747,20 @@ def interactive_menu():
             except Exception as _e:
                 print(f"  [!] Error: {_e}")
             continue
+        elif pu == "m":
+            if _no_accts:
+                print("  [!] No gamertags configured. Use [c] to add one first.")
+                continue
+            gt = _pick_account(gamertags, "Which account?", allow_all=False)
+            if not gt:
+                continue
+            _t0 = time.time()
+            try:
+                process_remote_tools(gt)
+            except Exception as _e:
+                _op_summary("Xbox Remote Tools", success=False,
+                            detail=str(_e), elapsed=time.time() - _t0)
+            continue
         elif pu == "s":
             _t0 = time.time()
             try:
@@ -20627,6 +22784,17 @@ def interactive_menu():
                 _op_summary("PC CDN Scrape", detail="Done", elapsed=time.time() - _t0)
             except Exception as _e:
                 _op_summary("PC CDN Scrape", success=False, detail=str(_e), elapsed=time.time() - _t0)
+            continue
+        elif pu == "v":
+            if _no_accts:
+                print("  [!] No gamertags configured. Use [c] to add one first.")
+                continue
+            _t0 = time.time()
+            try:
+                process_order_history()
+                _op_summary("Order History", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("Order History", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
         else:
             try:
