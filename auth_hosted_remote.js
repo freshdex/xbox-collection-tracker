@@ -134,6 +134,8 @@ function _updateAuthUI(){
       xboxBtn.onclick=_xctXboxAuth;xboxBtn.style.display=''}
     var adminTab=document.getElementById('tab-admin');
     if(adminTab){adminTab.style.display=_xctUser.toLowerCase()==='freshdex'?'':'none'}
+    var settingsTab=document.getElementById('tab-settings');
+    if(settingsTab){settingsTab.style.display='';if(typeof _loadPriceSettings==='function')_loadPriceSettings()}
   }else{
     userEl.textContent='';
     btnEl.textContent='Log In';btnEl.onclick=_xctShowAuth;
@@ -141,7 +143,9 @@ function _updateAuthUI(){
     uploadBtn.style.display='none';xboxBtn.style.display='none';xboxGt.style.display='none';
     if(avatarEl)avatarEl.style.display='none';
     var adminTab=document.getElementById('tab-admin');
-    if(adminTab)adminTab.style.display='none'}}
+    if(adminTab)adminTab.style.display='none';
+    var settingsTab=document.getElementById('tab-settings');
+    if(settingsTab)settingsTab.style.display='none'}}
 
 function _xctXboxAuth(){
   var link=_xctApiKey?'?link='+encodeURIComponent(_xctApiKey):'';

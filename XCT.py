@@ -3838,7 +3838,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '.gp-list .lv-row{grid-template-columns:50px 1fr 160px 120px 90px 80px}\n'
         '#purch-list .lv-head,#purch-list .lv-row{grid-template-columns:42px minmax(180px,1fr) 100px 120px 80px 90px 50px 50px 90px 80px 70px}\n'
         '#purch-list .lv-head{position:sticky;top:47px;z-index:20}\n'
-        '#mkt-list .lv-head,#mkt-list .lv-row,#mkt-list .mkt-alt{grid-template-columns:50px 280px 160px 90px 90px repeat(10,80px) 70px 70px 80px}\n'
+        '#mkt-list .lv-head,#mkt-list .lv-row,#mkt-list .mkt-alt{grid-template-columns:50px minmax(200px,1fr) 160px 90px 90px 100px 70px 70px 80px}\n'
         '#mkt-list .lv-row{min-height:46px}\n'
         '#mkt-list .lv-head{position:relative;top:auto;z-index:2}\n'
         '#mkt-list .lv-title,#mkt-list .lv-pub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n'
@@ -3960,6 +3960,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="tab" id="tab-cdnsync" onclick="switchTab(\'cdnsync\',this)" style="display:none">XVC <span class="cnt" id="tab-cdnsync-cnt"></span></div>\n'
         '<div class="tab" id="tab-imp" onclick="switchTab(\'imports\',this)" style="display:none">Imports <span class="cnt" id="tab-imp-cnt"></span></div>\n'
         '<div class="tab" id="tab-admin" onclick="switchTab(\'admin\',this)" style="display:none">Admin</div>\n'
+        '<div class="tab" id="tab-settings" onclick="switchTab(\'settings\',this)" style="display:none">Settings</div>\n'
         '<select id="lib-cur" class="tab-cur" onchange="_onCur()">'
         '<option value="USD" selected>USD $</option>'
         '<option value="EUR">EUR €</option>'
@@ -4560,6 +4561,32 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
 
         '</div>\n'
 
+        # -- Settings section (visible for logged-in users) --
+        '<div class="section" id="settings">\n'
+        '<h2>Settings</h2>\n'
+        '<p class="sub" style="color:#888">Price adjustment formulas for the Store tab</p>\n'
+        '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:20px;max-width:600px;margin:16px 0">\n'
+        '<h3 style="margin:0 0 16px;font-size:14px;color:#ccc">Price Adjustments</h3>\n'
+        '<div style="margin-bottom:16px">\n'
+        '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px">Argentina Formula</label>\n'
+        '<input id="set-ar-formula" type="text" placeholder="e.g. price/100*0.16" '
+        'style="width:100%;max-width:300px;padding:8px;background:#222;color:#e0e0e0;border:1px solid #444;border-radius:4px;font-size:13px;font-family:monospace;box-sizing:border-box">\n'
+        '<div style="color:#666;font-size:11px;margin-top:4px">Converts ARS price to USD. Use <code style="color:#aaa">price</code> as the variable (e.g. <code style="color:#aaa">price/100*0.16</code>). Leave empty to use exchange rate.</div>\n'
+        '</div>\n'
+        '<div style="margin-bottom:16px">\n'
+        '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px">USD $100 Gift Card Price</label>\n'
+        '<div style="display:flex;gap:8px;align-items:center">\n'
+        '<span style="color:#888;font-size:16px">$</span>\n'
+        '<input id="set-gc-price" type="number" placeholder="100" step="0.01" min="1" '
+        'style="width:100px;padding:8px;background:#222;color:#e0e0e0;border:1px solid #444;border-radius:4px;font-size:13px">\n'
+        '</div>\n'
+        '<div style="color:#666;font-size:11px;margin-top:4px">Adjusts US store prices. $100 = no adjustment. E.g. $81 means a $60 game costs you $48.60.</div>\n'
+        '</div>\n'
+        '<button onclick="_savePriceSettings()" style="padding:8px 20px;background:#107c10;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px">Save &amp; Apply</button>\n'
+        '<span id="set-status" style="margin-left:12px;font-size:12px;color:#4caf50"></span>\n'
+        '</div>\n'
+        '</div>\n'
+
         # -- Context menu + Modal --
         '<div id="ctx-menu"></div>\n'
         '<div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">\n'
@@ -4640,6 +4667,40 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "function _pv(usd){return usd*_rate(_cc)}\n"
         "function _xvd(h){if(!h||h.length<16)return h||'';try{const p=[];for(let i=0;i<16;i+=4)p.push(parseInt(h.substr(i,4),16));return p.join('.')}catch(e){return h}}\n"
         "function _onCur(){_cc=document.getElementById('lib-cur').value;localStorage.setItem('xct_currency',_cc);filterLib();filterGP();filterMKT();renderAccounts();renderSummary()}\n"
+
+        # -- Price adjustment settings (Store tab) --
+        "let _arFormula=localStorage.getItem('xct_ar_formula')||'';\n"
+        "let _gcPrice=parseFloat(localStorage.getItem('xct_gc_price'))||100;\n"
+        "function _gcAdj(usd){return usd*_gcPrice/100}\n"
+        "function _toUsd(mkt,localPrice,currency){"
+        "if(mkt==='AR'&&_arFormula){"
+        "try{var fn=new Function('price','return '+_arFormula);var r=fn(localPrice);"
+        "return typeof r==='number'&&isFinite(r)?r:0}catch(e){return 0}}"
+        "var rate=(typeof RATES!=='undefined'&&RATES[currency])?RATES[currency]:1;"
+        "var usd=localPrice/rate;"
+        "if(mkt==='US'||currency==='USD')usd=usd*_gcPrice/100;"
+        "return usd}\n"
+        "function _loadPriceSettings(){"
+        "var f=document.getElementById('set-ar-formula');"
+        "var g=document.getElementById('set-gc-price');"
+        "if(f)f.value=_arFormula;"
+        "if(g)g.value=_gcPrice!==100?_gcPrice:''}\n"
+        "function _savePriceSettings(){"
+        "var f=document.getElementById('set-ar-formula');"
+        "var g=document.getElementById('set-gc-price');"
+        "var st=document.getElementById('set-status');"
+        "_arFormula=(f?f.value.trim():'');"
+        "_gcPrice=g&&g.value?parseFloat(g.value):100;"
+        "if(_arFormula){"
+        "if(!/^[0-9.+\\-*/() price]+$/i.test(_arFormula)){st.textContent='Invalid formula characters';st.style.color='#f44';return}"
+        "try{var fn=new Function('price','return '+_arFormula);var t=fn(1000);"
+        "if(typeof t!=='number'||!isFinite(t))throw new Error('Result is not a number')}catch(e){"
+        "st.textContent='Formula error: '+e.message;st.style.color='#f44';return}}"
+        "localStorage.setItem('xct_ar_formula',_arFormula);"
+        "localStorage.setItem('xct_gc_price',String(_gcPrice));"
+        "st.textContent='Saved!';st.style.color='#4caf50';"
+        "setTimeout(function(){st.textContent=''},2000);"
+        "if(typeof filterMKT==='function')filterMKT()}\n"
         "const _kinds=['Game','Durable'];\n"
         "const _kindN=['Games','DLC'];\n"
         # Compute Collection row stats (deduped, all owned — matches Summary card)
@@ -5621,7 +5682,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(typeof _loadTabData==='function')_loadTabData(id);"
         "var _slugMap={summary:'summary',library:'library',marketplace:'store',subscriptions:'subscriptions',gamepass:'gamepass',"
         "playhistory:'playhistory',history:'scanlog',gamertags:'gamertags',"
-        "gfwl:'gfwl',cdnsync:'xvcdb',imports:'imports',purchases:'purchases',achievements:'achievements',admin:'admin'};"
+        "gfwl:'gfwl',cdnsync:'xvcdb',imports:'imports',purchases:'purchases',achievements:'achievements',admin:'admin',settings:'settings'};"
         "var slug=_slugMap[id]||id;"
         "_setRoute(slug,'')}\n"
 
@@ -6345,18 +6406,22 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "for(const[mkt,rp]of Object.entries(item.regionalPrices)){"
         "const base=rp.msrp||rp.price||0;"
         "const p=rp.salePrice>0&&rp.salePrice<base?rp.salePrice:base;"
-        "const rate=RATES[rp.currency]||1;"
-        "const usd=(p/rate)*GC_FACTOR;"
+        "const usd=_toUsd(mkt,p,rp.currency);"
         "if(usd>0&&(!best||usd<best.usd)){best={mkt,usd,local:p,cc:rp.currency}}}"
         "return best}\n"
+        "function _bestCell(item){"
+        "const br=_bestReg(item);"
+        "if(!br)return '<div class=\"lv-reg\" style=\"color:#333\">-</div>';"
+        "const loc=_RLOCALE[br.mkt]||'en-us';"
+        "const href='https://www.microsoft.com/'+loc+'/p/'+item.productId;"
+        "return '<div class=\"lv-reg\"><a href=\"'+href+'\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;text-decoration:none\" title=\"'+(_RNAME[br.mkt]||br.mkt)+'\">'+_p(br.usd)+' '+br.mkt+'</a></div>'}\n"
         "function _regCell(item,mkt){"
         "if(!item.regionalPrices||typeof RATES==='undefined')return '<div class=\"lv-reg\" style=\"color:#333\">-</div>';"
         "const rp=item.regionalPrices[mkt];"
         "if(!rp)return '<div class=\"lv-reg\" style=\"color:#333\">-</div>';"
         "const base=rp.msrp||rp.price||0;"
         "const p=rp.salePrice>0&&rp.salePrice<base?rp.salePrice:base;"
-        "const rate=RATES[rp.currency]||1;"
-        "const usd=(p/rate)*GC_FACTOR;"
+        "const usd=_toUsd(mkt,p,rp.currency);"
         "if(usd<=0)return '<div class=\"lv-reg\" style=\"color:#333\">-</div>';"
         "const br=_bestReg(item);"
         "const isBest=br&&br.mkt===mkt;"
@@ -6371,10 +6436,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "_RORD.forEach(m=>{const rp=item.regionalPrices[m];if(!rp)return;"
         "const base=rp.msrp||rp.price||0;"
         "const p=rp.salePrice>0&&rp.salePrice<base?rp.salePrice:base;"
-        "const rate=RATES[rp.currency]||1;const u=(p/rate)*GC_FACTOR;"
+        "const u=_toUsd(m,p,rp.currency);"
         "if(u>0&&u<bestUsd)bestUsd=u});"
         "let h='<table class=\"rp-tbl\"><tr><th style=\"text-align:left\">Region</th>"
-        "<th>Price</th><th>Sale</th><th>USD (GC \u00d70.81)</th></tr>';"
+        "<th>Price</th><th>Sale</th><th>Adj. USD</th></tr>';"
         "_RORD.forEach(m=>{const rp=item.regionalPrices[m];"
         "if(!rp){h+='<tr><td>'+(_RNAME[m]||m)+'</td><td style=\"color:#555\">-</td><td style=\"color:#555\">-</td><td style=\"color:#555\">-</td></tr>';return}"
         "const sym=_RSYM[m]||'';const rate=RATES[rp.currency]||1;"
@@ -6384,16 +6449,18 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const priceStr=fmt(baseP);"
         "const saleStr=rp.salePrice>0&&rp.salePrice<baseP?fmt(rp.salePrice):'-';"
         "const effP=rp.salePrice>0&&rp.salePrice<baseP?rp.salePrice:baseP;"
-        "const gcUsd=(effP/rate)*GC_FACTOR;"
-        "const isBest=Math.abs(gcUsd-bestUsd)<0.01&&bestUsd<Infinity;"
+        "const adjUsd=_toUsd(m,effP,rp.currency);"
+        "const isBest=Math.abs(adjUsd-bestUsd)<0.01&&bestUsd<Infinity;"
         "h+='<tr'+(isBest?' class=\"rp-best\"':'')+'>';"
         "h+='<td>'+(_RNAME[m]||m)+'</td>';"
         "h+='<td>'+priceStr+'</td>';"
         "h+='<td>'+(rp.salePrice>0?'<span style=\"color:#4caf50\">'+saleStr+'</span>':saleStr)+'</td>';"
-        "h+='<td style=\"color:'+(isBest?'#4caf50':'#e91e63')+';font-weight:600\">$'+gcUsd.toFixed(2)+'</td></tr>'});"
+        "h+='<td style=\"color:'+(isBest?'#4caf50':'#e91e63')+';font-weight:600\">'+_p(adjUsd)+'</td></tr>'});"
+        "var _gcNote=_gcPrice!==100?' (GC $'+_gcPrice+'/100)':'';"
+        "var _arNote=_arFormula?' (AR: '+_arFormula+')':'';"
         "h+='</table>';return '<div style=\"margin-top:12px\">"
         "<div style=\"font-weight:600;margin-bottom:6px;color:#ccc\">Regional Prices "
-        "<span style=\"font-size:11px;color:#888\">(Gift Card USD = local price \\u00f7 rate \\u00d7 0.81)</span></div>'+h+'</div>'}\n"
+        "<span style=\"font-size:11px;color:#888\">'+_gcNote+_arNote+'</span></div>'+h+'</div>'}\n"
 
         # -- Amazon Physical Disc Links --
         "var _azLinks={};\n"
@@ -6721,8 +6788,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "<div data-sort onclick=\"sortMktCol(\\'title\\')\">Title'+mktColArrow('title')+'</div>"
         "<div data-sort onclick=\"sortMktCol(\\'publisher\\')\">Publisher'+mktColArrow('publisher')+'</div>"
         "<div data-sort onclick=\"sortMktCol(\\'release\\')\">Release'+mktColArrow('release')+'</div>"
-        "<div data-sort style=\"text-align:right\" onclick=\"sortMktCol(\\'usd\\')\">USD'+mktColArrow('usd')+'</div>"
-        "'+_RORD.map(m=>'<div style=\"text-align:right;font-size:10px\">'+m+'</div>').join('')+'"
+        "<div data-sort style=\"text-align:right\" onclick=\"sortMktCol(\\'usd\\')\">'+_cc+mktColArrow('usd')+'</div>"
+        "<div style=\"text-align:right;font-size:10px\">Best</div>"
         "<div style=\"text-align:center;font-size:10px\" title=\"Amazon UK\">🇬🇧</div>"
         "<div style=\"text-align:center;font-size:10px\" title=\"Amazon US\">🇺🇸</div>"
         "<div style=\"text-align:center\">Status</div></div>';\n"
@@ -6743,15 +6810,15 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const img=item.heroImage||item.boxArt||'';\n"
         "const imgTag=img?`<img class=\"card-img\" src=\"${_imgResize(img,330,186)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:"
         "'<div class=\"card-img\" style=\"display:flex;align-items:center;justify-content:center;color:#333;font-size:36px\">'+(item.title||'?')[0]+'</div>';\n"
-        "const usd=_p(item.priceUSD);\n"
+        "const usd=_p(_gcAdj(item.priceUSD));\n"
         "const _usHref=_storeHref(item.productId,item.availableRegions||item._availableRegions);\n"
         "const saleTag=item.currentPriceUSD>0&&item.currentPriceUSD<item.priceUSD?"
-        "`<a href=\"${_usHref}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">${_p(item.currentPriceUSD)}</a>`:'';\n"
+        "`<a href=\"${_usHref}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">${_p(_gcAdj(item.currentPriceUSD))}</a>`:'';\n"
         "const priceTag=usd?"
         "`<span style=\"color:#42a5f5;font-weight:600\">${usd}</span>${saleTag}`:"
         "'<span style=\"color:#555;font-size:11px\">Free</span>';\n"
         "const br=_bestReg(item);\n"
-        "const bestCard=br?`<div style=\"margin:2px 0;color:#e91e63;font-weight:600;font-size:11px\">Best: $${br.usd.toFixed(2)} (${br.mkt})</div>`:'';\n"
+        "const bestCard=br?`<div style=\"margin:2px 0;color:#4caf50;font-weight:600;font-size:11px\">Best: ${_p(br.usd)} (${br.mkt})</div>`:'';\n"
         "const ratingStr=item.averageRating>0?`<div style=\"font-size:10px;color:#aaa\">${item.averageRating.toFixed(1)} (${(item.ratingCount||0).toLocaleString()})</div>`:'';\n"
         'gh+=`<div class="card" onclick="showMKTDetail(${item._idx})">${imgTag}<div class="card-body">'
         '<div class="card-name" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}</div>'
@@ -6767,7 +6834,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="lv-pub">${item.publisher||\'\'}</div>'
         '<div class="lv-type">${(item.releaseDate||\'\').substring(0,10)}</div>'
         '<div class="lv-usd">${usd?`<a href="${_usHref}" target="_blank" onclick="event.stopPropagation()" style="color:#42a5f5;text-decoration:none">${usd}</a>`:\'\'} ${saleTag}</div>'
-        "${_RORD.map(m=>_regCell(item,m)).join('')}"
+        "${_bestCell(item)}"
         '${_azUK}${_azUS}'
         '<div class="lv-status">${owned}${gpBadge}${eaBadge}${ubiBadge}${bundleBadge}</div></div>`;\n'
 
@@ -6775,10 +6842,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(pageGroups&&pageGroups[i].alts.length>0){"
         "pageGroups[i].alts.forEach(alt=>{"
         "const aOwned=alt.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>':'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';"
-        "const aUsd=_p(alt.priceUSD);"
+        "const aUsd=_p(_gcAdj(alt.priceUSD));"
         "const aHref=_storeHref(alt.productId,alt.availableRegions||alt._availableRegions);"
         "const aSale=alt.currentPriceUSD>0&&alt.currentPriceUSD<alt.priceUSD?"
-        "`<a href=\"${aHref}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">${_p(alt.currentPriceUSD)}</a>`:'';"
+        "`<a href=\"${aHref}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">${_p(_gcAdj(alt.currentPriceUSD))}</a>`:'';"
         "const aImg=alt.heroImage||alt.boxArt||'';"
         "const aThumb=aImg?`<img src=\"${_imgResize(aImg,80,80)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';"
         "const aBundleBadge=alt._isBundle?'<span class=\"badge\" style=\"font-size:9px;background:#e65100;color:#fff\">BUNDLE</span>':'';"
@@ -6788,7 +6855,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "<div class=\"lv-pub\">${alt.publisher||''}</div>"
         "<div class=\"lv-type\">${(alt.releaseDate||'').substring(0,10)}</div>"
         "<div class=\"lv-usd\">${aUsd?`<a href=\"${aHref}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#42a5f5;text-decoration:none\">${aUsd}</a>`:''} ${aSale}</div>"
-        "${_RORD.map(m=>_regCell(alt,m)).join('')}"
+        "${_bestCell(alt)}"
         "${_aAzUK}${_aAzUS}"
         "<div class=\"lv-status\">${aOwned}${aBundleBadge}</div></div>`})}\n"
 
@@ -6864,8 +6931,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "<div data-sort onclick=\"sortMktCol(\\'title\\')\">Title'+mktColArrow('title')+'</div>"
         "<div data-sort onclick=\"sortMktCol(\\'publisher\\')\">Publisher'+mktColArrow('publisher')+'</div>"
         "<div data-sort onclick=\"sortMktCol(\\'release\\')\">Release'+mktColArrow('release')+'</div>"
-        "<div data-sort style=\"text-align:right\" onclick=\"sortMktCol(\\'usd\\')\">USD'+mktColArrow('usd')+'</div>"
-        "'+_RORD.map(m=>'<div style=\"text-align:right;font-size:10px\">'+m+'</div>').join('')+'"
+        "<div data-sort style=\"text-align:right\" onclick=\"sortMktCol(\\'usd\\')\">'+_cc+mktColArrow('usd')+'</div>"
+        "<div style=\"text-align:right;font-size:10px\">Best</div>"
         "<div style=\"text-align:center;font-size:10px\" title=\"Amazon UK\">🇬🇧</div>"
         "<div style=\"text-align:center;font-size:10px\" title=\"Amazon US\">🇺🇸</div>"
         "<div style=\"text-align:center\">Status</div></div>';\n"
@@ -6894,15 +6961,15 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const img=item.heroImage||item.boxArt||'';\n"
         "const imgTag=img?`<img class=\"card-img\" src=\"${img}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:"
         "'<div class=\"card-img\" style=\"display:flex;align-items:center;justify-content:center;color:#333;font-size:36px\">'+(item.title||'?')[0]+'</div>';\n"
-        "const usd=_p(item.priceUSD);\n"
+        "const usd=_p(_gcAdj(item.priceUSD));\n"
         "const _usHref=_storeHref(item.productId,item.availableRegions);\n"
         "const saleTag=item.currentPriceUSD>0&&item.currentPriceUSD<item.priceUSD?"
-        "`<a href=\"${_usHref}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">${_p(item.currentPriceUSD)}</a>`:'';\n"
+        "`<a href=\"${_usHref}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">${_p(_gcAdj(item.currentPriceUSD))}</a>`:'';\n"
         "const priceTag=usd?"
         "`<span style=\"color:#42a5f5;font-weight:600\">${usd}</span>${saleTag}`:"
         "'<span style=\"color:#555;font-size:11px\">Free</span>';\n"
-        "const br=item.bestRegion||_bestReg(item);\n"
-        "const bestCard=br?`<div style=\"margin:2px 0;color:#e91e63;font-weight:600;font-size:11px\">Best: $${(typeof br.usd==='number'?br.usd:0).toFixed(2)} (${br.mkt})</div>`:'';\n"
+        "const br=_bestReg(item);\n"
+        "const bestCard=br?`<div style=\"margin:2px 0;color:#4caf50;font-weight:600;font-size:11px\">Best: ${_p(br.usd)} (${br.mkt})</div>`:'';\n"
         "const ratingStr=item.averageRating>0?`<div style=\"font-size:10px;color:#aaa\">${item.averageRating.toFixed(1)} (${(item.ratingCount||0).toLocaleString()})</div>`:'';\n"
         "const pid=item.productId;\n"
         # Grid card
@@ -6922,7 +6989,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="lv-pub">${item.publisher||\'\'}</div>'
         '<div class="lv-type">${(item.releaseDate||\'\').substring(0,10)}</div>'
         '<div class="lv-usd">${usd?`<a href="${_usHref}" target="_blank" onclick="event.stopPropagation()" style="color:#42a5f5;text-decoration:none">${usd}</a>`:\'\'} ${saleTag}</div>'
-        "${_RORD.map(m=>_regCell(item,m)).join('')}"
+        "${_bestCell(item)}"
         '${_azUK}${_azUS}'
         '<div class="lv-status">${owned}${gpBadge}${eaBadge}${ubiBadge}${bundleBadge}</div></div>`;\n'
         "});\n"
@@ -6959,10 +7026,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "d.style.cssText='background:#1a1a2e;border-left:3px solid #455a64';"
         "d.onclick=function(){showMKTDetail(alt.productId)};"
         "var aOwned=alt.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>':'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';"
-        "var aUsd=_p(alt.priceUSD);"
+        "var aUsd=_p(_gcAdj(alt.priceUSD));"
         "var aHref=_storeHref(alt.productId,alt.availableRegions);"
         "var aSale=alt.currentPriceUSD>0&&alt.currentPriceUSD<alt.priceUSD?"
-        "'<a href=\"'+aHref+'\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">'+_p(alt.currentPriceUSD)+'</a>':'';"
+        "'<a href=\"'+aHref+'\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#4caf50;font-weight:600;margin-left:4px;text-decoration:none\">'+_p(_gcAdj(alt.currentPriceUSD))+'</a>':'';"
         "var aImg=alt.imageBoxArt||'';"
         "var aThumb=aImg?'<img src=\"'+aImg+'\" loading=\"lazy\" onerror=\"this.style.display=\\'none\\'\">':'';"
         "d.innerHTML=aThumb+"
@@ -6970,7 +7037,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "+'<div class=\"lv-pub\">'+(alt.publisher||'')+'</div>'"
         "+'<div class=\"lv-type\">'+(alt.releaseDate||'').substring(0,10)+'</div>'"
         "+'<div class=\"lv-usd\">'+(aUsd?'<a href=\"'+aHref+'\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#42a5f5;text-decoration:none\">'+aUsd+'</a>':'')+' '+aSale+'</div>'"
-        "+_RORD.map(function(m){return _regCell(alt,m)}).join('')"
+        "+_bestCell(alt)"
         "+'<div class=\"lv-status\">'+aOwned+'</div>';"
         "frag.appendChild(d)});\n"
         "row.parentNode.insertBefore(frag,row.nextSibling);\n"
@@ -7015,8 +7082,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div><span class="lbl">Type:</span></div><div class="val">${item.productKind||\'\'}</div>\n'
         '<div><span class="lbl">Category:</span></div><div class="val">${item.category||\'\'}</div>\n'
         "${ratingHtml}\n"
-        "${item.priceUSD>0?'<div><span class=\"lbl\">Price:</span></div><div class=\"val\" style=\"color:#42a5f5;font-weight:600\">'+_p(item.priceUSD)+'</div>':''}\n"
-        "${item.currentPriceUSD>0&&item.currentPriceUSD<item.priceUSD?'<div><span class=\"lbl\">Sale:</span></div><div class=\"val\" style=\"color:#4caf50;font-weight:600\">'+_p(item.currentPriceUSD)+'</div>':''}\n"
+        "${item.priceUSD>0?'<div><span class=\"lbl\">Price:</span></div><div class=\"val\" style=\"color:#42a5f5;font-weight:600\">'+_p(_gcAdj(item.priceUSD))+'</div>':''}\n"
+        "${item.currentPriceUSD>0&&item.currentPriceUSD<item.priceUSD?'<div><span class=\"lbl\">Sale:</span></div><div class=\"val\" style=\"color:#4caf50;font-weight:600\">'+_p(_gcAdj(item.currentPriceUSD))+'</div>':''}\n"
         '<div><span class="lbl">Store:</span></div><div class="val"><a href="${_storeUrl(item.productId)}" target="_blank">${item.productId}</a></div>\n'
         "${descHtml}\n"
         "</div>\n"
@@ -7071,8 +7138,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div><span class="lbl">Type:</span></div><div class="val">${item.productKind||\'\'}</div>\n'
         '<div><span class="lbl">Category:</span></div><div class="val">${item.category||\'\'}</div>\n'
         "${ratingHtml}\n"
-        "${item.priceUSD>0?'<div><span class=\"lbl\">Price:</span></div><div class=\"val\" style=\"color:#42a5f5;font-weight:600\">'+_p(item.priceUSD)+'</div>':''}\n"
-        "${item.currentPriceUSD>0&&item.currentPriceUSD<item.priceUSD?'<div><span class=\"lbl\">Sale:</span></div><div class=\"val\" style=\"color:#4caf50;font-weight:600\">'+_p(item.currentPriceUSD)+'</div>':''}\n"
+        "${item.priceUSD>0?'<div><span class=\"lbl\">Price:</span></div><div class=\"val\" style=\"color:#42a5f5;font-weight:600\">'+_p(_gcAdj(item.priceUSD))+'</div>':''}\n"
+        "${item.currentPriceUSD>0&&item.currentPriceUSD<item.priceUSD?'<div><span class=\"lbl\">Sale:</span></div><div class=\"val\" style=\"color:#4caf50;font-weight:600\">'+_p(_gcAdj(item.currentPriceUSD))+'</div>':''}\n"
         '<div><span class="lbl">Store:</span></div><div class="val"><a href="${_storeUrl(item.productId)}" target="_blank">${item.productId}</a></div>\n'
         "${descHtml}\n"
         "</div>\n"
@@ -7561,7 +7628,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "var _savedCur=localStorage.getItem('xct_currency');if(_savedCur){var _curSel=document.getElementById('lib-cur');if(_curSel){_curSel.value=_savedCur;_cc=_savedCur}}\n"
         "var _revSlug={summary:'summary',library:'library',store:'marketplace',marketplace:'marketplace',subscriptions:'subscriptions',gamepass:'gamepass',"
         "playhistory:'playhistory',scanlog:'history',gamertags:'gamertags',"
-        "gfwl:'gfwl',xvcdb:'cdnsync',imports:'imports',purchases:'purchases',achievements:'achievements'};\n"
+        "gfwl:'gfwl',xvcdb:'cdnsync',imports:'imports',purchases:'purchases',achievements:'achievements',settings:'settings'};\n"
         "function _deserializeTab(t,qs){"
         "if(t==='marketplace'){_mktDeserializeFilters(qs);filterMKT()}"
         "else if(t==='library'){_libDeserializeFilters(qs);filterLib()}"
@@ -8425,6 +8492,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(id==='subscriptions')_subsRender();\n"
         "if(id==='achievements'&&!_achLoaded&&window._xctHosted&&window._xctApiKey)_achFetch();\n"
         "if(id==='admin'){_adminLoadScans();_cdnMonRefreshStatus();_cdnMonLoadScans();_cdnMonLoadPurged();_tidLoad()}\n"
+        "if(id==='settings')_loadPriceSettings();\n"
         "if(id==='cdnsync'&&!_cdnLoaded&&window._xctHosted){\n"
         "  _cdnLoaded=true;\n"
         "  var st=document.getElementById('cdnsync-status');\n"
