@@ -3952,6 +3952,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="tab" id="tab-purch" onclick="switchTab(\'purchases\',this)" style="display:none">Purchases <span class="cnt" id="tab-purch-cnt"></span></div>\n'
         '<div class="tab" id="tab-gp" onclick="switchTab(\'gamepass\',this)" style="display:none">Game Pass <span class="cnt" id="tab-gp-cnt"></span></div>\n'
         '<div class="tab" id="tab-ph" onclick="switchTab(\'playhistory\',this)" style="display:none">Play History <span class="cnt" id="tab-ph-cnt"></span></div>\n'
+        '<div class="tab" id="tab-ach" onclick="switchTab(\'achievements\',this)" style="display:none">Achievements <span class="cnt" id="tab-ach-cnt"></span></div>\n'
         '<div class="tab" id="tab-hist" onclick="switchTab(\'history\',this)" style="display:none">Scan Log <span class="cnt" id="tab-hist-cnt"></span></div>\n'
         '<div class="tab" id="tab-acct" onclick="switchTab(\'gamertags\',this)" style="display:none">Gamertags <span class="cnt" id="tab-acct-cnt"></span></div>\n'
         '<div class="tab" id="tab-gfwl" onclick="switchTab(\'gfwl\',this)" style="display:none">GFWL <span class="cnt" id="tab-gfwl-cnt"></span></div>\n'
@@ -4162,6 +4163,43 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="lib-grid" id="ph-grid" style="display:none"></div>\n'
         '<div class="list-view" id="ph-list"></div>\n'
         '<div class="pagination" id="ph-pager" style="display:flex;justify-content:center;align-items:center;gap:8px;padding:16px 0;flex-wrap:wrap"></div>\n'
+        '</div>\n'
+
+        # -- Achievements section --
+        '<div class="section" id="achievements">\n'
+        '<div style="display:flex;align-items:center;gap:16px;margin-bottom:8px">'
+        '<h2 style="margin:0">Achievements</h2>'
+        '<div id="ach-profile" style="display:flex;align-items:center;gap:10px"></div>'
+        '<button id="ach-refresh-btn" onclick="_achRefresh()" style="display:none;margin-left:auto;padding:6px 16px;background:#333;color:#ccc;border:1px solid #555;border-radius:4px;font-size:12px;cursor:pointer">Refresh from Xbox Live</button>'
+        '</div>\n'
+        '<p class="sub" id="ach-sub">Sign in with Xbox to view your achievement progress across all games.</p>\n'
+        '<div id="ach-status" style="margin-bottom:12px"></div>\n'
+        '<div class="search-row" id="ach-search-row" style="display:none"><input type="text" id="ach-search" placeholder="Search games..." oninput="achPage=0;_achRender()"></div>\n'
+        '<div class="filters" id="ach-filters" style="display:none">\n'
+        '<div class="filter-group"><div class="filter-label">Sort</div>'
+        '<select id="ach-sort" onchange="achPage=0;_achRender()">'
+        '<option value="playDesc" selected>Last Played</option>'
+        '<option value="gsDesc">Gamerscore (High)</option>'
+        '<option value="gsAsc">Gamerscore (Low)</option>'
+        '<option value="pctDesc">Completion % (High)</option>'
+        '<option value="pctAsc">Completion % (Low)</option>'
+        '<option value="name">Name</option></select></div>\n'
+        '<div class="filter-group"><div class="filter-label">Filter</div>'
+        '<select id="ach-filter" onchange="achPage=0;_achRender()">'
+        '<option value="all">All Games</option>'
+        '<option value="complete">100% Complete</option>'
+        '<option value="started">Started (1-99%)</option>'
+        '<option value="unplayed">Unplayed (0%)</option></select></div>\n'
+        '</div>\n'
+        '<div id="ach-summary" style="display:none;margin-bottom:16px"></div>\n'
+        '<table class="gtbl" id="ach-table" style="display:none"><thead><tr>'
+        '<th class="sortable" onclick="_achSortBy(\'name\')">Game</th>'
+        '<th class="sortable num" onclick="_achSortBy(\'gs\')" style="width:120px">Gamerscore</th>'
+        '<th class="sortable num" onclick="_achSortBy(\'pct\')" style="width:100px">Progress</th>'
+        '<th class="sortable num" onclick="_achSortBy(\'play\')" style="width:140px">Last Played</th>'
+        '</tr></thead><tbody id="ach-tbody"></tbody></table>\n'
+        '<div class="pagination" id="ach-pager" style="display:flex;justify-content:center;align-items:center;gap:8px;padding:16px 0;flex-wrap:wrap"></div>\n'
+        '<div id="ach-detail-modal"></div>\n'
         '</div>\n'
 
         # -- Marketplace section --
@@ -7205,7 +7243,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         'try{initDropdowns();_mktInitSaved();\n'
         "var _revSlug={summary:'summary',library:'library',store:'marketplace',marketplace:'marketplace',gamepass:'gamepass',"
         "playhistory:'playhistory',scanlog:'history',gamertags:'gamertags',"
-        "gfwl:'gfwl',xvcdb:'cdnsync',imports:'imports',purchases:'purchases'};\n"
+        "gfwl:'gfwl',xvcdb:'cdnsync',imports:'imports',purchases:'purchases',achievements:'achievements'};\n"
         "function _deserializeTab(t,qs){"
         "if(t==='marketplace'){_mktDeserializeFilters(qs);filterMKT()}"
         "else if(t==='library'){_libDeserializeFilters(qs);filterLib()}"
@@ -7231,6 +7269,164 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(window._xctHosted)window.addEventListener('popstate',_hashNav);\n"
         "if(!window._xctHosted||!localStorage.getItem('xct_api_key'))document.getElementById('loading-overlay').style.display='none';\n"
         '});\n'
+
+        # -- Achievements tab JS --
+        "var _achLoaded=false,_xctAchSummaries=[],_xctAchGT='',_xctAchXuid='',_xctAchAvatar='',_xctAchTotalGS=0;\n"
+        "var achPage=0;\n"
+        "var _achSortState={key:'play',dir:'desc'};\n"
+        "function _achSortBy(k){if(_achSortState.key===k)_achSortState.dir=_achSortState.dir==='asc'?'desc':'asc';else{_achSortState.key=k;_achSortState.dir=k==='name'?'asc':'desc'}achPage=0;_achRender()}\n"
+
+        "function _achFetch(){\n"
+        "  _achLoaded=true;\n"
+        "  var st=document.getElementById('ach-status');\n"
+        "  st.innerHTML='<span style=\"color:#888\">Loading achievements from Xbox Live...</span>';\n"
+        "  fetch('/api/v1/xbox/achievements',{headers:{'Authorization':'Bearer '+window._xctApiKey}})\n"
+        "  .then(r=>{if(!r.ok)throw new Error(r.status);return r.json()})\n"
+        "  .then(data=>{\n"
+        "    if(!data.linked){st.innerHTML='<span style=\"color:#888\">Link your Xbox account to view achievements.</span>';return}\n"
+        "    _xctAchSummaries=data.summaries||[];\n"
+        "    _xctAchGT=data.gamertag||'';\n"
+        "    _xctAchXuid=data.xuid||'';\n"
+        "    _xctAchAvatar=data.avatarUrl||'';\n"
+        "    _xctAchTotalGS=data.totalGamerscore||0;\n"
+        "    st.innerHTML='';\n"
+        "    if(data.fetching){st.innerHTML='<span style=\"color:#888\">Fetching achievements in background — refresh in a moment...</span>'}\n"
+        "    document.getElementById('tab-ach').style.display='';\n"
+        "    document.getElementById('tab-ach-cnt').textContent=_xctAchSummaries.length;\n"
+        "    document.getElementById('ach-search-row').style.display='';\n"
+        "    document.getElementById('ach-filters').style.display='';\n"
+        "    document.getElementById('ach-summary').style.display='';\n"
+        "    document.getElementById('ach-table').style.display='';\n"
+        "    document.getElementById('ach-refresh-btn').style.display='';\n"
+        "    document.getElementById('ach-sub').textContent=_xctAchGT+' — '+_xctAchSummaries.length+' games tracked';\n"
+        # Profile display
+        "    var prof=document.getElementById('ach-profile');\n"
+        "    prof.innerHTML=(_xctAchAvatar?'<img src=\"'+_xctAchAvatar+'\" style=\"width:28px;height:28px;border-radius:50%;object-fit:cover\" onerror=\"this.style.display=\\'none\\'\">':'')+'<span style=\"color:#107c10;font-weight:600\">'+_xctAchGT+'</span><span style=\"color:#888;font-size:12px\">'+_xctAchTotalGS.toLocaleString()+' G</span>';\n"
+        "    _achRender();\n"
+        "  }).catch(e=>{\n"
+        "    console.error('[ach] fetch error:',e);\n"
+        "    if(String(e).includes('404'))st.innerHTML='<span style=\"color:#888\">Link your Xbox account to view achievements.</span>';\n"
+        "    else st.innerHTML='<span style=\"color:#f44\">Failed to load achievements</span>';\n"
+        "    _achLoaded=false;\n"
+        "  })}\n"
+
+        "function _achRefresh(){\n"
+        "  var btn=document.getElementById('ach-refresh-btn');\n"
+        "  btn.disabled=true;btn.textContent='Refreshing...';\n"
+        "  fetch('/api/v1/xbox/achievements/refresh',{method:'POST',headers:{'Authorization':'Bearer '+window._xctApiKey}})\n"
+        "  .then(r=>{if(!r.ok)throw new Error(r.status);return r.json()})\n"
+        "  .then(data=>{\n"
+        "    _xctAchSummaries=data.summaries||_xctAchSummaries;\n"
+        "    _xctAchTotalGS=data.totalGamerscore||_xctAchTotalGS;\n"
+        "    document.getElementById('tab-ach-cnt').textContent=_xctAchSummaries.length;\n"
+        "    document.getElementById('ach-sub').textContent=_xctAchGT+' — '+_xctAchSummaries.length+' games tracked';\n"
+        "    var prof=document.getElementById('ach-profile');\n"
+        "    prof.innerHTML=(_xctAchAvatar?'<img src=\"'+_xctAchAvatar+'\" style=\"width:28px;height:28px;border-radius:50%;object-fit:cover\" onerror=\"this.style.display=\\'none\\'\">':'')+'<span style=\"color:#107c10;font-weight:600\">'+_xctAchGT+'</span><span style=\"color:#888;font-size:12px\">'+_xctAchTotalGS.toLocaleString()+' G</span>';\n"
+        "    _achRender();\n"
+        "    btn.disabled=false;btn.textContent='Refresh from Xbox Live';\n"
+        "  }).catch(e=>{\n"
+        "    console.error('[ach] refresh error:',e);\n"
+        "    btn.disabled=false;btn.textContent='Refresh from Xbox Live';\n"
+        "    var msg='Refresh failed';\n"
+        "    if(String(e).includes('429'))msg='Rate limit — try again in 5 minutes';\n"
+        "    document.getElementById('ach-status').innerHTML='<span style=\"color:#f44\">'+msg+'</span>';\n"
+        "  })}\n"
+
+        "function _achRender(){\n"
+        "  var items=_xctAchSummaries.slice();\n"
+        "  var q=(document.getElementById('ach-search').value||'').toLowerCase();\n"
+        "  if(q)items=items.filter(x=>(x.titleName||'').toLowerCase().includes(q));\n"
+        # Filter
+        "  var ff=document.getElementById('ach-filter').value;\n"
+        "  if(ff==='complete')items=items.filter(x=>x.currentAchievements>0&&x.currentAchievements>=x.totalAchievements);\n"
+        "  else if(ff==='started')items=items.filter(x=>x.currentAchievements>0&&x.currentAchievements<x.totalAchievements);\n"
+        "  else if(ff==='unplayed')items=items.filter(x=>!x.currentAchievements);\n"
+        # Sort
+        "  var so=document.getElementById('ach-sort').value;\n"
+        "  var sk=_achSortState.key,sd=_achSortState.dir;\n"
+        "  items.sort((a,b)=>{\n"
+        "    let av,bv;\n"
+        "    if(sk==='name'){av=a.titleName||'';bv=b.titleName||'';const c=av.localeCompare(bv);return sd==='asc'?c:-c}\n"
+        "    if(sk==='gs'){av=a.currentGamerscore||0;bv=b.currentGamerscore||0}\n"
+        "    else if(sk==='pct'){av=a.totalAchievements?a.currentAchievements/a.totalAchievements:0;bv=b.totalAchievements?b.currentAchievements/b.totalAchievements:0}\n"
+        "    else{av=a.lastTimePlayed||'';bv=b.lastTimePlayed||''}\n"
+        "    const c=av<bv?-1:av>bv?1:0;return sd==='asc'?c:-c;\n"
+        "  });\n"
+        # If dropdown sort was used (not header click), also respect that
+        "  if(so==='gsDesc'){_achSortState={key:'gs',dir:'desc'}}\n"
+        "  else if(so==='gsAsc'){_achSortState={key:'gs',dir:'asc'}}\n"
+        "  else if(so==='pctDesc'){_achSortState={key:'pct',dir:'desc'}}\n"
+        "  else if(so==='pctAsc'){_achSortState={key:'pct',dir:'asc'}}\n"
+        "  else if(so==='name'){_achSortState={key:'name',dir:'asc'}}\n"
+        "  else if(so==='playDesc'){_achSortState={key:'play',dir:'desc'}}\n"
+        # Summary stats
+        "  var totalGS=items.reduce((s,x)=>s+(x.currentGamerscore||0),0);\n"
+        "  var maxGS=items.reduce((s,x)=>s+(x.totalGamerscore||0),0);\n"
+        "  var complete=items.filter(x=>x.currentAchievements>0&&x.currentAchievements>=x.totalAchievements).length;\n"
+        "  var started=items.filter(x=>x.currentAchievements>0&&x.currentAchievements<x.totalAchievements).length;\n"
+        "  var unplayed=items.filter(x=>!x.currentAchievements).length;\n"
+        "  var pct=maxGS?Math.round(totalGS/maxGS*100):0;\n"
+        "  var sumEl=document.getElementById('ach-summary');\n"
+        "  sumEl.innerHTML="
+        "'<div style=\"display:flex;gap:24px;flex-wrap:wrap;align-items:center\">"
+        "<div><span style=\"font-size:28px;font-weight:700;color:#107c10\">'+totalGS.toLocaleString()+'</span><span style=\"color:#888;font-size:14px\"> / '+maxGS.toLocaleString()+' G ('+pct+'%)</span></div>"
+        "<div style=\"display:flex;gap:16px;font-size:13px\">"
+        "<span style=\"color:#4caf50\">\\u2714 '+complete+' complete</span>"
+        "<span style=\"color:#ff9800\">\\u25B6 '+started+' started</span>"
+        "<span style=\"color:#666\">\\u25CB '+unplayed+' unplayed</span>"
+        "</div></div>"
+        "';\n"
+        # Pagination
+        "  var totalPages=Math.ceil(items.length/PAGE_SIZE);\n"
+        "  var pageItems=items.slice(achPage*PAGE_SIZE,(achPage+1)*PAGE_SIZE);\n"
+        # Table header arrows
+        "  var ths=document.querySelectorAll('#ach-table thead th.sortable');\n"
+        "  ths.forEach(th=>{\n"
+        "    var k=th.getAttribute('onclick').match(/'(\\w+)'/)[1];\n"
+        "    var arrow=_achSortState.key===k?(_achSortState.dir==='asc'?' \\u25B2':' \\u25BC'):'';\n"
+        "    var base=th.textContent.replace(/[\\u25B2\\u25BC]/g,'').trim();\n"
+        "    th.textContent=base+arrow;\n"
+        "  });\n"
+        # Render rows
+        "  var tbody=document.getElementById('ach-tbody');\n"
+        "  var html='';\n"
+        "  pageItems.forEach(item=>{\n"
+        "    var pct=item.totalAchievements?Math.round(item.currentAchievements/item.totalAchievements*100):0;\n"
+        "    var barColor=pct===100?'#4caf50':pct>0?'#ff9800':'#333';\n"
+        "    var lastPlay=item.lastTimePlayed?(item.lastTimePlayed||'').replace('T',' ').slice(0,16):'-';\n"
+        "    var img=item.displayImage?'<img src=\"'+item.displayImage+'\" style=\"width:32px;height:32px;border-radius:4px;object-fit:cover;vertical-align:middle;margin-right:8px\" onerror=\"this.style.display=\\'none\\'\">':'';\n"
+        "    html+='<tr style=\"cursor:pointer\" onclick=\"_achShowDetail(\\''+item.xboxTitleId+'\\')\"><td>'+img+'<span>'+_esc(item.titleName)+'</span></td>';\n"
+        "    html+='<td class=\"num\" style=\"color:#107c10;font-weight:600\">'+(item.currentGamerscore||0).toLocaleString()+' <span style=\"color:#555;font-weight:400\">/ '+(item.totalGamerscore||0).toLocaleString()+'</span></td>';\n"
+        "    html+='<td class=\"num\"><div style=\"display:flex;align-items:center;gap:6px;justify-content:flex-end\"><span>'+item.currentAchievements+'/'+item.totalAchievements+'</span><div style=\"width:50px;height:6px;background:#222;border-radius:3px;overflow:hidden\"><div style=\"width:'+pct+'%;height:100%;background:'+barColor+';border-radius:3px\"></div></div><span style=\"color:#888;font-size:11px\">'+pct+'%</span></div></td>';\n"
+        "    html+='<td class=\"num\" style=\"color:#888;font-size:12px\">'+lastPlay+'</td></tr>';\n"
+        "  });\n"
+        "  tbody.innerHTML=html;\n"
+        "  _renderPager('ach-pager',achPage,totalPages,'achGoPage');\n"
+        "}\n"
+        "function achGoPage(p){achPage=p;_achRender();document.getElementById('achievements').scrollIntoView({behavior:'smooth'})}\n"
+
+        # Achievement detail modal
+        "function _achShowDetail(tid){\n"
+        "  var modal=document.getElementById('ach-detail-modal');\n"
+        "  modal.innerHTML='<div style=\"position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:10000\" onclick=\"if(event.target===this)this.remove()\"><div style=\"background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:24px;max-width:700px;width:90%;max-height:80vh;overflow-y:auto\"><div style=\"color:#888;text-align:center\">Loading achievements...</div></div></div>';\n"
+        "  fetch('/api/v1/xbox/achievements/'+tid,{headers:{'Authorization':'Bearer '+window._xctApiKey}})\n"
+        "  .then(r=>r.json()).then(data=>{\n"
+        "    var achs=data.achievements||[];\n"
+        "    var unlocked=achs.filter(a=>a.unlocked);\n"
+        "    var locked=achs.filter(a=>!a.unlocked);\n"
+        "    var html='<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:16px\"><h3 style=\"margin:0;color:#fff\">'+_esc(data.title||'')+'</h3><span style=\"color:#888\">'+unlocked.length+'/'+achs.length+' achievements</span></div>';\n"
+        "    function renderAch(a){\n"
+        "      var icon=a.mediaUrl?'<img src=\"'+a.mediaUrl+'\" style=\"width:40px;height:40px;border-radius:4px;object-fit:cover\" onerror=\"this.style.display=\\'none\\'\">':'<div style=\"width:40px;height:40px;background:#333;border-radius:4px\"></div>';\n"
+        "      var time=a.unlockTime?(a.unlockTime||'').replace('T',' ').slice(0,16):'';\n"
+        "      var rare=a.rarityPct?'<span style=\"color:#888;font-size:11px\">'+a.rarityPct.toFixed(1)+'% of players</span>':'';\n"
+        "      var desc=a.isSecret&&!a.unlocked?'<em style=\"color:#555\">Secret achievement</em>':_esc(a.description||'');\n"
+        "      return '<div style=\"display:flex;gap:12px;padding:8px 0;border-bottom:1px solid #222;align-items:center\">'+icon+'<div style=\"flex:1;min-width:0\"><div style=\"color:#ccc;font-weight:500\">'+_esc(a.name)+'</div><div style=\"color:#888;font-size:12px\">'+desc+'</div></div><div style=\"text-align:right;white-space:nowrap\"><div style=\"color:#107c10;font-weight:600\">'+a.gamerscore+' G</div>'+(time?'<div style=\"color:#666;font-size:11px\">'+time+'</div>':'')+''+rare+'</div></div>';\n"
+        "    }\n"
+        "    if(unlocked.length){html+='<div style=\"color:#4caf50;font-size:12px;font-weight:600;margin:12px 0 4px;text-transform:uppercase\">Unlocked ('+unlocked.length+')</div>';unlocked.forEach(a=>{html+=renderAch(a)})}\n"
+        "    if(locked.length){html+='<div style=\"color:#666;font-size:12px;font-weight:600;margin:16px 0 4px;text-transform:uppercase\">Locked ('+locked.length+')</div>';locked.forEach(a=>{html+=renderAch(a)})}\n"
+        "    modal.querySelector('div > div').innerHTML=html+'<div style=\"text-align:center;margin-top:16px\"><button onclick=\"document.getElementById(\\'ach-detail-modal\\').innerHTML=\\'\\'\" style=\"padding:6px 20px;background:#333;color:#ccc;border:1px solid #555;border-radius:4px;cursor:pointer\">Close</button></div>';\n"
+        "  }).catch(e=>{modal.innerHTML='';console.error('[ach] detail error:',e)});\n"
+        "}\n\n"
 
         # -- Admin panel JS --
         "function _adminScan(type){\n"
@@ -7701,6 +7897,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "var _cdnLoaded=false;\n"
         "function _loadTabData(id){\n"
         "if(id==='summary')renderSummary();\n"
+        "if(id==='achievements'&&!_achLoaded&&window._xctHosted&&window._xctApiKey)_achFetch();\n"
         "if(id==='admin'){_adminLoadScans();_cdnMonRefreshStatus();_cdnMonLoadScans();_cdnMonLoadPurged()}\n"
         "if(id==='cdnsync'&&!_cdnLoaded&&window._xctHosted){\n"
         "  _cdnLoaded=true;\n"
