@@ -3838,7 +3838,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '.gp-list .lv-row{grid-template-columns:50px 1fr 160px 120px 90px 80px}\n'
         '#purch-list .lv-head,#purch-list .lv-row{grid-template-columns:42px minmax(180px,1fr) 100px 120px 80px 90px 50px 50px 90px 80px 70px}\n'
         '#purch-list .lv-head{position:sticky;top:47px;z-index:20}\n'
-        '#mkt-list .lv-head,#mkt-list .lv-row,#mkt-list .mkt-alt{grid-template-columns:50px minmax(200px,1fr) 160px 90px 90px 100px 70px 70px 80px}\n'
+        '#mkt-list .lv-head,#mkt-list .lv-row,#mkt-list .mkt-alt{grid-template-columns:42px minmax(200px,1fr) 90px 90px 90px 100px 36px 42px 130px 130px}\n'
         '#mkt-list .lv-row{min-height:46px}\n'
         '#mkt-list .lv-head{position:relative;top:auto;z-index:2}\n'
         '#mkt-list .lv-title,#mkt-list .lv-pub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n'
@@ -5078,6 +5078,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "function mktColArrow(c){return mktSortCol===c?(mktSortDir==='asc'?' \\u25B2':' \\u25BC'):''}\n"
         "function sortMktCol(col){if(mktSortCol===col){mktSortDir=mktSortDir==='asc'?'desc':'asc'}else{mktSortCol=col;mktSortDir='asc'}"
         "var sortMap={title:{asc:'name',desc:'nameDesc'},publisher:{asc:'pub',desc:'pubDesc'},"
+        "developer:{asc:'dev',desc:'devDesc'},"
         "release:{asc:'relAsc',desc:'relDesc'},usd:{asc:'priceAsc',desc:'priceDesc'}};"
         "var m=sortMap[col];if(m){document.getElementById('mkt-sort').value=m[mktSortDir]}"
         "mktPage=0;filterMKT()}\n"
@@ -6763,6 +6764,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "filtered.sort((a,b)=>{"
         "if(mktSortCol==='title')return d*(a.title||'').localeCompare(b.title||'');"
         "if(mktSortCol==='publisher')return d*((a.publisher||'').localeCompare(b.publisher||'')||(a.title||'').localeCompare(b.title||''));"
+"if(mktSortCol==='developer')return d*((a.developer||'').localeCompare(b.developer||'')||(a.title||'').localeCompare(b.title||''));"
         "if(mktSortCol==='release'){const ar=a.releaseDate||'',br=b.releaseDate||'';"
         "if(!ar&&br)return 1;if(ar&&!br)return -1;return d*ar.localeCompare(br)||(a.title||'').localeCompare(b.title||'')}"
         "if(mktSortCol==='usd'){const ap=a.priceUSD||0,bp=b.priceUSD||0;"
@@ -6787,17 +6789,18 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Render
         "let gh='',lh='<div class=\"lv-head\"><div></div>"
         "<div data-sort onclick=\"sortMktCol(\\'title\\')\">Title'+mktColArrow('title')+'</div>"
-        "<div data-sort onclick=\"sortMktCol(\\'publisher\\')\">Publisher'+mktColArrow('publisher')+'</div>"
+        "<div style=\"text-align:center\">Status</div>"
         "<div data-sort onclick=\"sortMktCol(\\'release\\')\">Release'+mktColArrow('release')+'</div>"
         "<div data-sort style=\"text-align:right\" onclick=\"sortMktCol(\\'usd\\')\">'+_cc+mktColArrow('usd')+'</div>"
         "<div style=\"text-align:right;font-size:10px\">Best</div>"
         "<div style=\"text-align:center;font-size:10px\" title=\"Amazon UK\">🇬🇧</div>"
         "<div style=\"text-align:center;font-size:10px\" title=\"Amazon US\">🇺🇸</div>"
-        "<div style=\"text-align:center\">Status</div></div>';\n"
+        "<div data-sort onclick=\"sortMktCol(\\'developer\\')\">Developer'+mktColArrow('developer')+'</div>"
+        "<div data-sort onclick=\"sortMktCol(\\'publisher\\')\">Publisher'+mktColArrow('publisher')+'</div></div>';\n"
         'for(let i=0;i<pageItems.length;i++){const item=pageItems[i];\n'
         "const altCount=pageGroups?pageGroups[i].alts.length:0;\n"
         "const owned=item.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>'"
-        ":'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';\n"
+        ":'<span class=\"badge new\" style=\"font-size:9px\">NOT OWNED</span>';\n"
         "const _ss=item.subscriptions||[];"
         "const gpBadge=_gpTierBadge(_ss,item.onGP,9);\n"
         "const eaBadge=(_ss.includes('EA Play')||item.isEAPlay)?'<span class=\"badge\" style=\"font-size:9px;background:#ff6f00;color:#fff\">EA PLAY</span>':'';\n"
@@ -6832,17 +6835,18 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         'lh+=`<div class="lv-row" onclick="showMKTDetail(${item._idx})">${thumbImg}'
         '<div class="lv-title" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}'
         '${altCount>0?\'<span style="font-size:10px;color:#78909c;margin-left:6px;cursor:pointer" onclick="event.stopPropagation();_mktToggleAlts(this)">\'+altCount+\' ed.</span>\':\'\'}</div>'
-        '<div class="lv-pub">${item.publisher||\'\'}</div>'
+        '<div class="lv-status">${owned}${gpBadge}${eaBadge}${ubiBadge}${bundleBadge}</div>'
         '<div class="lv-type">${(item.releaseDate||\'\').substring(0,10)}</div>'
         '<div class="lv-usd">${usd?`<a href="${_usHref}" target="_blank" onclick="event.stopPropagation()" style="color:#42a5f5;text-decoration:none">${usd}</a>`:\'\'} ${saleTag}</div>'
         "${_bestCell(item)}"
         '${_azUK}${_azUS}'
-        '<div class="lv-status">${owned}${gpBadge}${eaBadge}${ubiBadge}${bundleBadge}</div></div>`;\n'
+        '<div class="lv-pub">${item.developer||\'\'}</div>'
+        '<div class="lv-pub">${item.publisher||\'\'}</div></div>`;\n'
 
         # Render alt rows (hidden by default) when grouping
         "if(pageGroups&&pageGroups[i].alts.length>0){"
         "pageGroups[i].alts.forEach(alt=>{"
-        "const aOwned=alt.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>':'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';"
+        "const aOwned=alt.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>':'<span class=\"badge new\" style=\"font-size:9px\">NOT OWNED</span>';"
         "const aUsd=_p(_gcAdj(alt.priceUSD));"
         "const aHref=_storeHref(alt.productId,alt.availableRegions||alt._availableRegions);"
         "const aSale=alt.currentPriceUSD>0&&alt.currentPriceUSD<alt.priceUSD?"
@@ -6853,12 +6857,13 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const _aAzUK=_amazonCell(alt.productId,alt.title,'UK');const _aAzUS=_amazonCell(alt.productId,alt.title,'US');"
         "lh+=`<div class=\"lv-row mkt-alt\" style=\"display:none;background:#1a1a2e;border-left:3px solid #455a64\" onclick=\"showMKTDetail(${alt._idx})\">${aThumb}"
         "<div class=\"lv-title\" style=\"padding-left:12px;font-size:12px\" title=\"${(alt.title||'').replace(/\"/g,'&quot;')}\">${alt.title||'Unknown'}</div>"
-        "<div class=\"lv-pub\">${alt.publisher||''}</div>"
+        "<div class=\"lv-status\">${aOwned}${aBundleBadge}</div>"
         "<div class=\"lv-type\">${(alt.releaseDate||'').substring(0,10)}</div>"
         "<div class=\"lv-usd\">${aUsd?`<a href=\"${aHref}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#42a5f5;text-decoration:none\">${aUsd}</a>`:''} ${aSale}</div>"
         "${_bestCell(alt)}"
         "${_aAzUK}${_aAzUS}"
-        "<div class=\"lv-status\">${aOwned}${aBundleBadge}</div></div>`})}\n"
+        "<div class=\"lv-pub\">${alt.developer||''}</div>"
+        "<div class=\"lv-pub\">${alt.publisher||''}</div></div>`})}\n"
 
         '}\n'
         "g.innerHTML=gh;l.innerHTML=lh;\n"
@@ -6930,13 +6935,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const g=document.getElementById('mkt-grid'),l=document.getElementById('mkt-list');\n"
         "let gh='',lh='<div class=\"lv-head\"><div></div>"
         "<div data-sort onclick=\"sortMktCol(\\'title\\')\">Title'+mktColArrow('title')+'</div>"
-        "<div data-sort onclick=\"sortMktCol(\\'publisher\\')\">Publisher'+mktColArrow('publisher')+'</div>"
+        "<div style=\"text-align:center\">Status</div>"
         "<div data-sort onclick=\"sortMktCol(\\'release\\')\">Release'+mktColArrow('release')+'</div>"
         "<div data-sort style=\"text-align:right\" onclick=\"sortMktCol(\\'usd\\')\">'+_cc+mktColArrow('usd')+'</div>"
         "<div style=\"text-align:right;font-size:10px\">Best</div>"
         "<div style=\"text-align:center;font-size:10px\" title=\"Amazon UK\">🇬🇧</div>"
         "<div style=\"text-align:center;font-size:10px\" title=\"Amazon US\">🇺🇸</div>"
-        "<div style=\"text-align:center\">Status</div></div>';\n"
+        "<div data-sort onclick=\"sortMktCol(\\'developer\\')\">Developer'+mktColArrow('developer')+'</div>"
+        "<div data-sort onclick=\"sortMktCol(\\'publisher\\')\">Publisher'+mktColArrow('publisher')+'</div></div>';\n"
         "products.forEach(function(item){\n"
         # Pre-process item for rendering (add fields the card/row templates expect)
         "if(item.imageBoxArt&&!item.boxArt)item.boxArt=item.imageBoxArt;\n"
@@ -6948,7 +6954,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "var altCount=item.altCount||0;\n"
         # Card rendering (same as local mode)
         "const owned=item.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>'"
-        ":'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';\n"
+        ":'<span class=\"badge new\" style=\"font-size:9px\">NOT OWNED</span>';\n"
         "const _ss=item.subscriptions||[];"
         "const gpBadge=_gpTierBadge(_ss,item.onGP,9);\n"
         "const eaBadge=(_ss.includes('EA Play')||item.isEAPlay)?'<span class=\"badge\" style=\"font-size:9px;background:#ff6f00;color:#fff\">EA PLAY</span>':'';\n"
@@ -6987,12 +6993,13 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         'lh+=`<div class="lv-row" onclick="showMKTDetail(\'${pid}\')"${_ctxAttr}>${thumbImg}'
         '<div class="lv-title" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}'
         '${altCount>0?\'<span style="font-size:10px;color:#78909c;margin-left:6px;cursor:pointer" onclick="event.stopPropagation();_mktToggleEditions(this,\\\'\'+item.xboxTitleId+\'\\\',\\\'\'+pid+\'\\\')">\'+(altCount)+\' ed.</span>\':\'\'}</div>'
-        '<div class="lv-pub">${item.publisher||\'\'}</div>'
+        '<div class="lv-status">${owned}${gpBadge}${eaBadge}${ubiBadge}${bundleBadge}</div>'
         '<div class="lv-type">${(item.releaseDate||\'\').substring(0,10)}</div>'
         '<div class="lv-usd">${usd?`<a href="${_usHref}" target="_blank" onclick="event.stopPropagation()" style="color:#42a5f5;text-decoration:none">${usd}</a>`:\'\'} ${saleTag}</div>'
         "${_bestCell(item)}"
         '${_azUK}${_azUS}'
-        '<div class="lv-status">${owned}${gpBadge}${eaBadge}${ubiBadge}${bundleBadge}</div></div>`;\n'
+        '<div class="lv-pub">${item.developer||\'\'}</div>'
+        '<div class="lv-pub">${item.publisher||\'\'}</div></div>`;\n'
         "});\n"
         # Write to DOM
         "g.innerHTML=gh;l.innerHTML=lh;\n"
@@ -7026,7 +7033,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "d.className='lv-row mkt-alt';"
         "d.style.cssText='background:#1a1a2e;border-left:3px solid #455a64';"
         "d.onclick=function(){showMKTDetail(alt.productId)};"
-        "var aOwned=alt.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>':'<span class=\"badge new\" style=\"font-size:9px\">NEW</span>';"
+        "var aOwned=alt.owned?'<span class=\"badge owned\" style=\"font-size:9px\">OWNED</span>':'<span class=\"badge new\" style=\"font-size:9px\">NOT OWNED</span>';"
         "var aUsd=_p(_gcAdj(alt.priceUSD));"
         "var aHref=_storeHref(alt.productId,alt.availableRegions);"
         "var aSale=alt.currentPriceUSD>0&&alt.currentPriceUSD<alt.priceUSD?"
@@ -7035,11 +7042,13 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "var aThumb=aImg?'<img src=\"'+aImg+'\" loading=\"lazy\" onerror=\"this.style.display=\\'none\\'\">':'';"
         "d.innerHTML=aThumb+"
         "'<div class=\"lv-title\" style=\"padding-left:12px;font-size:12px\">'+(alt.title||'Unknown')+'</div>'"
-        "+'<div class=\"lv-pub\">'+(alt.publisher||'')+'</div>'"
+        "+'<div class=\"lv-status\">'+aOwned+'</div>'"
         "+'<div class=\"lv-type\">'+(alt.releaseDate||'').substring(0,10)+'</div>'"
         "+'<div class=\"lv-usd\">'+(aUsd?'<a href=\"'+aHref+'\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#42a5f5;text-decoration:none\">'+aUsd+'</a>':'')+' '+aSale+'</div>'"
         "+_bestCell(alt)"
-        "+'<div class=\"lv-status\">'+aOwned+'</div>';"
+        "+'<div></div><div></div>'"
+        "+'<div class=\"lv-pub\">'+(alt.developer||'')+'</div>'"
+        "+'<div class=\"lv-pub\">'+(alt.publisher||'')+'</div>';"
         "frag.appendChild(d)});\n"
         "row.parentNode.insertBefore(frag,row.nextSibling);\n"
         "}).catch(function(e){console.error('[store] editions error:',e)})}\n"

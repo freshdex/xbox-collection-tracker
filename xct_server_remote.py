@@ -1269,6 +1269,7 @@ _STORE_SORT_MAP = {
     "pub":          ("p.publisher ASC, p.title ASC", False),
     "pubDesc":      ("p.publisher DESC, p.title ASC", False),
     "dev":          ("p.developer ASC, p.title ASC", False),
+    "devDesc":      ("p.developer DESC, p.title ASC", False),
     "cat":          ("p.category ASC, p.title ASC", False),
 }
 
