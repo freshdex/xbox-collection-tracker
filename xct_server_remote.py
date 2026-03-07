@@ -4402,6 +4402,8 @@ def profile_put(conn=None, cur=None, contributor=None, api_key=None):
                             entry["col2"] = info["col2"][:128]
                     if "regionLock" in info and isinstance(info["regionLock"], bool):
                         entry["regionLock"] = info["regionLock"]
+                    if "changesLeft" in info and isinstance(info["changesLeft"], str):
+                        entry["changesLeft"] = info["changesLeft"][:1]
                     if "notes" in info and isinstance(info["notes"], str):
                         entry["notes"] = info["notes"][:500]
                     if entry:
