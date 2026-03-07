@@ -1274,14 +1274,20 @@ _STORE_SORT_MAP = {
 
 @app.route("/api/v1/store/filters")
 def store_filters():
-    """Dropdown options with global counts. Cached 5 min server-side."""
+    """Dropdown options with global counts. Cached 5 min server-side.
+
+    ?fields=publishers,developers  — lazy-load only the heavy dropdown data.
+    Without ?fields, returns everything except publishers/developers.
+    """
     conn = get_db()
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+        fields_raw = request.args.get("fields", "")
+
         # Check in-memory cache
         now = time.time()
-        cache_key = "store_filters"
+        cache_key = "store_filters" + ("_" + fields_raw if fields_raw else "")
         if cache_key in _shared_cache:
             etag, gz_bytes, ts = _shared_cache[cache_key]
             if now - ts < SHARED_CACHE_TTL:
@@ -1294,6 +1300,26 @@ def store_filters():
                     "Content-Encoding": "gzip",
                     "ETag": etag,
                     "Cache-Control": "public, max-age=300"})
+
+        # Lazy mode: ?fields=publishers,developers — fetch ONLY those, skip everything else
+        if fields_raw:
+            lazy_result = {}
+            field_list = [f.strip() for f in fields_raw.split(",")]
+            if "publishers" in field_list:
+                cur.execute("""
+                    SELECT publisher AS value, COUNT(*) AS count
+                    FROM marketplace_products WHERE title != product_id AND publisher != ''
+                    GROUP BY publisher ORDER BY count DESC
+                """)
+                lazy_result["publishers"] = [dict(r) for r in cur.fetchall()]
+            if "developers" in field_list:
+                cur.execute("""
+                    SELECT developer AS value, COUNT(*) AS count
+                    FROM marketplace_products WHERE title != product_id AND developer != ''
+                    GROUP BY developer ORDER BY count DESC
+                """)
+                lazy_result["developers"] = [dict(r) for r in cur.fetchall()]
+            return _gzip_json_response(lazy_result, cache_key=cache_key)
 
         # Channels
         cur.execute("""
@@ -1329,22 +1355,6 @@ def store_filters():
             GROUP BY category ORDER BY count DESC
         """)
         categories = [dict(r) for r in cur.fetchall()]
-
-        # Publishers
-        cur.execute("""
-            SELECT publisher AS value, COUNT(*) AS count
-            FROM marketplace_products WHERE title != product_id AND publisher != ''
-            GROUP BY publisher ORDER BY count DESC
-        """)
-        publishers = [dict(r) for r in cur.fetchall()]
-
-        # Developers
-        cur.execute("""
-            SELECT developer AS value, COUNT(*) AS count
-            FROM marketplace_products WHERE title != product_id AND developer != ''
-            GROUP BY developer ORDER BY count DESC
-        """)
-        developers = [dict(r) for r in cur.fetchall()]
 
         # Subscriptions (with total value per tier from regional prices)
         try:
@@ -1412,74 +1422,48 @@ def store_filters():
             "crossgen": mp_raw_counts.get("XblCrossGenMultiplayer", 0) + mp_raw_counts.get("CrossGen", 0),
         }
 
-        # Bundle counts
+        # Single-pass counts: bundles, booleans, release, total
+        # Replaces 4 separate queries with one scan of marketplace_products
         cur.execute("""
-            SELECT 'bundles' AS value, COUNT(*) AS count FROM marketplace_products p
-                WHERE p.title != p.product_id AND (p.is_bundle = TRUE
-                OR EXISTS (SELECT 1 FROM marketplace_tags mt WHERE mt.product_id = p.product_id
-                    AND mt.tag_type = 'is_bundle_override' AND mt.tag_value = 'true'))
-            UNION ALL
-            SELECT 'notbundle', COUNT(*) FROM marketplace_products p
-                WHERE p.title != p.product_id AND p.is_bundle = FALSE
-                AND NOT EXISTS (SELECT 1 FROM marketplace_tags mt WHERE mt.product_id = p.product_id
-                    AND mt.tag_type = 'is_bundle_override' AND mt.tag_value = 'true')
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE is_bundle = TRUE) AS bundles,
+                COUNT(*) FILTER (WHERE is_bundle = FALSE) AS notbundle,
+                COUNT(*) FILTER (WHERE xcloud_streamable = TRUE) AS xcloud,
+                COUNT(*) FILTER (WHERE has_trial_sku = TRUE) AS trial,
+                COUNT(*) FILTER (WHERE has_achievements = TRUE) AS ach,
+                COUNT(*) FILTER (WHERE has_price AND release_date IS NOT NULL
+                    AND release_date <= CURRENT_DATE
+                    AND EXTRACT(YEAR FROM release_date) < 2100) AS released,
+                COUNT(*) FILTER (WHERE has_price AND release_date > CURRENT_DATE
+                    AND EXTRACT(YEAR FROM release_date) < 2100) AS preorder,
+                COUNT(*) FILTER (WHERE NOT has_price) AS no_price
+            FROM (
+                SELECT p.*,
+                    EXISTS (SELECT 1 FROM marketplace_prices rp
+                        WHERE rp.product_id = p.product_id AND rp.msrp > 0) AS has_price
+                FROM marketplace_products p WHERE p.title != p.product_id
+            ) sub
         """)
-        bundle_counts = {r["value"]: r["count"] for r in cur.fetchall()}
+        counts = dict(cur.fetchone())
+        total = counts["total"]
+        bundle_counts = {"bundles": counts["bundles"], "notbundle": counts["notbundle"]}
+        bool_counts = {"xcloud": counts["xcloud"], "trial": counts["trial"], "ach": counts["ach"]}
+        release_counts = {"released": counts["released"], "preorder": counts["preorder"],
+                          "noPrice": counts["no_price"]}
 
-        # Physical disc counts
+        # Physical disc counts (separate table, tiny and fast)
         cur.execute("""
-            SELECT 'physical' AS value, COUNT(*) AS count FROM amazon_links
-                WHERE status IN ('uk','us','both')
-            UNION ALL
-            SELECT 'uk', COUNT(*) FROM amazon_links WHERE status IN ('uk','both')
-            UNION ALL
-            SELECT 'us', COUNT(*) FROM amazon_links WHERE status IN ('us','both')
-            UNION ALL
-            SELECT 'digital', COUNT(*) FROM amazon_links WHERE status = 'digital'
-            UNION ALL
-            SELECT 'notscanned', (SELECT COUNT(*) FROM marketplace_products WHERE title != product_id)
-                - (SELECT COUNT(*) FROM amazon_links)
+            SELECT
+                COUNT(*) FILTER (WHERE status IN ('uk','us','both')) AS physical,
+                COUNT(*) FILTER (WHERE status IN ('uk','both')) AS uk,
+                COUNT(*) FILTER (WHERE status IN ('us','both')) AS us,
+                COUNT(*) FILTER (WHERE status = 'digital') AS digital
+            FROM amazon_links
         """)
-        phys_counts = {r["value"]: r["count"] for r in cur.fetchall()}
-
-        # Release status counts
-        cur.execute("""
-            SELECT 'released' AS value, COUNT(*) AS count FROM marketplace_products p
-                WHERE p.title != p.product_id
-                AND p.release_date IS NOT NULL
-                AND p.release_date <= CURRENT_DATE AND EXTRACT(YEAR FROM p.release_date) < 2100
-                AND EXISTS (SELECT 1 FROM marketplace_prices rp
-                    WHERE rp.product_id = p.product_id AND rp.msrp > 0)
-            UNION ALL
-            SELECT 'preorder', COUNT(*) FROM marketplace_products p
-                WHERE p.title != p.product_id AND p.release_date > CURRENT_DATE
-                AND EXTRACT(YEAR FROM p.release_date) < 2100
-                AND EXISTS (SELECT 1 FROM marketplace_prices rp
-                    WHERE rp.product_id = p.product_id AND rp.msrp > 0)
-            UNION ALL
-            SELECT 'noPrice', COUNT(*) FROM marketplace_products p
-                WHERE p.title != p.product_id
-                AND NOT EXISTS (SELECT 1 FROM marketplace_prices rp
-                    WHERE rp.product_id = p.product_id AND rp.msrp > 0)
-        """)
-        release_counts = {r["value"]: r["count"] for r in cur.fetchall()}
-
-        # Boolean checkbox counts
-        cur.execute("""
-            SELECT 'xcloud' AS value, COUNT(*) AS count FROM marketplace_products
-                WHERE title != product_id AND xcloud_streamable = TRUE
-            UNION ALL
-            SELECT 'trial', COUNT(*) FROM marketplace_products
-                WHERE title != product_id AND has_trial_sku = TRUE
-            UNION ALL
-            SELECT 'ach', COUNT(*) FROM marketplace_products
-                WHERE title != product_id AND has_achievements = TRUE
-        """)
-        bool_counts = {r["value"]: r["count"] for r in cur.fetchall()}
-
-        # Total
-        cur.execute("SELECT COUNT(*) AS cnt FROM marketplace_products WHERE title != product_id")
-        total = cur.fetchone()["cnt"]
+        pc = dict(cur.fetchone())
+        pc["notscanned"] = total - (pc["physical"] + pc["digital"])
+        phys_counts = pc
 
         # Last scan
         last_scan = None
@@ -1499,8 +1483,7 @@ def store_filters():
 
         result = {
             "channels": channels, "types": types, "platforms": platforms,
-            "categories": categories, "publishers": publishers,
-            "developers": developers, "subscriptions": subscriptions,
+            "categories": categories, "subscriptions": subscriptions,
             "priceCounts": price_counts, "mpCounts": mp_counts,
             "bundleCounts": bundle_counts, "physCounts": phys_counts,
             "releaseCounts": release_counts, "boolCounts": bool_counts,
