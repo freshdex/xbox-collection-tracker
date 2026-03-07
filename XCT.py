@@ -4531,7 +4531,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
     )
 
     if default_tab:
-        html += f'<script>var _defaultTab="{default_tab}";</script>\n'
+        html += f'<script>var _defaultTab="{default_tab}";window._xctHosted=true;</script>\n'
     html += '<script src="data.js"></script>\n'
     # Fallback declarations if data.js fails to load (e.g. 502)
     html += (
