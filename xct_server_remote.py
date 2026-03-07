@@ -676,7 +676,8 @@ def data_js():
                 default = []
             return row["data"] if row else default
 
-        rates = _load_shared("rates", {})
+        _rates_raw = _load_shared("rates", {})
+        rates = _rates_raw.get("rates", _rates_raw) if isinstance(_rates_raw, dict) else {}
         flags = _load_shared("flags", {})
         gfwl = _load_shared("gfwl", [])
         gp = _load_shared("gp", [])
