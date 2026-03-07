@@ -3838,7 +3838,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '.gp-list .lv-row{grid-template-columns:50px 1fr 160px 120px 90px 80px}\n'
         '#purch-list .lv-head,#purch-list .lv-row{grid-template-columns:42px minmax(180px,1fr) 100px 120px 80px 90px 50px 50px 90px 80px 70px}\n'
         '#purch-list .lv-head{position:sticky;top:47px;z-index:20}\n'
-        '#mkt-list .lv-head,#mkt-list .lv-row,#mkt-list .mkt-alt{grid-template-columns:50px 280px 160px 90px 90px repeat(10,80px) 80px}\n'
+        '#mkt-list .lv-head,#mkt-list .lv-row,#mkt-list .mkt-alt{grid-template-columns:50px 280px 160px 90px 90px repeat(10,80px) 70px 70px 80px}\n'
         '#mkt-list .lv-row{min-height:46px}\n'
         '#mkt-list .lv-head{position:relative;top:auto;z-index:2}\n'
         '#mkt-list .lv-title,#mkt-list .lv-pub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n'
@@ -4287,6 +4287,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<label class="mkt-tick"><input type="checkbox" id="mkt-noplayed" onchange="mktPage=0;filterMKT()"> Hide played games</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-noach" onchange="mktPage=0;filterMKT()"> Hide games I have achievements in</label>\n'
         '</div>\n'
+        '<div class="filter-group" id="mkt-amazon-wrap" style="display:none"><div class="filter-label">Physical Disc</div>'
+        '<select id="mkt-amazon" onchange="mktPage=0;filterMKT()" style="width:100%;padding:6px;background:#222;color:#fff;border:1px solid #444;border-radius:4px">'
+        '<option value="">All</option>'
+        '<option value="uk">Amazon UK Only</option>'
+        '<option value="us">Amazon US Only</option>'
+        '<option value="both">Amazon Both</option>'
+        '<option value="digital">Digital Only</option>'
+        '</select></div>\n'
         # Last scan info (moved from top)
         '<div id="mkt-scan-banner" style="font-size:11px;color:#666;margin-top:14px;padding-top:10px;border-top:1px solid #222"></div>\n'
         '</div>\n'
@@ -5033,6 +5041,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=false;"
         "if(document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=false;"
         "if(document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=false;"
+        "if(document.getElementById('mkt-amazon'))document.getElementById('mkt-amazon').value='';"
         "document.getElementById('mkt-search').value='';"
         "document.getElementById('mkt-saved').value='';"
         "mktSortCol=null;mktPage=0;"
@@ -5083,6 +5092,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');"
         "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');"
         "if(document.getElementById('mkt-noach')&&document.getElementById('mkt-noach').checked)p.set('noach','1');"
+        "var azV=document.getElementById('mkt-amazon')?document.getElementById('mkt-amazon').value:'';"
+        "if(azV)p.set('amazon',azV);"
         "_setRoute('store',p.toString())}\n"
 
         "function _mktDeserializeFilters(qsArg){"
@@ -5109,6 +5120,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('nodemo')==='1'&&document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=true;"
         "if(p.get('noplayed')==='1'&&document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=true;"
         "if(p.get('noach')==='1'&&document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=true;"
+        "if(p.has('amazon')&&document.getElementById('mkt-amazon'))document.getElementById('mkt-amazon').value=p.get('amazon');"
         "return true}\n"
 
         # -- Library filter serialization --
@@ -5217,6 +5229,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');"
         "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');"
         "if(document.getElementById('mkt-noach')&&document.getElementById('mkt-noach').checked)p.set('noach','1');"
+        "var azV=document.getElementById('mkt-amazon')?document.getElementById('mkt-amazon').value:'';if(azV)p.set('amazon',azV);"
         "_mktSavedFilters.push({name:name,params:p.toString()});"
         "localStorage.setItem('xct_mkt_saved',JSON.stringify(_mktSavedFilters));"
         "_mktInitSaved();sel.value='';return}"
@@ -5238,6 +5251,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=false;"
         "if(document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=false;"
         "if(document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=false;"
+        "if(document.getElementById('mkt-amazon'))document.getElementById('mkt-amazon').value='';"
         "document.getElementById('mkt-search').value='';"
         # Apply saved params
         "const p=new URLSearchParams(found.params);"
@@ -5258,6 +5272,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('nodemo')==='1'&&document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=true;"
         "if(p.get('noplayed')==='1'&&document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=true;"
         "if(p.get('noach')==='1'&&document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=true;"
+        "if(p.has('amazon')&&document.getElementById('mkt-amazon'))document.getElementById('mkt-amazon').value=p.get('amazon');"
         "mktPage=0;filterMKT();sel.value=''}\n"
 
         "function _mktDeleteSaved(name){"
@@ -5466,6 +5481,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('tab-subs').style.display='';"
         "document.getElementById('tab-subs-cnt').textContent=data.subscriptions.reduce(function(s,x){return s+x.count},0);"
         "}\n"
+        "document.getElementById('mkt-amazon-wrap').style.display='';\n"
         "document.getElementById('tab-mkt-cnt').textContent=data.totalProducts;\n"
         # Scan status banner
         "if(data.lastScan&&data.lastScan.completedAt){"
@@ -6339,6 +6355,74 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "h+='</table>';return '<div style=\"margin-top:12px\">"
         "<div style=\"font-weight:600;margin-bottom:6px;color:#ccc\">Regional Prices "
         "<span style=\"font-size:11px;color:#888\">(Gift Card USD = local price \\u00f7 rate \\u00d7 0.81)</span></div>'+h+'</div>'}\n"
+
+        # -- Amazon Physical Disc Finder --
+        "var _amazonData={};\n"
+        "function _amazonCell(pid,mkt){"
+        "const d=_amazonData[pid];"
+        "if(!d||!d[mkt]||!d[mkt].length)return '<div class=\"lv-reg\" style=\"color:#333;text-align:center\">-</div>';"
+        "const best=d[mkt][0];"
+        "const col=mkt==='UK'?'#ff9800':'#42a5f5';"
+        "return `<div class=\"lv-reg\" style=\"text-align:center\">"
+        "<a href=\"${best.url}\" target=\"_blank\" onclick=\"event.stopPropagation()\" "
+        "style=\"color:${col};text-decoration:none;font-size:11px\" title=\"${(best.title||'').replace(/\"/g,'&quot;')}\">"
+        "${best.price||'Link'}</a></div>`}\n"
+        "function _amazonBatchFetch(pids){"
+        "if(!window._xctHosted||!pids||!pids.length)return;"
+        "fetch('/api/v1/store/amazon/batch',{method:'POST',"
+        "headers:{'Content-Type':'application/json'},"
+        "body:JSON.stringify({productIds:pids})})"
+        ".then(r=>r.json()).then(data=>{"
+        "Object.assign(_amazonData,data);"
+        "_amazonUpdateCells();"
+        "document.getElementById('mkt-amazon-wrap').style.display=''"
+        "}).catch(e=>console.error('[amazon] batch error:',e))}\n"
+        "function _amazonUpdateCells(){"
+        "const azF=document.getElementById('mkt-amazon')?document.getElementById('mkt-amazon').value:'';"
+        "document.querySelectorAll('#mkt-list .lv-row:not(.lv-head)').forEach(row=>{"
+        "const oc=row.getAttribute('onclick')||'';"
+        "const m=oc.match(/showMKTDetail\\(['\"]?([^'\"\\)]+)/);"
+        "if(!m)return;"
+        "const pid=m[1];"
+        "const d=_amazonData[pid];"
+        "if(!d)return;"
+        # Update cells - find the amazon column cells (2nd and 3rd from last)
+        "const cells=row.children;"
+        "if(cells.length>=3){"
+        "const ukCell=cells[cells.length-3];"
+        "const usCell=cells[cells.length-2];"
+        "ukCell.innerHTML=_amazonCell(pid,'UK').replace(/<div[^>]*>/,'').replace(/<\\/div>/,'');"
+        "usCell.innerHTML=_amazonCell(pid,'US').replace(/<div[^>]*>/,'').replace(/<\\/div>/,'')}"
+        # Apply filter
+        "if(azF){"
+        "const hasUK=_amazonHasMarket(pid,'UK');"
+        "const hasUS=_amazonHasMarket(pid,'US');"
+        "let hide=false;"
+        "if(azF==='uk'&&!hasUK)hide=true;"
+        "if(azF==='us'&&!hasUS)hide=true;"
+        "if(azF==='both'&&(!hasUK||!hasUS))hide=true;"
+        "if(azF==='digital'&&(hasUK||hasUS))hide=true;"
+        "if(hide)row.style.display='none'}})}\n"
+        "function _amazonHasMarket(pid,mkt){"
+        "const d=_amazonData[pid];"
+        "return d&&d[mkt]&&d[mkt].length>0}\n"
+        "function _amazonDetailHtml(pid){"
+        "const d=_amazonData[pid];"
+        "if(!d)return '';"
+        "let h='';"
+        "['UK','US'].forEach(mkt=>{"
+        "const items=d[mkt];"
+        "if(!items||!items.length)return;"
+        "const flag=mkt==='UK'?'\\ud83c\\uddec\\ud83c\\udde7':'\\ud83c\\uddfa\\ud83c\\uddf8';"
+        "h+='<div style=\"margin-top:8px\"><strong>'+flag+' Amazon '+mkt+'</strong></div>';"
+        "h+='<table style=\"width:100%;font-size:12px;margin-top:4px\">';"
+        "h+='<tr><th style=\"text-align:left;color:#888\">Title</th><th style=\"color:#888\">Edition</th><th style=\"text-align:right;color:#888\">Price</th></tr>';"
+        "items.forEach(it=>{"
+        "h+='<tr><td><a href=\"'+it.url+'\" target=\"_blank\" style=\"color:#42a5f5;text-decoration:none\">'+(it.title||'Link')+'</a></td>';"
+        "h+='<td style=\"color:#aaa\">'+(it.edition||'-')+'</td>';"
+        "h+='<td style=\"text-align:right;color:#4caf50;font-weight:600\">'+(it.price||'-')+'</td></tr>'});"
+        "h+='</table>'});"
+        "return h?'<div style=\"margin-top:12px\"><div style=\"font-weight:600;margin-bottom:6px;color:#ccc\">Physical Disc (Amazon)</div>'+h+'</div>':''}\n"
         '\n'
 
         # -- filterMKT (Marketplace) --
@@ -6418,6 +6502,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const noplayedF=document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked;\n"
         "const noachF=document.getElementById('mkt-noach')&&document.getElementById('mkt-noach').checked;\n"
         "const _achTids=noachF&&typeof _xctAchSummaries!=='undefined'?new Set(_xctAchSummaries.filter(a=>a.currentAchievements>0).map(a=>a.xboxTitleId)):null;\n"
+        "const _azFilter=document.getElementById('mkt-amazon')?document.getElementById('mkt-amazon').value:'';\n"
 
         "const g=document.getElementById('mkt-grid');const l=document.getElementById('mkt-list');\n"
         'let filtered=MKT.filter(item=>{\n'
@@ -6475,6 +6560,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(nodemoF&&/\\bDemo$/i.test(item.title||''))return false;\n"
         "if(noplayedF&&PH.some(ph=>ph.productId===item.productId&&ph.lastTimePlayed))return false;\n"
         "if(_achTids&&item.xboxTitleId&&_achTids.has(item.xboxTitleId))return false;\n"
+        # Amazon filter
+        "if(_azFilter){"
+        "const hasUK=_amazonHasMarket(item.productId,'UK');"
+        "const hasUS=_amazonHasMarket(item.productId,'US');"
+        "if(_azFilter==='uk'&&!hasUK)return false;"
+        "if(_azFilter==='us'&&!hasUS)return false;"
+        "if(_azFilter==='both'&&(!hasUK||!hasUS))return false;"
+        "if(_azFilter==='digital'&&(hasUK||hasUS))return false}\n"
         # Release Status cb-drop
         "if(preorderVals){let rp=false;"
         "if(preorderVals.includes('released')&&!item.isPreOrder)rp=true;"
@@ -6549,6 +6642,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "<div data-sort onclick=\"sortMktCol(\\'release\\')\">Release'+mktColArrow('release')+'</div>"
         "<div data-sort style=\"text-align:right\" onclick=\"sortMktCol(\\'usd\\')\">USD'+mktColArrow('usd')+'</div>"
         "'+_RORD.map(m=>'<div style=\"text-align:right;font-size:10px\">'+m+'</div>').join('')+'"
+        "<div style=\"text-align:center;font-size:10px\" title=\"Amazon UK\">🇬🇧</div>"
+        "<div style=\"text-align:center;font-size:10px\" title=\"Amazon US\">🇺🇸</div>"
         "<div style=\"text-align:center\">Status</div></div>';\n"
         'for(let i=0;i<pageItems.length;i++){const item=pageItems[i];\n'
         "const altCount=pageGroups?pageGroups[i].alts.length:0;\n"
@@ -6584,6 +6679,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '${bestCard}${ratingStr}'
         '<div class="card-badges">${owned}${gpBadge}${eaBadge}${ubiBadge}${gtaBadge}${gwgBadge}${bundleBadge}${xcloudBadge}${altBadge}${chBadges}</div></div></div>`;\n'
         "const thumbImg=img?`<img src=\"${_imgResize(img,80,80)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';\n"
+        "const _azUK=_amazonCell(item.productId,'UK');const _azUS=_amazonCell(item.productId,'US');\n"
         'lh+=`<div class="lv-row" onclick="showMKTDetail(${item._idx})">${thumbImg}'
         '<div class="lv-title" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}'
         '${altCount>0?\'<span style="font-size:10px;color:#78909c;margin-left:6px;cursor:pointer" onclick="event.stopPropagation();_mktToggleAlts(this)">\'+altCount+\' ed.</span>\':\'\'}</div>'
@@ -6591,6 +6687,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="lv-type">${(item.releaseDate||\'\').substring(0,10)}</div>'
         '<div class="lv-usd">${usd?`<a href="${_usHref}" target="_blank" onclick="event.stopPropagation()" style="color:#42a5f5;text-decoration:none">${usd}</a>`:\'\'} ${saleTag}</div>'
         "${_RORD.map(m=>_regCell(item,m)).join('')}"
+        '${_azUK}${_azUS}'
         '<div class="lv-status">${owned}${gpBadge}${eaBadge}${ubiBadge}${bundleBadge}</div></div>`;\n'
 
         # Render alt rows (hidden by default) when grouping
@@ -6604,12 +6701,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const aImg=alt.heroImage||alt.boxArt||'';"
         "const aThumb=aImg?`<img src=\"${_imgResize(aImg,80,80)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';"
         "const aBundleBadge=alt._isBundle?'<span class=\"badge\" style=\"font-size:9px;background:#e65100;color:#fff\">BUNDLE</span>':'';"
+        "const _aAzUK=_amazonCell(alt.productId,'UK');const _aAzUS=_amazonCell(alt.productId,'US');"
         "lh+=`<div class=\"lv-row mkt-alt\" style=\"display:none;background:#1a1a2e;border-left:3px solid #455a64\" onclick=\"showMKTDetail(${alt._idx})\">${aThumb}"
         "<div class=\"lv-title\" style=\"padding-left:12px;font-size:12px\" title=\"${(alt.title||'').replace(/\"/g,'&quot;')}\">${alt.title||'Unknown'}</div>"
         "<div class=\"lv-pub\">${alt.publisher||''}</div>"
         "<div class=\"lv-type\">${(alt.releaseDate||'').substring(0,10)}</div>"
         "<div class=\"lv-usd\">${aUsd?`<a href=\"${aHref}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#42a5f5;text-decoration:none\">${aUsd}</a>`:''} ${aSale}</div>"
         "${_RORD.map(m=>_regCell(alt,m)).join('')}"
+        "${_aAzUK}${_aAzUS}"
         "<div class=\"lv-status\">${aOwned}${aBundleBadge}</div></div>`})}\n"
 
         '}\n'
@@ -6683,7 +6782,11 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "<div data-sort onclick=\"sortMktCol(\\'release\\')\">Release'+mktColArrow('release')+'</div>"
         "<div data-sort style=\"text-align:right\" onclick=\"sortMktCol(\\'usd\\')\">USD'+mktColArrow('usd')+'</div>"
         "'+_RORD.map(m=>'<div style=\"text-align:right;font-size:10px\">'+m+'</div>').join('')+'"
+        "<div style=\"text-align:center;font-size:10px\" title=\"Amazon UK\">🇬🇧</div>"
+        "<div style=\"text-align:center;font-size:10px\" title=\"Amazon US\">🇺🇸</div>"
         "<div style=\"text-align:center\">Status</div></div>';\n"
+        "var _pagePids=products.map(p=>p.productId);\n"
+        "_amazonBatchFetch(_pagePids);\n"
         "products.forEach(function(item){\n"
         # Pre-process item for rendering (add fields the card/row templates expect)
         "if(item.imageBoxArt&&!item.boxArt)item.boxArt=item.imageBoxArt;\n"
@@ -6729,6 +6832,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="card-badges">${owned}${gpBadge}${eaBadge}${ubiBadge}${gtaBadge}${gwgBadge}${bundleBadge}${xcloudBadge}${altBadge}${chBadges}</div></div></div>`;\n'
         # List row
         "const thumbImg=img?`<img src=\"${img.replace(/\\?w=330&h=186/,'?w=80&h=80')}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'';\n"
+        "const _azUK=_amazonCell(pid,'UK');const _azUS=_amazonCell(pid,'US');\n"
         'lh+=`<div class="lv-row" onclick="showMKTDetail(\'${pid}\')">${thumbImg}'
         '<div class="lv-title" title="${(item.title||\'\').replace(/"/g,\'&quot;\')}">${item.title||\'Unknown\'}'
         '${altCount>0?\'<span style="font-size:10px;color:#78909c;margin-left:6px;cursor:pointer" onclick="event.stopPropagation();_mktToggleEditions(this,\\\'\'+item.xboxTitleId+\'\\\',\\\'\'+pid+\'\\\')">\'+(altCount)+\' ed.</span>\':\'\'}</div>'
@@ -6736,6 +6840,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="lv-type">${(item.releaseDate||\'\').substring(0,10)}</div>'
         '<div class="lv-usd">${usd?`<a href="${_usHref}" target="_blank" onclick="event.stopPropagation()" style="color:#42a5f5;text-decoration:none">${usd}</a>`:\'\'} ${saleTag}</div>'
         "${_RORD.map(m=>_regCell(item,m)).join('')}"
+        '${_azUK}${_azUS}'
         '<div class="lv-status">${owned}${gpBadge}${eaBadge}${ubiBadge}${bundleBadge}</div></div>`;\n'
         "});\n"
         # Write to DOM
@@ -6832,7 +6937,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div><span class="lbl">Store:</span></div><div class="val"><a href="${_storeUrl(item.productId)}" target="_blank">${item.productId}</a></div>\n'
         "${descHtml}\n"
         "</div>\n"
-        "${_regionTbl(item)}`;\n"
+        "${_regionTbl(item)}"
+        "${_amazonDetailHtml(item.productId)}`;\n"
         "document.getElementById('modal').classList.add('active')}\n"
 
         # -- showMKTDetail API mode --
@@ -6887,8 +6993,17 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div><span class="lbl">Store:</span></div><div class="val"><a href="${_storeUrl(item.productId)}" target="_blank">${item.productId}</a></div>\n'
         "${descHtml}\n"
         "</div>\n"
-        "${_regionTbl(item)}`;\n"
+        "${_regionTbl(item)}"
+        "<div id=\"amazon-detail-slot\"></div>`;\n"
         "document.getElementById('modal').classList.add('active');\n"
+        # Fetch Amazon data for this product
+        "fetch('/api/v1/store/amazon/'+encodeURIComponent(pid))"
+        ".then(r=>r.json()).then(azData=>{"
+        "if(azData&&!azData.error){"
+        "_amazonData[pid]=azData;"
+        "var slot=document.getElementById('amazon-detail-slot');"
+        "if(slot)slot.innerHTML=_amazonDetailHtml(pid)}"
+        "}).catch(e=>console.error('[amazon] detail error:',e));\n"
         "}).catch(function(e){console.error('[store] detail error:',e)})}\n"
         '\n'
 
