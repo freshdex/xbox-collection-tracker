@@ -3692,7 +3692,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '.filter-group{display:flex;flex-direction:column;gap:1px}\n'
         '.filter-label{font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.3px;padding-left:2px}\n'
         '.mkt-layout{display:flex;gap:12px}\n'
-        '.mkt-sidebar{min-width:170px;max-width:170px;flex-shrink:0;border-right:1px solid #222;padding-right:12px}\n'
+        '.mkt-sidebar{min-width:145px;max-width:145px;flex-shrink:0;border-right:1px solid #222;padding-right:10px}\n'
         '.mkt-content{flex:1;min-width:0}\n'
         '.mkt-sf{margin-bottom:6px}\n'
         '.mkt-sf-label{font-size:10px;color:#888;margin-bottom:1px;font-weight:500}\n'
