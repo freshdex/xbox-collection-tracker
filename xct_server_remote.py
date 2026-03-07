@@ -1394,6 +1394,7 @@ def store_products():
         nosub = request.args.get("nosub", "")
         nodemo = request.args.get("nodemo", "")
         noplayed = request.args.get("noplayed", "")
+        noach = request.args.get("noach", "")
 
         # Sort
         sort_sql, needs_us_price = _STORE_SORT_MAP.get(sort_key, _STORE_SORT_MAP["relDesc"])
@@ -1643,6 +1644,22 @@ def store_products():
                             wheres.append(
                                 "p.product_id != ALL(%(played_pids)s)")
                             params["played_pids"] = played_pids
+
+        # Hide games user has achievements in
+        if noach == "1" and auth_header.startswith("Bearer "):
+            api_key = auth_header[7:].strip()
+            if api_key:
+                contributor = _get_contributor(cur, api_key)
+                if contributor:
+                    cur.execute(
+                        "SELECT xbox_title_id FROM xbox_achievement_summaries "
+                        "WHERE contributor_id = %s AND current_achievements > 0",
+                        (contributor["id"],))
+                    ach_tids = [row["xbox_title_id"] for row in cur.fetchall()]
+                    if ach_tids:
+                        wheres.append(
+                            "(p.xbox_title_id = '' OR p.xbox_title_id != ALL(%(ach_tids)s))")
+                        params["ach_tids"] = ach_tids
 
         # Region availability filter
         if regions_raw and regions_raw in ("myregions", "notmy"):

@@ -4285,6 +4285,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<label class="mkt-tick"><input type="checkbox" id="mkt-nosub" onchange="mktPage=0;filterMKT()"> Hide subscription games</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-nodemo" onchange="mktPage=0;filterMKT()"> Hide demos</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-noplayed" onchange="mktPage=0;filterMKT()"> Hide played games</label>\n'
+        '<label class="mkt-tick"><input type="checkbox" id="mkt-noach" onchange="mktPage=0;filterMKT()"> Hide games I have achievements in</label>\n'
         '</div>\n'
         # Last scan info (moved from top)
         '<div id="mkt-scan-banner" style="font-size:11px;color:#666;margin-top:14px;padding-top:10px;border-top:1px solid #222"></div>\n'
@@ -5031,6 +5032,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nosub'))document.getElementById('mkt-nosub').checked=false;"
         "if(document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=false;"
         "if(document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=false;"
+        "if(document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=false;"
         "document.getElementById('mkt-search').value='';"
         "document.getElementById('mkt-saved').value='';"
         "mktSortCol=null;mktPage=0;"
@@ -5080,6 +5082,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nosub')&&document.getElementById('mkt-nosub').checked)p.set('nosub','1');"
         "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');"
         "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');"
+        "if(document.getElementById('mkt-noach')&&document.getElementById('mkt-noach').checked)p.set('noach','1');"
         "_setRoute('store',p.toString())}\n"
 
         "function _mktDeserializeFilters(qsArg){"
@@ -5105,6 +5108,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('nosub')==='1'&&document.getElementById('mkt-nosub'))document.getElementById('mkt-nosub').checked=true;"
         "if(p.get('nodemo')==='1'&&document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=true;"
         "if(p.get('noplayed')==='1'&&document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=true;"
+        "if(p.get('noach')==='1'&&document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=true;"
         "return true}\n"
 
         # -- Library filter serialization --
@@ -5212,6 +5216,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nosub')&&document.getElementById('mkt-nosub').checked)p.set('nosub','1');"
         "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');"
         "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');"
+        "if(document.getElementById('mkt-noach')&&document.getElementById('mkt-noach').checked)p.set('noach','1');"
         "_mktSavedFilters.push({name:name,params:p.toString()});"
         "localStorage.setItem('xct_mkt_saved',JSON.stringify(_mktSavedFilters));"
         "_mktInitSaved();sel.value='';return}"
@@ -5232,6 +5237,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nosub'))document.getElementById('mkt-nosub').checked=false;"
         "if(document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=false;"
         "if(document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=false;"
+        "if(document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=false;"
         "document.getElementById('mkt-search').value='';"
         # Apply saved params
         "const p=new URLSearchParams(found.params);"
@@ -5251,6 +5257,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('nosub')==='1'&&document.getElementById('mkt-nosub'))document.getElementById('mkt-nosub').checked=true;"
         "if(p.get('nodemo')==='1'&&document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=true;"
         "if(p.get('noplayed')==='1'&&document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=true;"
+        "if(p.get('noach')==='1'&&document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=true;"
         "mktPage=0;filterMKT();sel.value=''}\n"
 
         "function _mktDeleteSaved(name){"
@@ -6409,6 +6416,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const nosubF=document.getElementById('mkt-nosub')&&document.getElementById('mkt-nosub').checked;\n"
         "const nodemoF=document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked;\n"
         "const noplayedF=document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked;\n"
+        "const noachF=document.getElementById('mkt-noach')&&document.getElementById('mkt-noach').checked;\n"
+        "const _achTids=noachF&&typeof _xctAchSummaries!=='undefined'?new Set(_xctAchSummaries.filter(a=>a.currentAchievements>0).map(a=>a.xboxTitleId)):null;\n"
 
         "const g=document.getElementById('mkt-grid');const l=document.getElementById('mkt-list');\n"
         'let filtered=MKT.filter(item=>{\n'
@@ -6465,6 +6474,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(nosubF&&(item.subscriptions||[]).length)return false;\n"
         "if(nodemoF&&/\\bDemo$/i.test(item.title||''))return false;\n"
         "if(noplayedF&&PH.some(ph=>ph.productId===item.productId&&ph.lastTimePlayed))return false;\n"
+        "if(_achTids&&item.xboxTitleId&&_achTids.has(item.xboxTitleId))return false;\n"
         # Release Status cb-drop
         "if(preorderVals){let rp=false;"
         "if(preorderVals.includes('released')&&!item.isPreOrder)rp=true;"
@@ -6654,6 +6664,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nosub')&&document.getElementById('mkt-nosub').checked)p.set('nosub','1');\n"
         "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');\n"
         "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');\n"
+        "if(document.getElementById('mkt-noach')&&document.getElementById('mkt-noach').checked)p.set('noach','1');\n"
         # Fetch
         "var h={};if(window._xctApiKey)h['Authorization']='Bearer '+window._xctApiKey;\n"
         "fetch('/api/v1/store/products?'+p.toString(),{headers:h,signal:ac.signal})"
