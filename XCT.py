@@ -4222,12 +4222,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<select id="mkt-sort" onchange="mktPage=0;filterMKT()">'
         '<option value="relDesc" selected>Release (Newest)</option>'
         '<option value="relAsc">Release (Oldest)</option>'
-        '<option value="name">Name</option>'
+        '<option value="name">Name (A-Z)</option>'
+        '<option value="nameDesc">Name (Z-A)</option>'
         '<option value="priceAsc">Price (Low-High)</option>'
         '<option value="priceDesc">Price (High-Low)</option>'
         '<option value="bestAsc">Best Region (Cheapest)</option>'
         '<option value="bestDesc">Best Region (Priciest)</option>'
-        '<option value="pub">Publisher</option>'
+        '<option value="pub">Publisher (A-Z)</option>'
+        '<option value="pubDesc">Publisher (Z-A)</option>'
         '<option value="dev">Developer</option>'
         '<option value="cat">Category</option>'
         '<option value="ratingDesc">Rating (Highest)</option>'
@@ -4271,6 +4273,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Bundles (cb-drop)
         '<div class="mkt-sf"><div class="mkt-sf-label">Bundles</div>'
         '<div class="cb-drop mkt-cb-full" id="mkt-bundle"><div class="cb-btn" onclick="toggleCB(this)">All Bundles &#9662;</div><div class="cb-panel"></div></div></div>\n'
+        # Physical Disc (cb-drop)
+        '<div class="mkt-sf"><div class="mkt-sf-label">Physical Disc</div>'
+        '<div class="cb-drop mkt-cb-full" id="mkt-phys"><div class="cb-btn" onclick="toggleCB(this)">All Physical &#9662;</div><div class="cb-panel"></div></div></div>\n'
         # Region Availability (cb-drop)
         '<div class="mkt-sf"><div class="mkt-sf-label">Region Availability</div>'
         '<div class="cb-drop mkt-cb-full" id="mkt-region"><div class="cb-btn" onclick="toggleCB(this)">All Regions &#9662;</div><div class="cb-panel"></div></div></div>\n'
@@ -4535,6 +4540,22 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:16px;margin-top:8px">\n'
         '<h3 style="margin:0 0 12px;font-size:14px;color:#ccc">CDN Monitor Scans</h3>\n'
         '<div id="cdn-mon-scans-list" style="font-size:12px;color:#aaa"></div>\n'
+        '</div>\n'
+
+        # -- Title ID Database (admin) --
+        '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:16px;margin-top:12px">\n'
+        '<h3 style="margin:0 0 12px;font-size:14px;color:#ccc">Invalid Title IDs '
+        '<span id="tid-count" style="color:#f44;font-size:12px"></span></h3>\n'
+        '<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">\n'
+        '<select id="tid-filter" onchange="_tidPage=0;_tidLoad()" style="padding:4px 8px;background:#222;color:#e0e0e0;border:1px solid #444;border-radius:4px;font-size:12px">'
+        '<option value="invalid">Unidentified Invalid</option>'
+        '<option value="identified">Identified</option>'
+        '<option value="all">All</option></select>\n'
+        '<input id="tid-search" placeholder="Search..." oninput="clearTimeout(_tidDebounce);_tidDebounce=setTimeout(()=>{_tidPage=0;_tidLoad()},300)" '
+        'style="padding:4px 8px;background:#222;color:#e0e0e0;border:1px solid #444;border-radius:4px;font-size:12px;width:200px">\n'
+        '</div>\n'
+        '<div id="tid-list" style="font-size:12px;color:#aaa"></div>\n'
+        '<div id="tid-pager" style="margin-top:8px;font-size:12px"></div>\n'
         '</div>\n'
 
         '</div>\n'
@@ -4993,6 +5014,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "libPage=0;filterLib()}\n"
         "function mktColArrow(c){return mktSortCol===c?(mktSortDir==='asc'?' \\u25B2':' \\u25BC'):''}\n"
         "function sortMktCol(col){if(mktSortCol===col){mktSortDir=mktSortDir==='asc'?'desc':'asc'}else{mktSortCol=col;mktSortDir='asc'}"
+        "var sortMap={title:{asc:'name',desc:'nameDesc'},publisher:{asc:'pub',desc:'pubDesc'},"
+        "release:{asc:'relAsc',desc:'relDesc'},usd:{asc:'priceAsc',desc:'priceDesc'}};"
+        "var m=sortMap[col];if(m){document.getElementById('mkt-sort').value=m[mktSortDir]}"
         "mktPage=0;filterMKT()}\n"
         '\n'
 
@@ -5071,7 +5095,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
-        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-region','region']];"
+        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-phys','phys'],['mkt-region','region']];"
         "cbMap.forEach(([id,key])=>{const v=_mktGetCBChecked(id);if(v&&v.length)p.set(key,v.join(','))});"
         # binary checkboxes
         "if(document.getElementById('mkt-xcloud').checked)p.set('xcloud','1');"
@@ -5098,7 +5122,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
-        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-region','region']];"
+        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-phys','phys'],['mkt-region','region']];"
         "cbMap.forEach(([id,key])=>{if(p.has(key))_mktSetCBChecked(id,p.get(key).split(','))});"
         "if(p.get('xcloud')==='1')document.getElementById('mkt-xcloud').checked=true;"
         "if(p.get('trial')==='1')document.getElementById('mkt-trial').checked=true;"
@@ -5206,7 +5230,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
-        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-region','region']];"
+        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-phys','phys'],['mkt-region','region']];"
         "cbMap.forEach(([id,key])=>{const v=_mktGetCBChecked(id);if(v&&v.length)p.set(key,v.join(','))});"
         "if(document.getElementById('mkt-xcloud').checked)p.set('xcloud','1');"
         "if(document.getElementById('mkt-trial').checked)p.set('trial','1');"
@@ -5247,7 +5271,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
-        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-region','region']];"
+        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-phys','phys'],['mkt-region','region']];"
         "cbMap.forEach(([id,key])=>{if(p.has(key))_mktSetCBChecked(id,p.get(key).split(','))});"
         "if(p.get('xcloud')==='1')document.getElementById('mkt-xcloud').checked=true;"
         "if(p.get('trial')==='1')document.getElementById('mkt-trial').checked=true;"
@@ -5258,7 +5282,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('nodemo')==='1'&&document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=true;"
         "if(p.get('noplayed')==='1'&&document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=true;"
         "if(p.get('noach')==='1'&&document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=true;"
-        "mktPage=0;filterMKT();sel.value=''}\n"
+        "mktPage=0;filterMKT();sel.value=val}\n"
 
         "function _mktDeleteSaved(name){"
         "_mktSavedFilters=_mktSavedFilters.filter(f=>f.name!==name);"
@@ -5315,6 +5339,17 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const anyOn=[...panel.querySelectorAll('input')].some(x=>x.checked);"
         "clr.textContent=anyOn?'Clear All':'Select All';}));"
         "panel.appendChild(clr);}\n"
+        "function _updateCBCounts(id,counts){"
+        "const wrap=document.getElementById(id);if(!wrap)return;"
+        "wrap.querySelectorAll('.cb-panel label').forEach(lbl=>{"
+        "const inp=lbl.querySelector('input');if(!inp)return;"
+        "const v=inp.value;const c=counts[v];"
+        "if(c===undefined)return;"
+        "const txt=lbl.childNodes[lbl.childNodes.length-1];"
+        "if(txt&&txt.nodeType===3){"
+        "const base=txt.textContent.replace(/\\s*\\(\\d[\\d,]*\\)$/,'');"
+        "txt.textContent=base+' ('+Number(c).toLocaleString()+')'}"
+        "})}\n"
         # Global helpers used by detail modals (must be at global scope)
         "const _today=new Date().toISOString().slice(0,10);"
         "function _https(u){return u&&u.startsWith('http://')?'https://'+u.slice(7):u}\n"
@@ -5450,6 +5485,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "fillStatic('mkt-owned',[['owned','Owned'],['notowned','Not Owned']],'filterMKT');\n"
         "fillStatic('mkt-preorder',[['released','Released'],['priced','Pre-Order (priced)'],['noPrice','Pre-Order (no price)']],'filterMKT',['released']);\n"
         "fillStatic('mkt-bundle',[['bundles','Bundles'],['notbundle','Not Bundles']],'filterMKT');\n"
+        "fillStatic('mkt-phys',[['physical','Has Physical Disc'],['uk','UK Only'],['us','US Only'],['digital','Digital Only'],['notscanned','Not Scanned']],'filterMKT');\n"
         "fillStatic('mkt-region',[['myregions','In My Regions'],['notmy','Not in My Regions']],'filterMKT');\n"
         # Fetch dynamic dropdowns from API
         "fetch('/api/v1/store/filters').then(function(r){return r.json()}).then(function(data){\n"
@@ -5466,6 +5502,18 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('tab-subs').style.display='';"
         "document.getElementById('tab-subs-cnt').textContent=data.subscriptions.reduce(function(s,x){return s+x.count},0);"
         "}\n"
+        # Update static dropdowns with counts from API
+        "if(data.priceCounts)_updateCBCounts('mkt-price',data.priceCounts);\n"
+        "if(data.mpCounts)_updateCBCounts('mkt-mp',data.mpCounts);\n"
+        "if(data.bundleCounts)_updateCBCounts('mkt-bundle',data.bundleCounts);\n"
+        "if(data.physCounts)_updateCBCounts('mkt-phys',data.physCounts);\n"
+        "if(data.releaseCounts)_updateCBCounts('mkt-preorder',data.releaseCounts);\n"
+        "if(data.boolCounts){"
+        "document.querySelectorAll('#mkt-xcloud,#mkt-trial,#mkt-ach').forEach(cb=>{"
+        "const k=cb.id.replace('mkt-','');const c=data.boolCounts[k];"
+        "if(c!==undefined){const lbl=cb.closest('label');if(lbl){const t=lbl.childNodes[lbl.childNodes.length-1];"
+        "if(t&&t.nodeType===3)t.textContent=t.textContent.replace(/\\s*\\(\\d[\\d,]*\\)$/,'')+' ('+Number(c).toLocaleString()+')'}}"
+        "})}\n"
         "document.getElementById('tab-mkt-cnt').textContent=data.totalProducts;\n"
         # Scan status banner
         "if(data.lastScan&&data.lastScan.completedAt){"
@@ -5554,6 +5602,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "fillStatic('mkt-owned',[['owned','Owned'],['notowned','Not Owned']],'filterMKT');\n"
         "fillStatic('mkt-preorder',[['released','Released'],['priced','Pre-Order (priced)'],['noPrice','Pre-Order (no price)']],'filterMKT',['released']);\n"
         "fillStatic('mkt-bundle',[['bundles','Bundles'],['notbundle','Not Bundles']],'filterMKT');\n"
+        "fillStatic('mkt-phys',[['physical','Has Physical Disc'],['uk','UK Only'],['us','US Only'],['digital','Digital Only'],['notscanned','Not Scanned']],'filterMKT');\n"
         "fillStatic('mkt-region',[['myregions','In My Regions'],['notmy','Not in My Regions']],'filterMKT');\n"
         "}\n"
         "if(typeof ACCOUNTS!=='undefined'&&ACCOUNTS.length>0){"
@@ -5965,6 +6014,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const g=document.getElementById('lib-grid');const l=document.getElementById('lib-list');\n"
         # Step 1: apply primary filters (gamertag/status/type)
         "const _pf=_primaryFilter(gtVals,sVals,tVals);\n"
+        "if(_pf.length===0&&LIB.length>0)console.warn('[filterLib] primary filter returned 0 items. gtVals:',gtVals,'sVals:',sVals,'tVals:',tVals,'LIB.length:',LIB.length);\n"
         # Step 2: update secondary dropdown counts based on primary-filtered items
         "_updCounts('lib-cat',_pf,x=>x.category||'');\n"
         "_updCounts('lib-plat',_pf,x=>x.platforms||[]);\n"
@@ -5990,6 +6040,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(gpF==='gamepass'&&!(item.onGamePass&&!item.owned))return false;\n"
         "if(gpF==='all'&&!(item.owned||item.onGamePass))return false;\n"
         'return true});\n'
+        "if(_libBase.length===0&&_pf.length>0)console.warn('[filterLib] secondary filter returned 0 items. _pf:',_pf.length,'catVals:',catVals,'platVals:',platVals,'pubVals:',pubVals,'devVals:',devVals,'ryVals:',ryVals,'ayVals:',ayVals,'dlVals:',dlVals,'gpF:',gpF);\n"
         "let filtered=q?_libBase.filter(item=>"
         "(item.title||'').toLowerCase().includes(q)||(item.publisher||'').toLowerCase().includes(q)"
         "||(item.productId||'').toLowerCase().includes(q)):_libBase;\n"
@@ -6360,26 +6411,19 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # If marked for the other market only, show grey flag
         "if(d&&d.status==='uk'&&mkt==='US')return '<div class=\"lv-reg\" style=\"text-align:center;color:#555;font-size:10px\">\\u2014</div>';"
         "if(d&&d.status==='us'&&mkt==='UK')return '<div class=\"lv-reg\" style=\"text-align:center;color:#555;font-size:10px\">\\u2014</div>';"
-        # Default: search link (greyed)
-        "if(!title)return '<div class=\"lv-reg\" style=\"text-align:center;color:#333\">-</div>';"
-        "const url=_azSearchUrl(title,mkt);"
-        "return `<div class=\"lv-reg\" style=\"text-align:center\">"
-        "<a href=\"${url}\" target=\"_blank\" onclick=\"event.stopPropagation()\" "
-        "style=\"text-decoration:none;font-size:12px;opacity:0.3\" title=\"Search Amazon ${mkt}\">${flag}</a></div>`}\n"
+        # Default: no data — empty cell
+        "return '<div class=\"lv-reg\" style=\"text-align:center;color:#555;font-size:10px\">-</div>'}\n"
 
         "function _amazonDetailHtml(pid,title){"
         "const d=_azLinks[pid];"
         "let h='<div style=\"margin-top:12px\"><div style=\"font-weight:600;margin-bottom:6px;color:#ccc\">Physical Disc (Amazon)</div>';"
         "if(d&&d.status==='digital'){h+='<div style=\"color:#888;font-size:12px\">Marked as Digital Only</div></div>';return h}"
-        "const ukUrl=d&&d.urlUK?d.urlUK:_azSearchUrl(title,'UK');"
-        "const usUrl=d&&d.urlUS?d.urlUS:_azSearchUrl(title,'US');"
-        "const ukLabel=d&&d.urlUK?'\\ud83c\\uddec\\ud83c\\udde7 Amazon UK':'\\ud83c\\uddec\\ud83c\\udde7 Search Amazon UK';"
-        "const usLabel=d&&d.urlUS?'\\ud83c\\uddfa\\ud83c\\uddf8 Amazon US':'\\ud83c\\uddfa\\ud83c\\uddf8 Search Amazon US';"
-        "const ukStyle=d&&d.urlUK?'color:#ff9800':'color:#ff9800;opacity:0.5';"
-        "const usStyle=d&&d.urlUS?'color:#42a5f5':'color:#42a5f5;opacity:0.5';"
+        "if(!d){h+='<div style=\"color:#888;font-size:12px\">Not scanned yet</div></div>';return h}"
+        "const ukUrl=d.urlUK;const usUrl=d.urlUS;"
         "h+='<div style=\"display:flex;gap:12px\">';"
-        "h+='<a href=\"'+ukUrl+'\" target=\"_blank\" style=\"'+ukStyle+';text-decoration:none;font-size:13px\">'+ukLabel+'</a>';"
-        "h+='<a href=\"'+usUrl+'\" target=\"_blank\" style=\"'+usStyle+';text-decoration:none;font-size:13px\">'+usLabel+'</a>';"
+        "if(ukUrl)h+='<a href=\"'+ukUrl+'\" target=\"_blank\" style=\"color:#ff9800;text-decoration:none;font-size:13px\">\\ud83c\\uddec\\ud83c\\udde7 Amazon UK</a>';"
+        "if(usUrl)h+='<a href=\"'+usUrl+'\" target=\"_blank\" style=\"color:#42a5f5;text-decoration:none;font-size:13px\">\\ud83c\\uddfa\\ud83c\\uddf8 Amazon US</a>';"
+        "if(!ukUrl&&!usUrl)h+='<div style=\"color:#888;font-size:12px\">No physical disc found</div>';"
         "h+='</div></div>';return h}\n"
 
         # Bulk fetch amazon links for visible product IDs
@@ -6783,7 +6827,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
-        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-region','regions']];\n"
+        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-phys','phys'],['mkt-region','regions']];\n"
         "cbMap.forEach(function(pair){var v=_mktGetCBChecked(pair[0]);if(v&&v.length)p.set(pair[1],v.join(','))});\n"
         # binary checkboxes
         "if(document.getElementById('mkt-xcloud').checked)p.set('xcloud','1');\n"
@@ -7894,6 +7938,67 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "h+='</table>';el.innerHTML=h\n"
         "}).catch(function(e){document.getElementById('cdn-mon-purged').textContent='Error: '+e.message})}\n"
 
+        # -- Title ID Manager JS (admin) --
+        "var _tidPage=0,_tidDebounce=0;\n"
+        "function _tidLoad(){\n"
+        "var f=document.getElementById('tid-filter').value;\n"
+        "var q=document.getElementById('tid-search').value;\n"
+        "var el=document.getElementById('tid-list');\n"
+        "el.textContent='Loading...';\n"
+        "fetch('/api/v1/admin/title-ids?filter='+f+'&page='+_tidPage+'&per_page=50'+(q?'&q='+encodeURIComponent(q):''),"
+        "{headers:{'Authorization':'Bearer '+window._xctApiKey}})"
+        ".then(function(r){return r.json()}).then(function(d){\n"
+        "if(d.error){el.textContent='Error: '+d.error;return}\n"
+        "document.getElementById('tid-count').textContent='('+d.total+')';\n"
+        "_tidRender(d.items,d.total,d.page,d.totalPages);\n"
+        "}).catch(function(e){el.textContent='Error: '+e.message})}\n"
+        "function _tidRender(items,total,page,pages){\n"
+        "var el=document.getElementById('tid-list');\n"
+        "if(!items.length){el.textContent='No items found';document.getElementById('tid-pager').innerHTML='';return}\n"
+        "var h='<table style=\"width:100%;border-collapse:collapse\">';\n"
+        "h+='<tr style=\"border-bottom:1px solid #444;color:#888\">"
+        "<th style=\"text-align:left;padding:4px 6px\">Title ID</th>"
+        "<th style=\"text-align:left;padding:4px 6px\">Seen</th>"
+        "<th style=\"text-align:left;padding:4px 6px\">Current Title</th>"
+        "<th style=\"text-align:left;padding:4px 6px\">Identify</th>"
+        "<th style=\"padding:4px 6px\">Search</th>"
+        "<th style=\"padding:4px 6px\"></th></tr>';\n"
+        "items.forEach(function(it){\n"
+        "var gUrl='https://www.google.com/search?q=xbox+%22'+encodeURIComponent(it.xboxTitleId)+'%22';\n"
+        "var cur=it.title||it.notes||'';\n"
+        "h+='<tr style=\"border-bottom:1px solid #222\" id=\"tid-row-'+it.xboxTitleId+'\">';\n"
+        "h+='<td style=\"padding:3px 6px;font-family:monospace;color:#ff9800\">'+_esc(it.xboxTitleId)+'</td>';\n"
+        "h+='<td style=\"padding:3px 6px;text-align:center;color:#888\">'+it.seenCount+'</td>';\n"
+        "h+='<td style=\"padding:3px 6px;color:'+(cur?'#4caf50':'#666')+'\">'+_esc(cur||'Unknown')+'</td>';\n"
+        "h+='<td style=\"padding:3px 6px\"><input id=\"tid-in-'+it.xboxTitleId+'\" value=\"'+_esc(cur)+'\" ';\n"
+        "h+='style=\"width:200px;padding:2px 6px;background:#1a1a1a;color:#e0e0e0;border:1px solid #444;border-radius:3px;font-size:11px\" ';\n"
+        "h+='placeholder=\"Game title...\"></td>';\n"
+        "h+='<td style=\"text-align:center;padding:3px 6px\">';\n"
+        "h+='<a href=\"'+gUrl+'\" target=\"_blank\" style=\"color:#2196f3;text-decoration:none;font-size:11px\">Google</a></td>';\n"
+        "h+='<td style=\"padding:3px 6px\">';\n"
+        "h+='<button onclick=\"_tidSave(\\''+it.xboxTitleId+'\\')\""
+        " style=\"padding:2px 10px;background:#2e7d32;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:11px\">Save</button></td>';\n"
+        "h+='</tr>'});\n"
+        "h+='</table>';el.innerHTML=h;\n"
+        "var pg=document.getElementById('tid-pager');pg.innerHTML='';\n"
+        "if(pages>1){\n"
+        "var ph='';\n"
+        "if(page>0)ph+='<a href=\"#\" onclick=\"_tidPage='+(_tidPage-1)+';_tidLoad();return false\" style=\"color:#2196f3;margin-right:8px\">&lt; Prev</a>';\n"
+        "ph+='Page '+(page+1)+' / '+pages;\n"
+        "if(page<pages-1)ph+=' <a href=\"#\" onclick=\"_tidPage='+(_tidPage+1)+';_tidLoad();return false\" style=\"color:#2196f3;margin-left:8px\">Next &gt;</a>';\n"
+        "pg.innerHTML=ph}}\n"
+        "function _tidSave(tid){\n"
+        "var inp=document.getElementById('tid-in-'+tid);\n"
+        "var title=(inp?inp.value:'').trim();\n"
+        "if(!title){alert('Enter a title first');return}\n"
+        "fetch('/api/v1/admin/title-ids',{method:'POST',headers:{'Authorization':'Bearer '+window._xctApiKey,'Content-Type':'application/json'},"
+        "body:JSON.stringify({xboxTitleId:tid,title:title,isInvalid:false})})"
+        ".then(function(r){return r.json()}).then(function(d){\n"
+        "if(d.error){alert('Error: '+d.error);return}\n"
+        "var row=document.getElementById('tid-row-'+tid);\n"
+        "if(row)row.style.background='#1b3a1b';\n"
+        "}).catch(function(e){alert('Error: '+e.message)})}\n"
+
         # -- Purchases tab JS --
         "var purchPage=0,purchPerPage=100;\n"
         "var _purchSortCol='date',_purchSortDir='desc';\n"
@@ -8314,7 +8419,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(id==='summary')renderSummary();\n"
         "if(id==='subscriptions')_subsRender();\n"
         "if(id==='achievements'&&!_achLoaded&&window._xctHosted&&window._xctApiKey)_achFetch();\n"
-        "if(id==='admin'){_adminLoadScans();_cdnMonRefreshStatus();_cdnMonLoadScans();_cdnMonLoadPurged()}\n"
+        "if(id==='admin'){_adminLoadScans();_cdnMonRefreshStatus();_cdnMonLoadScans();_cdnMonLoadPurged();_tidLoad()}\n"
         "if(id==='cdnsync'&&!_cdnLoaded&&window._xctHosted){\n"
         "  _cdnLoaded=true;\n"
         "  var st=document.getElementById('cdnsync-status');\n"

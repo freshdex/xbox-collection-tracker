@@ -465,6 +465,30 @@ def init_db():
     except Exception as e:
         conn.rollback()
         print(f"[!] Amazon links table init failed ({e}) — run migration manually")
+    # Shared title ID database (community-contributed from collection uploads)
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS title_id_db (
+                xbox_title_id  VARCHAR(20) PRIMARY KEY,
+                title          TEXT NOT NULL DEFAULT '',
+                category       TEXT NOT NULL DEFAULT '',
+                product_kind   TEXT NOT NULL DEFAULT '',
+                platforms      TEXT[] NOT NULL DEFAULT '{}',
+                publisher      TEXT NOT NULL DEFAULT '',
+                developer      TEXT NOT NULL DEFAULT '',
+                image_url      TEXT NOT NULL DEFAULT '',
+                is_invalid     BOOLEAN NOT NULL DEFAULT FALSE,
+                notes          TEXT NOT NULL DEFAULT '',
+                seen_count     INTEGER NOT NULL DEFAULT 1,
+                first_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[!] Title ID DB table init failed ({e}) — run migration manually")
     finally:
         conn.close()
 
@@ -1233,6 +1257,7 @@ _STORE_SORT_MAP = {
     "relDesc":      ("p.release_date DESC NULLS LAST, p.title ASC", False),
     "relAsc":       ("p.release_date ASC NULLS LAST, p.title ASC", False),
     "name":         ("p.title ASC", False),
+    "nameDesc":     ("p.title DESC", False),
     "priceAsc":     ("pr_us.msrp ASC NULLS LAST, p.title ASC", True),
     "priceDesc":    ("pr_us.msrp DESC NULLS LAST, p.title ASC", True),
     "bestAsc":      ("p.best_gc_usd ASC NULLS LAST, p.title ASC", False),
@@ -1241,6 +1266,7 @@ _STORE_SORT_MAP = {
     "ratingCntDesc":("p.rating_count DESC, p.title ASC", False),
     "platCntDesc":  ("array_length(p.platforms, 1) DESC NULLS LAST, p.title ASC", False),
     "pub":          ("p.publisher ASC, p.title ASC", False),
+    "pubDesc":      ("p.publisher DESC, p.title ASC", False),
     "dev":          ("p.developer ASC, p.title ASC", False),
     "cat":          ("p.category ASC, p.title ASC", False),
 }
@@ -1338,6 +1364,117 @@ def store_filters():
             subscriptions = []
             conn.rollback()
 
+        # Price brackets
+        cur.execute("""
+            SELECT 'free' AS value, COUNT(*) AS count FROM marketplace_products p
+                JOIN marketplace_prices pr ON pr.product_id = p.product_id AND pr.market = 'US'
+                WHERE p.title != p.product_id AND pr.msrp = 0
+            UNION ALL
+            SELECT 'under10', COUNT(*) FROM marketplace_products p
+                JOIN marketplace_prices pr ON pr.product_id = p.product_id AND pr.market = 'US'
+                WHERE p.title != p.product_id AND pr.msrp > 0 AND pr.msrp < 10
+            UNION ALL
+            SELECT 'under20', COUNT(*) FROM marketplace_products p
+                JOIN marketplace_prices pr ON pr.product_id = p.product_id AND pr.market = 'US'
+                WHERE p.title != p.product_id AND pr.msrp > 0 AND pr.msrp < 20
+            UNION ALL
+            SELECT 'under40', COUNT(*) FROM marketplace_products p
+                JOIN marketplace_prices pr ON pr.product_id = p.product_id AND pr.market = 'US'
+                WHERE p.title != p.product_id AND pr.msrp > 0 AND pr.msrp < 40
+            UNION ALL
+            SELECT 'over40', COUNT(*) FROM marketplace_products p
+                JOIN marketplace_prices pr ON pr.product_id = p.product_id AND pr.market = 'US'
+                WHERE p.title != p.product_id AND pr.msrp >= 40
+            UNION ALL
+            SELECT 'sale', COUNT(DISTINCT sp.product_id) FROM marketplace_prices sp
+                JOIN marketplace_products p ON p.product_id = sp.product_id AND p.title != p.product_id
+                WHERE sp.sale_price > 0 AND sp.sale_price < sp.msrp
+        """)
+        price_counts = {r["value"]: r["count"] for r in cur.fetchall()}
+
+        # Multiplayer capabilities
+        cur.execute("""
+            SELECT cap, COUNT(*) AS count FROM (
+                SELECT UNNEST(capabilities) AS cap FROM marketplace_products WHERE title != product_id
+            ) sub WHERE cap IN ('XblOnlineMultiplayer','OnlineMultiplayer',
+                'XblLocalMultiplayer','LocalMultiplayer',
+                'XblOnlineCoop','OnlineCoop',
+                'XblLocalCoop','LocalCoop',
+                'XblCrossGenMultiplayer','CrossGen')
+            GROUP BY cap
+        """)
+        mp_raw_counts = {r["cap"]: r["count"] for r in cur.fetchall()}
+        mp_counts = {
+            "online": mp_raw_counts.get("XblOnlineMultiplayer", 0) + mp_raw_counts.get("OnlineMultiplayer", 0),
+            "local": mp_raw_counts.get("XblLocalMultiplayer", 0) + mp_raw_counts.get("LocalMultiplayer", 0),
+            "coop": mp_raw_counts.get("XblOnlineCoop", 0) + mp_raw_counts.get("OnlineCoop", 0),
+            "localcoop": mp_raw_counts.get("XblLocalCoop", 0) + mp_raw_counts.get("LocalCoop", 0),
+            "crossgen": mp_raw_counts.get("XblCrossGenMultiplayer", 0) + mp_raw_counts.get("CrossGen", 0),
+        }
+
+        # Bundle counts
+        cur.execute("""
+            SELECT 'bundles' AS value, COUNT(*) AS count FROM marketplace_products p
+                WHERE p.title != p.product_id AND (p.is_bundle = TRUE
+                OR EXISTS (SELECT 1 FROM marketplace_tags mt WHERE mt.product_id = p.product_id
+                    AND mt.tag_type = 'is_bundle_override' AND mt.tag_value = 'true'))
+            UNION ALL
+            SELECT 'notbundle', COUNT(*) FROM marketplace_products p
+                WHERE p.title != p.product_id AND p.is_bundle = FALSE
+                AND NOT EXISTS (SELECT 1 FROM marketplace_tags mt WHERE mt.product_id = p.product_id
+                    AND mt.tag_type = 'is_bundle_override' AND mt.tag_value = 'true')
+        """)
+        bundle_counts = {r["value"]: r["count"] for r in cur.fetchall()}
+
+        # Physical disc counts
+        cur.execute("""
+            SELECT 'physical' AS value, COUNT(*) AS count FROM amazon_links
+                WHERE status IN ('uk','us','both')
+            UNION ALL
+            SELECT 'uk', COUNT(*) FROM amazon_links WHERE status IN ('uk','both')
+            UNION ALL
+            SELECT 'us', COUNT(*) FROM amazon_links WHERE status IN ('us','both')
+            UNION ALL
+            SELECT 'digital', COUNT(*) FROM amazon_links WHERE status = 'digital'
+            UNION ALL
+            SELECT 'notscanned', (SELECT COUNT(*) FROM marketplace_products WHERE title != product_id)
+                - (SELECT COUNT(*) FROM amazon_links)
+        """)
+        phys_counts = {r["value"]: r["count"] for r in cur.fetchall()}
+
+        # Release status counts
+        cur.execute("""
+            SELECT 'released' AS value, COUNT(*) AS count FROM marketplace_products
+                WHERE title != product_id AND release_date IS NOT NULL
+                AND release_date <= CURRENT_DATE AND EXTRACT(YEAR FROM release_date) < 2100
+            UNION ALL
+            SELECT 'priced', COUNT(*) FROM marketplace_products p
+                WHERE p.title != p.product_id AND p.release_date > CURRENT_DATE
+                AND EXTRACT(YEAR FROM p.release_date) < 2100
+                AND EXISTS (SELECT 1 FROM marketplace_prices rp
+                    WHERE rp.product_id = p.product_id AND rp.msrp > 0)
+            UNION ALL
+            SELECT 'noPrice', COUNT(*) FROM marketplace_products p
+                WHERE p.title != p.product_id AND p.release_date > CURRENT_DATE
+                AND EXTRACT(YEAR FROM p.release_date) < 2100
+                AND NOT EXISTS (SELECT 1 FROM marketplace_prices rp
+                    WHERE rp.product_id = p.product_id AND rp.msrp > 0)
+        """)
+        release_counts = {r["value"]: r["count"] for r in cur.fetchall()}
+
+        # Boolean checkbox counts
+        cur.execute("""
+            SELECT 'xcloud' AS value, COUNT(*) AS count FROM marketplace_products
+                WHERE title != product_id AND xcloud_streamable = TRUE
+            UNION ALL
+            SELECT 'trial', COUNT(*) FROM marketplace_products
+                WHERE title != product_id AND has_trial_sku = TRUE
+            UNION ALL
+            SELECT 'ach', COUNT(*) FROM marketplace_products
+                WHERE title != product_id AND has_achievements = TRUE
+        """)
+        bool_counts = {r["value"]: r["count"] for r in cur.fetchall()}
+
         # Total
         cur.execute("SELECT COUNT(*) AS cnt FROM marketplace_products WHERE title != product_id")
         total = cur.fetchone()["cnt"]
@@ -1362,6 +1499,9 @@ def store_filters():
             "channels": channels, "types": types, "platforms": platforms,
             "categories": categories, "publishers": publishers,
             "developers": developers, "subscriptions": subscriptions,
+            "priceCounts": price_counts, "mpCounts": mp_counts,
+            "bundleCounts": bundle_counts, "physCounts": phys_counts,
+            "releaseCounts": release_counts, "boolCounts": bool_counts,
             "totalProducts": total, "lastScan": last_scan,
         }
         return _gzip_json_response(result, cache_key=cache_key)
@@ -1411,6 +1551,7 @@ def store_products():
         nodemo = request.args.get("nodemo", "")
         noplayed = request.args.get("noplayed", "")
         noach = request.args.get("noach", "")
+        phys_raw = request.args.get("phys", "")
 
         # Sort
         sort_sql, needs_us_price = _STORE_SORT_MAP.get(sort_key, _STORE_SORT_MAP["relDesc"])
@@ -1620,6 +1761,37 @@ def store_products():
                     "AND mt.tag_value = 'true'))")
             if bundle_conds:
                 wheres.append("(" + " OR ".join(bundle_conds) + ")")
+
+        # Physical disc filter (amazon_links table)
+        if phys_raw:
+            ph_list = [v.strip() for v in phys_raw.split(",") if v.strip()]
+            phys_conds = []
+            if "physical" in ph_list:
+                phys_conds.append(
+                    "EXISTS (SELECT 1 FROM amazon_links al "
+                    "WHERE al.product_id = p.product_id "
+                    "AND al.status IN ('uk','us','both'))")
+            if "uk" in ph_list:
+                phys_conds.append(
+                    "EXISTS (SELECT 1 FROM amazon_links al "
+                    "WHERE al.product_id = p.product_id "
+                    "AND al.status IN ('uk','both'))")
+            if "us" in ph_list:
+                phys_conds.append(
+                    "EXISTS (SELECT 1 FROM amazon_links al "
+                    "WHERE al.product_id = p.product_id "
+                    "AND al.status IN ('us','both'))")
+            if "digital" in ph_list:
+                phys_conds.append(
+                    "EXISTS (SELECT 1 FROM amazon_links al "
+                    "WHERE al.product_id = p.product_id "
+                    "AND al.status = 'digital')")
+            if "notscanned" in ph_list:
+                phys_conds.append(
+                    "NOT EXISTS (SELECT 1 FROM amazon_links al "
+                    "WHERE al.product_id = p.product_id)")
+            if phys_conds:
+                wheres.append("(" + " OR ".join(phys_conds) + ")")
 
         # Boolean checkboxes
         if xcloud == "1":
@@ -2663,8 +2835,175 @@ def admin_subs_update(conn=None, cur=None, contributor=None, api_key=None):
 
 
 # ---------------------------------------------------------------------------
+# Title ID DB — admin endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/admin/title-ids", methods=["GET"])
+@require_auth
+def admin_title_ids(conn=None, cur=None, contributor=None, api_key=None):
+    """List title IDs. Admin only. Supports ?filter=invalid|identified|all"""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+    filt = request.args.get("filter", "invalid")
+    page = max(0, request.args.get("page", 0, type=int))
+    per_page = min(max(1, request.args.get("per_page", 100, type=int)), 500)
+    q = (request.args.get("q") or "").strip()
+
+    wheres = []
+    params = {}
+    if filt == "invalid":
+        wheres.append("(t.is_invalid = TRUE AND t.title = '')")
+    elif filt == "identified":
+        wheres.append("t.title != ''")
+    # 'all' = no filter
+
+    if q:
+        wheres.append("(t.xbox_title_id ILIKE %(q)s OR t.title ILIKE %(q)s OR t.notes ILIKE %(q)s)")
+        params["q"] = f"%{q}%"
+
+    where_sql = (" WHERE " + " AND ".join(wheres)) if wheres else ""
+
+    try:
+        cur.execute(f"SELECT COUNT(*) AS cnt FROM title_id_db t{where_sql}", params)
+        total = cur.fetchone()["cnt"]
+
+        cur.execute(f"""
+            SELECT t.xbox_title_id, t.title, t.category, t.product_kind,
+                   t.platforms, t.publisher, t.developer, t.image_url,
+                   t.is_invalid, t.notes, t.seen_count, t.first_seen_at, t.updated_at
+            FROM title_id_db t{where_sql}
+            ORDER BY t.seen_count DESC, t.first_seen_at DESC
+            LIMIT %(limit)s OFFSET %(offset)s
+        """, {**params, "limit": per_page, "offset": page * per_page})
+        rows = []
+        for r in cur.fetchall():
+            rows.append({
+                "xboxTitleId": r["xbox_title_id"],
+                "title": r["title"],
+                "category": r["category"],
+                "productKind": r["product_kind"],
+                "platforms": r["platforms"] or [],
+                "publisher": r["publisher"],
+                "developer": r["developer"],
+                "imageUrl": r["image_url"],
+                "isInvalid": r["is_invalid"],
+                "notes": r["notes"],
+                "seenCount": r["seen_count"],
+                "firstSeen": r["first_seen_at"].isoformat() if r["first_seen_at"] else None,
+                "updatedAt": r["updated_at"].isoformat() if r["updated_at"] else None,
+            })
+        return jsonify(items=rows, total=total,
+                       page=page, totalPages=max(1, -(-total // per_page)))
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/v1/admin/title-ids", methods=["POST"])
+@require_auth
+def admin_title_id_update(conn=None, cur=None, contributor=None, api_key=None):
+    """Update a title ID entry. Admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+    data = request.get_json(force=True)
+    tid = (data.get("xboxTitleId") or "").strip()
+    if not tid:
+        return jsonify(error="xboxTitleId required"), 400
+    try:
+        cur.execute("""
+            UPDATE title_id_db SET
+                title = COALESCE(NULLIF(%(title)s, ''), title),
+                category = COALESCE(NULLIF(%(cat)s, ''), category),
+                product_kind = COALESCE(NULLIF(%(kind)s, ''), product_kind),
+                publisher = COALESCE(NULLIF(%(pub)s, ''), publisher),
+                developer = COALESCE(NULLIF(%(dev)s, ''), developer),
+                notes = %(notes)s,
+                is_invalid = %(inv)s,
+                updated_at = NOW()
+            WHERE xbox_title_id = %(tid)s
+        """, {
+            "tid": tid,
+            "title": data.get("title", ""),
+            "cat": data.get("category", ""),
+            "kind": data.get("productKind", ""),
+            "pub": data.get("publisher", ""),
+            "dev": data.get("developer", ""),
+            "notes": data.get("notes", ""),
+            "inv": data.get("isInvalid", True),
+        })
+        conn.commit()
+        return jsonify(ok=True)
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/v1/admin/title-ids", methods=["OPTIONS"])
+def admin_title_ids_options():
+    return "", 204
+
+
+# ---------------------------------------------------------------------------
 # Collection endpoints — auth required
 # ---------------------------------------------------------------------------
+
+def _upsert_title_ids(cur, conn, lib):
+    """Extract title IDs from a collection upload and upsert into shared DB."""
+    # Dedupe: pick the best info per title ID (prefer non-invalid items)
+    tid_map = {}
+    for item in lib:
+        tid = item.get("xboxTitleId", "")
+        if not tid:
+            continue
+        invalid = item.get("catalogInvalid", False)
+        # Keep the best item per title ID (prefer non-invalid)
+        if tid not in tid_map or (tid_map[tid]["catalogInvalid"] and not invalid):
+            tid_map[tid] = item
+
+    if not tid_map:
+        return
+
+    for tid, item in tid_map.items():
+        invalid = item.get("catalogInvalid", False)
+        title = item.get("title", "") if not invalid else ""
+        # Don't store title if it looks like a product ID (invalid placeholder)
+        if title and (title == item.get("productId", "") or len(title) == 12):
+            title = ""
+        cur.execute("""
+            INSERT INTO title_id_db (xbox_title_id, title, category, product_kind,
+                platforms, publisher, developer, image_url, is_invalid, seen_count)
+            VALUES (%(tid)s, %(title)s, %(cat)s, %(kind)s,
+                %(plats)s, %(pub)s, %(dev)s, %(img)s, %(inv)s, 1)
+            ON CONFLICT (xbox_title_id) DO UPDATE SET
+                title = CASE WHEN title_id_db.title = '' AND %(title)s != ''
+                    THEN %(title)s ELSE title_id_db.title END,
+                category = CASE WHEN title_id_db.category = '' AND %(cat)s != ''
+                    THEN %(cat)s ELSE title_id_db.category END,
+                product_kind = CASE WHEN title_id_db.product_kind = '' AND %(kind)s != ''
+                    THEN %(kind)s ELSE title_id_db.product_kind END,
+                platforms = CASE WHEN title_id_db.platforms = '{}' AND %(plats)s != '{}'
+                    THEN %(plats)s ELSE title_id_db.platforms END,
+                publisher = CASE WHEN title_id_db.publisher = '' AND %(pub)s != ''
+                    THEN %(pub)s ELSE title_id_db.publisher END,
+                developer = CASE WHEN title_id_db.developer = '' AND %(dev)s != ''
+                    THEN %(dev)s ELSE title_id_db.developer END,
+                image_url = CASE WHEN title_id_db.image_url = '' AND %(img)s != ''
+                    THEN %(img)s ELSE title_id_db.image_url END,
+                is_invalid = CASE WHEN NOT %(inv)s THEN FALSE ELSE title_id_db.is_invalid END,
+                seen_count = title_id_db.seen_count + 1,
+                updated_at = NOW()
+        """, {
+            "tid": tid,
+            "title": title,
+            "cat": item.get("category", "") if not invalid else "",
+            "kind": item.get("productKind", "") if not invalid else "",
+            "plats": item.get("platforms", []) if not invalid else [],
+            "pub": item.get("publisher", "") if not invalid else "",
+            "dev": item.get("developer", "") if not invalid else "",
+            "img": item.get("boxArt", "") or item.get("image", "") if not invalid else "",
+            "inv": invalid,
+        })
+    conn.commit()
+
 
 @app.route("/api/v1/collection/upload", methods=["POST"])
 @require_auth
@@ -2764,6 +3103,17 @@ def collection_upload(conn=None, cur=None, contributor=None, api_key=None):
             psycopg2.extras.Json(purchases),
         ))
         conn.commit()
+
+        # Extract title IDs and upsert into shared title_id_db
+        try:
+            _upsert_title_ids(cur, conn, lib)
+        except Exception as e:
+            print(f"[!] Title ID DB upsert failed: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
         return jsonify(
             status="ok",
             items=len(lib),
@@ -2794,8 +3144,43 @@ def collection_get(conn=None, cur=None, contributor=None, api_key=None):
                 username=contributor["username"],
                 settings=contributor.get("settings") or {},
                 uploaded=False)
+
+        # Enrich invalid items from shared title_id_db
+        lib = row["lib"] or []
+        invalid_tids = set()
+        for item in lib:
+            if item.get("catalogInvalid") and item.get("xboxTitleId"):
+                invalid_tids.add(item["xboxTitleId"])
+        if invalid_tids:
+            cur.execute("""
+                SELECT xbox_title_id, title, category, product_kind,
+                       platforms, publisher, developer, image_url
+                FROM title_id_db
+                WHERE xbox_title_id = ANY(%s) AND title != ''
+            """, (list(invalid_tids),))
+            tid_info = {r["xbox_title_id"]: r for r in cur.fetchall()}
+            for item in lib:
+                tid = item.get("xboxTitleId", "")
+                if tid in tid_info:
+                    info = tid_info[tid]
+                    if info["title"]:
+                        item["title"] = info["title"]
+                        item["catalogInvalid"] = False
+                    if info["category"] and not item.get("category"):
+                        item["category"] = info["category"]
+                    if info["product_kind"] and not item.get("productKind"):
+                        item["productKind"] = info["product_kind"]
+                    if info["platforms"] and not item.get("platforms"):
+                        item["platforms"] = info["platforms"]
+                    if info["publisher"] and not item.get("publisher"):
+                        item["publisher"] = info["publisher"]
+                    if info["developer"] and not item.get("developer"):
+                        item["developer"] = info["developer"]
+                    if info["image_url"] and not item.get("boxArt"):
+                        item["boxArt"] = info["image_url"]
+
         return jsonify(
-            library=row["lib"] or [],
+            library=lib,
             playHistory=row["play_history"] or [],
             history=row["scan_history"] or [],
             accounts=row["accounts_meta"] or [],
