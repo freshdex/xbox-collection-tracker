@@ -1444,19 +1444,21 @@ def store_filters():
 
         # Release status counts
         cur.execute("""
-            SELECT 'released' AS value, COUNT(*) AS count FROM marketplace_products
-                WHERE title != product_id AND release_date IS NOT NULL
-                AND release_date <= CURRENT_DATE AND EXTRACT(YEAR FROM release_date) < 2100
+            SELECT 'released' AS value, COUNT(*) AS count FROM marketplace_products p
+                WHERE p.title != p.product_id
+                AND p.release_date IS NOT NULL
+                AND p.release_date <= CURRENT_DATE AND EXTRACT(YEAR FROM p.release_date) < 2100
+                AND EXISTS (SELECT 1 FROM marketplace_prices rp
+                    WHERE rp.product_id = p.product_id AND rp.msrp > 0)
             UNION ALL
-            SELECT 'priced', COUNT(*) FROM marketplace_products p
+            SELECT 'preorder', COUNT(*) FROM marketplace_products p
                 WHERE p.title != p.product_id AND p.release_date > CURRENT_DATE
                 AND EXTRACT(YEAR FROM p.release_date) < 2100
                 AND EXISTS (SELECT 1 FROM marketplace_prices rp
                     WHERE rp.product_id = p.product_id AND rp.msrp > 0)
             UNION ALL
             SELECT 'noPrice', COUNT(*) FROM marketplace_products p
-                WHERE p.title != p.product_id AND p.release_date > CURRENT_DATE
-                AND EXTRACT(YEAR FROM p.release_date) < 2100
+                WHERE p.title != p.product_id
                 AND NOT EXISTS (SELECT 1 FROM marketplace_prices rp
                     WHERE rp.product_id = p.product_id AND rp.msrp > 0)
         """)
@@ -1731,16 +1733,17 @@ def store_products():
             if "released" in r_list:
                 rel_conds.append(
                     "(p.release_date IS NOT NULL AND p.release_date <= CURRENT_DATE "
-                    "AND EXTRACT(YEAR FROM p.release_date) < 2100)")
-            if "priced" in r_list:
+                    "AND EXTRACT(YEAR FROM p.release_date) < 2100 "
+                    "AND EXISTS (SELECT 1 FROM marketplace_prices rp "
+                    "WHERE rp.product_id = p.product_id AND rp.msrp > 0))")
+            if "preorder" in r_list:
                 rel_conds.append(
                     "(p.release_date > CURRENT_DATE AND EXTRACT(YEAR FROM p.release_date) < 2100 "
                     "AND EXISTS (SELECT 1 FROM marketplace_prices rp "
                     "WHERE rp.product_id = p.product_id AND rp.msrp > 0))")
             if "noPrice" in r_list:
                 rel_conds.append(
-                    "(p.release_date > CURRENT_DATE AND EXTRACT(YEAR FROM p.release_date) < 2100 "
-                    "AND NOT EXISTS (SELECT 1 FROM marketplace_prices rp "
+                    "(NOT EXISTS (SELECT 1 FROM marketplace_prices rp "
                     "WHERE rp.product_id = p.product_id AND rp.msrp > 0))")
             if rel_conds:
                 wheres.append("(" + " OR ".join(rel_conds) + ")")
