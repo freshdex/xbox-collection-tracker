@@ -449,29 +449,22 @@ def init_db():
     except Exception as e:
         conn.rollback()
         print(f"[!] CDN version monitor tables init failed ({e}) — run migration manually")
-    # Amazon physical disc cache
+    # Amazon physical disc links (admin-curated)
     try:
         cur = conn.cursor()
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS amazon_cache (
-                product_id   VARCHAR(16) NOT NULL,
-                market       VARCHAR(4) NOT NULL,
-                title        TEXT NOT NULL DEFAULT '',
-                price        TEXT NOT NULL DEFAULT '',
-                url          TEXT NOT NULL DEFAULT '',
-                edition      TEXT NOT NULL DEFAULT '',
-                fetched_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (product_id, market, url)
+            CREATE TABLE IF NOT EXISTS amazon_links (
+                product_id   VARCHAR(16) PRIMARY KEY,
+                status       VARCHAR(16) NOT NULL DEFAULT 'digital',
+                url_uk       TEXT NOT NULL DEFAULT '',
+                url_us       TEXT NOT NULL DEFAULT '',
+                updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_amazon_cache_product
-            ON amazon_cache(product_id)
         """)
         conn.commit()
     except Exception as e:
         conn.rollback()
-        print(f"[!] Amazon cache tables init failed ({e}) — run migration manually")
+        print(f"[!] Amazon links table init failed ({e}) — run migration manually")
     finally:
         conn.close()
 
@@ -2177,8 +2170,95 @@ def store_editions(xbox_title_id):
 
 
 # ---------------------------------------------------------------------------
-# Amazon Physical Disc Finder (search-link mode — generates Amazon search URLs)
+# Amazon Physical Disc Links (admin-curated)
 # ---------------------------------------------------------------------------
+
+@app.route("/api/v1/store/amazon/bulk")
+def store_amazon_bulk():
+    """Return all amazon_links rows for the current page of products."""
+    conn = get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        pids_raw = request.args.get("pids", "")
+        if not pids_raw:
+            return _gzip_json_response({})
+        pids = [p.strip() for p in pids_raw.split(",") if p.strip()][:200]
+        cur.execute(
+            "SELECT product_id, status, url_uk, url_us FROM amazon_links "
+            "WHERE product_id = ANY(%s)", (pids,))
+        result = {}
+        for r in cur.fetchall():
+            result[r["product_id"]] = {
+                "status": r["status"],
+                "urlUK": r["url_uk"],
+                "urlUS": r["url_us"],
+            }
+        return _gzip_json_response(result)
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+    finally:
+        conn.close()
+
+
+@app.route("/api/v1/store/amazon/set", methods=["POST"])
+@require_auth
+def store_amazon_set(contributor):
+    """Admin-only: set physical disc status for a product."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin only"), 403
+    body = request.get_json(force=True) or {}
+    pid = body.get("productId", "").strip()
+    status = body.get("status", "").strip()
+    url_uk = body.get("urlUK", "").strip()
+    url_us = body.get("urlUS", "").strip()
+    if not pid or status not in ("digital", "uk", "us", "both"):
+        return jsonify(error="productId and valid status required"), 400
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        if status == "digital" and not url_uk and not url_us:
+            # If marking digital with no URLs, could delete or upsert
+            cur.execute(
+                "INSERT INTO amazon_links (product_id, status, url_uk, url_us, updated_at) "
+                "VALUES (%s, %s, %s, %s, NOW()) "
+                "ON CONFLICT (product_id) DO UPDATE SET status=%s, url_uk=%s, url_us=%s, updated_at=NOW()",
+                (pid, status, url_uk, url_us, status, url_uk, url_us))
+        else:
+            cur.execute(
+                "INSERT INTO amazon_links (product_id, status, url_uk, url_us, updated_at) "
+                "VALUES (%s, %s, %s, %s, NOW()) "
+                "ON CONFLICT (product_id) DO UPDATE SET status=%s, url_uk=%s, url_us=%s, updated_at=NOW()",
+                (pid, status, url_uk, url_us, status, url_uk, url_us))
+        conn.commit()
+        return jsonify(ok=True)
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error=str(e)), 500
+    finally:
+        conn.close()
+
+
+@app.route("/api/v1/store/amazon/remove", methods=["POST"])
+@require_auth
+def store_amazon_remove(contributor):
+    """Admin-only: remove physical disc status for a product."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin only"), 403
+    body = request.get_json(force=True) or {}
+    pid = body.get("productId", "").strip()
+    if not pid:
+        return jsonify(error="productId required"), 400
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM amazon_links WHERE product_id = %s", (pid,))
+        conn.commit()
+        return jsonify(ok=True)
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error=str(e)), 500
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -4414,6 +4494,9 @@ def add_cors_headers(response):
 @app.route("/api/v1/store/products", methods=["OPTIONS"])
 @app.route("/api/v1/store/product/<product_id>", methods=["OPTIONS"])
 @app.route("/api/v1/store/editions/<xbox_title_id>", methods=["OPTIONS"])
+@app.route("/api/v1/store/amazon/bulk", methods=["OPTIONS"])
+@app.route("/api/v1/store/amazon/set", methods=["OPTIONS"])
+@app.route("/api/v1/store/amazon/remove", methods=["OPTIONS"])
 @app.route("/api/v1/admin/cdn-monitor/scan", methods=["OPTIONS"])
 @app.route("/api/v1/admin/cdn-monitor/scans", methods=["OPTIONS"])
 @app.route("/api/v1/admin/cdn-monitor/status", methods=["OPTIONS"])
