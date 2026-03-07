@@ -1581,7 +1581,7 @@ def store_products():
         if plat_raw:
             p_list = [p.strip() for p in plat_raw.split(",") if p.strip()]
             if p_list:
-                wheres.append("p.platforms && %(platforms)s")
+                wheres.append("p.platforms <@ %(platforms)s")
                 params["platforms"] = p_list
 
         # Price filter
@@ -1834,14 +1834,21 @@ def store_products():
                 contributor = _get_contributor(cur, api_key)
                 if contributor:
                     cur.execute(
-                        "SELECT xbox_title_id FROM xbox_achievement_summaries "
+                        "SELECT xbox_title_id, product_id FROM xbox_achievement_summaries "
                         "WHERE contributor_id = %s AND current_achievements > 0",
                         (contributor["id"],))
-                    ach_tids = [row["xbox_title_id"] for row in cur.fetchall()]
-                    if ach_tids:
-                        wheres.append(
-                            "(p.xbox_title_id = '' OR p.xbox_title_id != ALL(%(ach_tids)s))")
-                        params["ach_tids"] = ach_tids
+                    ach_rows = cur.fetchall()
+                    ach_tids = [r["xbox_title_id"] for r in ach_rows if r["xbox_title_id"]]
+                    ach_pids = [r["product_id"] for r in ach_rows if r["product_id"]]
+                    if ach_tids or ach_pids:
+                        parts = []
+                        if ach_tids:
+                            parts.append("(p.xbox_title_id = '' OR p.xbox_title_id != ALL(%(ach_tids)s))")
+                            params["ach_tids"] = ach_tids
+                        if ach_pids:
+                            parts.append("p.product_id != ALL(%(ach_pids)s)")
+                            params["ach_pids"] = ach_pids
+                        wheres.append("(" + " AND ".join(parts) + ")")
 
         # Region availability filter
         if regions_raw and regions_raw in ("myregions", "notmy"):
