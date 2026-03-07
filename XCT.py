@@ -5166,8 +5166,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "console.log('[clearMktFilters] found',_cbs.length,'checkboxes in #marketplace');"
         "_cbs.forEach(c=>{if(!c.checked)console.log('[clearMktFilters] checking:',c.value,'in',c.closest('.cb-drop')?.id);c.checked=true});"
         "document.querySelectorAll('#marketplace .cb-clear').forEach(c=>c.textContent='Clear All');"
-        # Reset Release Status to only 'released' checked
-        "document.querySelectorAll('#mkt-preorder .cb-panel input').forEach(c=>{c.checked=c.value==='released'});"
+        # Reset Release Status to all checked
+        "document.querySelectorAll('#mkt-preorder .cb-panel input').forEach(c=>{c.checked=true});"
         # Reset binary checkboxes
         "document.getElementById('mkt-xcloud').checked=false;"
         "document.getElementById('mkt-trial').checked=false;"
