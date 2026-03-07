@@ -1563,8 +1563,14 @@ def store_products():
                     "WHERE mc.product_id = p.product_id AND mc.channel = ANY(%(channels)s))")
                 params["channels"] = ch_list
 
+        # Check for _none_ sentinel in any filter (means "nothing selected" → zero results)
+        _all_filter_raws = [type_raw, plat_raw, price_raw, cat_raw, subs_raw, mp_raw,
+                            pub_raw, dev_raw, own_raw, rel_raw, bundle_raw, phys_raw, regions_raw]
+        if any(v == "_none_" for v in _all_filter_raws):
+            wheres.append("FALSE")
+
         # Type filter (map DLC → Durable for DB)
-        if type_raw:
+        if type_raw and type_raw != "_none_":
             t_list = [t.strip() for t in type_raw.split(",") if t.strip()]
             db_types = ["Durable" if t == "DLC" else t for t in t_list]
             if db_types:
