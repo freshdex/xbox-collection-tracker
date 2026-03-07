@@ -3715,7 +3715,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '.stbl .cnt{color:#107c10;font-weight:bold}\n'
         '.stbl .usd{color:#42a5f5;font-weight:bold}\n'
         '.gtbl{border-collapse:collapse;font-size:13px;width:100%;margin-top:12px}\n'
-        '.gtbl th{padding:8px 12px;color:#888;font-weight:500;text-align:left;border-bottom:1px solid #333;white-space:nowrap}\n'
+        '.gtbl th{padding:8px 12px;color:#888;font-weight:500;text-align:left;border-bottom:1px solid #333;white-space:nowrap;position:sticky;top:0;background:#111;z-index:2}\n'
         '.gtbl td{padding:6px 12px;border-bottom:1px solid #1a1a1a;color:#ccc;white-space:nowrap}\n'
         '.gtbl tr:hover{background:#1a1a1a}\n'
         '.gtbl td.num{text-align:right;font-variant-numeric:tabular-nums}\n'
