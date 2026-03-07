@@ -684,7 +684,7 @@ def data_js():
     finally:
         conn.close()
 _TAB_SLUGS = {
-    "summary", "library", "store", "marketplace", "gamepass", "playhistory", "scanlog",
+    "summary", "library", "store", "marketplace", "subscriptions", "gamepass", "playhistory", "scanlog",
     "gamertags", "gfwl", "xvcdb", "imports", "purchases", "achievements", "admin",
 }
 
