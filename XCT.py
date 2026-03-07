@@ -3925,6 +3925,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '.sum-tbl td.num{text-align:right;font-variant-numeric:tabular-nums}\n'
         '.sum-tbl th.num{text-align:right}\n'
         '.sum-tbl tr:hover td{background:#151515}\n'
+        '.sum-tbl th.sortable{cursor:pointer;user-select:none}\n'
+        '.sum-tbl th.sortable:hover{color:#e0e0e0}\n'
         '.sum-bar-track{height:6px;background:#1a1a1a;border-radius:3px;overflow:hidden;margin-top:6px}\n'
         '.sum-bar-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,#107c10,#1db954)}\n'
         '.sum-wide{grid-column:1 / -1}\n'
@@ -3987,6 +3989,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<option value="COP">COP CO$</option>'
         '<option value="ARS">ARS AR$</option>'
         '<option value="PHP">PHP ₱</option>'
+        '<option value="NGN">NGN ₦</option>'
+        '<option value="ISK">ISK</option>'
         '</select>\n'
         '<div class="cb-drop" id="my-regions" style="margin-left:8px">'
         '<div class="cb-btn" onclick="toggleCB(this)">My Regions \u25be</div>'
@@ -4541,13 +4545,18 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "KRW:[1320,'₩'],TRY:[32,'₺'],PLN:[4.0,'zł'],CHF:[0.88,'CHF '],SEK:[10.5,'kr '],"
         "NOK:[10.6,'kr '],DKK:[6.9,'kr '],CZK:[23.5,'Kč '],HUF:[365,'Ft '],ILS:[3.7,'₪'],"
         "SAR:[3.75,'SAR '],AED:[3.67,'AED '],ZAR:[18.5,'R'],SGD:[1.35,'S$'],HKD:[7.82,'HK$'],"
-        "TWD:[32,'NT$'],CLP:[930,'CL$'],COP:[4000,'CO$'],ARS:[900,'AR$'],PHP:[56,'₱']};\n"
+        "TWD:[32,'NT$'],CLP:[930,'CL$'],COP:[4000,'CO$'],ARS:[900,'AR$'],PHP:[56,'₱'],"
+        "NGN:[1600,'₦'],ISK:[140,'ISK ']};\n"
+        "function _rate(c){return(typeof RATES!=='undefined'&&RATES[c])?RATES[c]:(_CUR[c]||[1])[0]}\n"
+        "function _sym(c){return(_CUR[c]||['',''])[1]||c+' '}\n"
+        "const _zeroDec=new Set(['JPY','KRW','CLP','COP','HUF','ISK','VND','IDR','UGX','RWF','PYG']);\n"
+        "function _fd(c){return _zeroDec.has(c)?0:2}\n"
         "let _cc='USD';\n"
         "function _p(usd){if(!usd||usd<=0)return'';"
-        "const[r,s]=_CUR[_cc]||_CUR.USD;const v=usd*r;"
-        "const d=_cc==='JPY'||_cc==='KRW'||_cc==='CLP'||_cc==='COP'||_cc==='HUF'?0:2;"
+        "const r=_rate(_cc);const s=_sym(_cc);const v=usd*r;"
+        "const d=_fd(_cc);"
         "return s+v.toLocaleString('en',{minimumFractionDigits:d,maximumFractionDigits:d})}\n"
-        "function _pv(usd){return usd*((_CUR[_cc]||_CUR.USD)[0])}\n"
+        "function _pv(usd){return usd*_rate(_cc)}\n"
         "function _xvd(h){if(!h||h.length<16)return h||'';try{const p=[];for(let i=0;i<16;i+=4)p.push(parseInt(h.substr(i,4),16));return p.join('.')}catch(e){return h}}\n"
         "function _onCur(){_cc=document.getElementById('lib-cur').value;filterLib();filterGP();filterMKT();renderAccounts();renderSummary()}\n"
         "const _kinds=['Game','Durable'];\n"
@@ -4585,6 +4594,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
 
         # -- renderSummary --
         "var _sumInited=false;\n"
+        "var _sumPurchSort={key:'conv',dir:'desc'};\n"
+        "function _sumPurchSortBy(k){if(_sumPurchSort.key===k)_sumPurchSort.dir=_sumPurchSort.dir==='asc'?'desc':'asc';else{_sumPurchSort.key=k;_sumPurchSort.dir='desc'}renderSummary()}\n"
+        "var _sumPubSort={key:'cnt',dir:'desc'};\n"
+        "function _sumPubSortBy(k){if(_sumPubSort.key===k)_sumPubSort.dir=_sumPubSort.dir==='asc'?'desc':'asc';else{_sumPubSort.key=k;_sumPubSort.dir='desc'}renderSummary()}\n"
         "function renderSummary(){\n"
         "const el=document.getElementById('sum-grid');if(!el)return;\n"
         # Populate GT dropdown once
@@ -4661,7 +4674,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const storeTotal=MKT.length;\n"
         # Top publishers (from owned games)
         "const pubCnt={};games.forEach(x=>{const p=x.publisher||'Unknown';pubCnt[p]=(pubCnt[p]||0)+1});\n"
-        "const pubOrd=Object.entries(pubCnt).sort((a,b)=>b[1]-a[1]).slice(0,5);\n"
+        "const pubAll=Object.entries(pubCnt).map(([p,c])=>({name:p,cnt:c}));\n"
         # Year distribution
         "const yrCnt={};owned.forEach(x=>{const y=(x.acquiredDate||'').slice(0,4);if(/^\\d{4}$/.test(y))yrCnt[y]=(yrCnt[y]||0)+1});\n"
         "const yrOrd=Object.entries(yrCnt).sort((a,b)=>b[0]-a[0]).slice(0,6);\n"
@@ -4711,12 +4724,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "h+='<div class=\"sum-card sum-wide\">';\n"
         "h+='<h3>Purchase History</h3>';\n"
         "const topCurr=Object.entries(purchCurrTotals).sort((a,b)=>b[1]-a[1]);\n"
-        # Grand total converted to selected currency
-        "let grandConverted=0;\n"
-        "topCurr.forEach(([c,v])=>{const rFrom=(_CUR[c]||[1])[0];grandConverted+=v/rFrom});\n"
-        "grandConverted*=(_CUR[_cc]||_CUR.USD)[0];\n"
-        "const gd=_cc==='JPY'||_cc==='KRW'||_cc==='CLP'||_cc==='COP'||_cc==='HUF'?0:2;\n"
-        "const gs=(_CUR[_cc]||_CUR.USD)[1];\n"
+        # Build rows with converted values for sorting
+        "const gs=_sym(_cc);const gd=_fd(_cc);const rTo=_rate(_cc);\n"
+        "const purchRows=topCurr.map(([c,v])=>{\n"
+        "  const cnt=purchPaid.filter(x=>(x.currency||'???')===c).length;\n"
+        "  const conv=v/_rate(c)*rTo;\n"
+        "  return{cur:c,cnt:cnt,total:v,conv:conv}});\n"
+        # Grand total
+        "const grandConverted=purchRows.reduce((s,r)=>s+r.conv,0);\n"
         "h+='<div class=\"sum-big blue\">'+gs+grandConverted.toLocaleString('en',{minimumFractionDigits:gd,maximumFractionDigits:gd})+'</div>';\n"
         "h+='<div class=\"sum-sub\">total spend in '+_cc+'</div>';\n"
         # Stats row
@@ -4726,20 +4741,24 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "h+='<div><div style=\"color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px\">Free</div><div style=\"font-size:22px;font-weight:700;color:#e0e0e0\">'+(purchItems.length-purchPaid.length).toLocaleString()+'</div></div>';\n"
         "if(purchGifts)h+='<div><div style=\"color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px\">Gifts</div><div style=\"font-size:22px;font-weight:700;color:#e0e0e0\">'+purchGifts.toLocaleString()+'</div></div>';\n"
         "h+='</div>';\n"
-        # Currency breakdown table
-        "if(topCurr.length){\n"
+        # Sortable currency breakdown table
+        "if(purchRows.length){\n"
+        "const sk=_sumPurchSort.key,sd=_sumPurchSort.dir;\n"
+        "purchRows.sort((a,b)=>{const av=a[sk],bv=b[sk];const c=typeof av==='string'?av.localeCompare(bv):av-bv;return sd==='asc'?c:-c});\n"
+        "function _spa(k){return _sumPurchSort.key===k?(_sumPurchSort.dir==='asc'?' \\u25B2':' \\u25BC'):''}\n"
         "h+='<table class=\"sum-tbl\" style=\"margin-top:14px\">';\n"
-        "h+='<tr><th>Currency</th><th class=\"num\">Items</th><th class=\"num\">Total</th><th class=\"num\">In '+_cc+'</th></tr>';\n"
-        "topCurr.forEach(([c,v])=>{\n"
-        "  const s=(_CUR[c]||['',''])[1]||c+' ';\n"
-        "  const d0=c==='JPY'||c==='KRW'||c==='CLP'||c==='COP'||c==='HUF'?0:2;\n"
-        "  const cnt=purchPaid.filter(x=>(x.currency||'???')===c).length;\n"
-        "  const rFrom=(_CUR[c]||[1])[0];const conv=v/rFrom*(_CUR[_cc]||_CUR.USD)[0];\n"
-        "  h+='<tr><td>'+c+'</td><td class=\"num\">'+cnt.toLocaleString()+'</td>';\n"
-        "  h+='<td class=\"num\" style=\"color:#42a5f5\">'+s+v.toLocaleString('en',{minimumFractionDigits:d0,maximumFractionDigits:d0})+'</td>';\n"
-        "  h+='<td class=\"num\" style=\"color:#107c10\">'+gs+conv.toLocaleString('en',{minimumFractionDigits:gd,maximumFractionDigits:gd})+'</td></tr>';\n"
+        "h+='<tr><th class=\"sortable\" onclick=\"_sumPurchSortBy(\\'cur\\')\">Currency'+_spa('cur')+'</th>';\n"
+        "h+='<th class=\"num sortable\" onclick=\"_sumPurchSortBy(\\'cnt\\')\">Items'+_spa('cnt')+'</th>';\n"
+        "h+='<th class=\"num sortable\" onclick=\"_sumPurchSortBy(\\'total\\')\">Total'+_spa('total')+'</th>';\n"
+        "h+='<th class=\"num sortable\" onclick=\"_sumPurchSortBy(\\'conv\\')\">In '+_cc+_spa('conv')+'</th></tr>';\n"
+        "purchRows.forEach(r=>{\n"
+        "  const s=_sym(r.cur);const d0=_fd(r.cur);\n"
+        "  h+='<tr><td>'+r.cur+'</td><td class=\"num\">'+r.cnt.toLocaleString()+'</td>';\n"
+        "  h+='<td class=\"num\" style=\"color:#42a5f5\">'+s+r.total.toLocaleString('en',{minimumFractionDigits:d0,maximumFractionDigits:d0})+'</td>';\n"
+        "  h+='<td class=\"num\" style=\"color:#107c10\">'+gs+r.conv.toLocaleString('en',{minimumFractionDigits:gd,maximumFractionDigits:gd})+'</td></tr>';\n"
         "});\n"
-        "h+='</table>'}\n"
+        "h+='</table>';\n"
+        "h+='<div style=\"margin-top:8px;font-size:11px;color:#555\">Exchange rates via <a href=\"https://open.er-api.com\" target=\"_blank\" style=\"color:#555;text-decoration:underline\">open.er-api.com</a></div>'}\n"
         "h+='</div>'}\n"
 
         # Card 5: Platform Breakdown
@@ -4766,13 +4785,17 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "});\n"
         "h+='</div>';\n"
 
-        # Card 7: Top Publishers
+        # Card 7: Top Publishers (sortable)
         "h+='<div class=\"sum-card\">';\n"
         "h+='<h3>Top Publishers</h3>';\n"
+        "const psk=_sumPubSort.key,psd=_sumPubSort.dir;\n"
+        "pubAll.sort((a,b)=>{const av=a[psk],bv=b[psk];const c=typeof av==='string'?av.localeCompare(bv):av-bv;return psd==='asc'?c:-c});\n"
+        "const pubShow=pubAll.slice(0,10);\n"
+        "function _spba(k){return _sumPubSort.key===k?(_sumPubSort.dir==='asc'?' \\u25B2':' \\u25BC'):''}\n"
         "h+='<table class=\"sum-tbl\">';\n"
-        "h+='<tr><th>Publisher</th><th class=\"num\">Games</th></tr>';\n"
-        "pubOrd.forEach(([p,c])=>{\n"
-        "  h+='<tr><td>'+p+'</td><td class=\"num\">'+c.toLocaleString()+'</td></tr>';\n"
+        "h+='<tr><th class=\"sortable\" onclick=\"_sumPubSortBy(\\'name\\')\">Publisher'+_spba('name')+'</th><th class=\"num sortable\" onclick=\"_sumPubSortBy(\\'cnt\\')\">Games'+_spba('cnt')+'</th></tr>';\n"
+        "pubShow.forEach(r=>{\n"
+        "  h+='<tr><td>'+r.name+'</td><td class=\"num\">'+r.cnt.toLocaleString()+'</td></tr>';\n"
         "});\n"
         "h+='</table></div>';\n"
 
