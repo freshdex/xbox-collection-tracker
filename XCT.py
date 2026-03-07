@@ -4333,7 +4333,6 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<label class="mkt-tick"><input type="checkbox" id="mkt-hideowned-ed" onchange="mktPage=0;filterMKT()"> Hide owned editions</label>\n'
         '<div style="border-top:1px solid #333;margin:8px 0;padding-top:8px">'
         '<div style="font-size:11px;color:#888;margin-bottom:4px">Exclusions</div>'
-        '<label class="mkt-tick"><input type="checkbox" id="mkt-nosub" onchange="mktPage=0;filterMKT()"> Hide subscription games</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-nodemo" onchange="mktPage=0;filterMKT()"> Hide demos</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-noplayed" onchange="mktPage=0;filterMKT()"> Hide played games</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-noach" onchange="mktPage=0;filterMKT()"> Hide games I have achievements in</label>\n'
@@ -5199,7 +5198,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const boxes=[...el.querySelectorAll('.cb-panel input[type=checkbox]')];"
         "if(!boxes.length)return null;"
         "const checked=boxes.filter(c=>c.checked).map(c=>c.value);"
-        "return checked.length===boxes.length?null:checked}\n"
+        "return(checked.length===boxes.length||checked.length===0)?null:checked}\n"
 
         "function _mktSetCBChecked(id,vals){"
         "const el=document.getElementById(id);if(!el)return;"
@@ -5526,8 +5525,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(checked.length===0||checked.length===total){"
         "btn.textContent=base+' \\u25BE';btn.classList.remove('has-sel')}"
         "else{btn.textContent=base+' ('+checked.length+') \\u25BE';btn.classList.add('has-sel')}"
-        "console.log('[getCBVals]',id,checked.length+'/'+total,'btn:',btn.textContent,'result:',checked.length===total?'null':checked);"
-        "return checked.length===total?null:checked}\n"
+        "console.log('[getCBVals]',id,checked.length+'/'+total,'btn:',btn.textContent,'result:',(checked.length===total||checked.length===0)?'null':checked);"
+        "return(checked.length===total||checked.length===0)?null:checked}\n"
         '\n'
 
         # -- fill: global helper for checkbox dropdown panels --
@@ -5722,7 +5721,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "fill('mkt-plat',data.platforms.map(function(p){return[p.value,p.value+' ('+p.count+')']}),'filterMKT');\n"
         "fill('mkt-cat',data.categories.map(function(c){return[c.value,c.value+' ('+c.count+')']}),'filterMKT');\n"
         "if(data.subscriptions&&data.subscriptions.length){"
-        "fill('mkt-subs',data.subscriptions.map(function(s){return[s.value,s.value+' ('+s.count+')']}),'filterMKT');"
+        "var _subOpts=data.subscriptions.map(function(s){return[s.value,s.value+' ('+s.count+')']});"
+        "_subOpts.push(['none','No Subscription']);"
+        "fill('mkt-subs',_subOpts,'filterMKT');"
         "window._hostedSubCounts=data.subscriptions;"
         "document.getElementById('tab-subs').style.display='';"
         "document.getElementById('tab-subs-cnt').textContent=data.subscriptions.reduce(function(s,x){return s+x.count},0);"
@@ -6819,7 +6820,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const so=document.getElementById('mkt-sort').value;\n"
         "const doGroup=document.getElementById('mkt-group')&&document.getElementById('mkt-group').checked;\n"
         "const hideOwnedEd=document.getElementById('mkt-hideowned-ed')&&document.getElementById('mkt-hideowned-ed').checked;\n"
-        "const nosubF=document.getElementById('mkt-nosub')&&document.getElementById('mkt-nosub').checked;\n"
+        "const nosubF=false;\n"
         "const nodemoF=document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked;\n"
         "const noplayedF=document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked;\n"
         "const noachF=document.getElementById('mkt-noach')&&document.getElementById('mkt-noach').checked;\n"
