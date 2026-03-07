@@ -2202,7 +2202,7 @@ def store_amazon_bulk():
 
 @app.route("/api/v1/store/amazon/set", methods=["POST"])
 @require_auth
-def store_amazon_set(contributor):
+def store_amazon_set(contributor, conn, cur, api_key):
     """Admin-only: set physical disc status for a product."""
     if contributor["username"].lower() != "freshdex":
         return jsonify(error="Admin only"), 403
@@ -2213,34 +2213,18 @@ def store_amazon_set(contributor):
     url_us = body.get("urlUS", "").strip()
     if not pid or status not in ("digital", "uk", "us", "both"):
         return jsonify(error="productId and valid status required"), 400
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        if status == "digital" and not url_uk and not url_us:
-            # If marking digital with no URLs, could delete or upsert
-            cur.execute(
-                "INSERT INTO amazon_links (product_id, status, url_uk, url_us, updated_at) "
-                "VALUES (%s, %s, %s, %s, NOW()) "
-                "ON CONFLICT (product_id) DO UPDATE SET status=%s, url_uk=%s, url_us=%s, updated_at=NOW()",
-                (pid, status, url_uk, url_us, status, url_uk, url_us))
-        else:
-            cur.execute(
-                "INSERT INTO amazon_links (product_id, status, url_uk, url_us, updated_at) "
-                "VALUES (%s, %s, %s, %s, NOW()) "
-                "ON CONFLICT (product_id) DO UPDATE SET status=%s, url_uk=%s, url_us=%s, updated_at=NOW()",
-                (pid, status, url_uk, url_us, status, url_uk, url_us))
-        conn.commit()
-        return jsonify(ok=True)
-    except Exception as e:
-        conn.rollback()
-        return jsonify(error=str(e)), 500
-    finally:
-        conn.close()
+    cur.execute(
+        "INSERT INTO amazon_links (product_id, status, url_uk, url_us, updated_at) "
+        "VALUES (%s, %s, %s, %s, NOW()) "
+        "ON CONFLICT (product_id) DO UPDATE SET status=%s, url_uk=%s, url_us=%s, updated_at=NOW()",
+        (pid, status, url_uk, url_us, status, url_uk, url_us))
+    conn.commit()
+    return jsonify(ok=True)
 
 
 @app.route("/api/v1/store/amazon/remove", methods=["POST"])
 @require_auth
-def store_amazon_remove(contributor):
+def store_amazon_remove(contributor, conn, cur, api_key):
     """Admin-only: remove physical disc status for a product."""
     if contributor["username"].lower() != "freshdex":
         return jsonify(error="Admin only"), 403
@@ -2248,17 +2232,9 @@ def store_amazon_remove(contributor):
     pid = body.get("productId", "").strip()
     if not pid:
         return jsonify(error="productId required"), 400
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM amazon_links WHERE product_id = %s", (pid,))
-        conn.commit()
-        return jsonify(ok=True)
-    except Exception as e:
-        conn.rollback()
-        return jsonify(error=str(e)), 500
-    finally:
-        conn.close()
+    cur.execute("DELETE FROM amazon_links WHERE product_id = %s", (pid,))
+    conn.commit()
+    return jsonify(ok=True)
 
 
 # ---------------------------------------------------------------------------
