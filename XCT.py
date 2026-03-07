@@ -6247,7 +6247,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "lh+=_renderRow(item,'',0)\n"
         "}}\n"
         "g.innerHTML=gh;l.innerHTML=lh;\n"
-        "document.getElementById('lib-cbar').innerHTML=_buildSummaryTable(_pf,filtered,_filtGTs);"
+        "document.getElementById('lib-cbar').innerHTML=_buildSummaryTable(LIB.concat(_impLib||[]),filtered,_filtGTs);"
         "_renderPager('lib-pager',libPage,_libTotalPages,'libGoPage');"
         "if(document.getElementById('library').classList.contains('active'))_libSerializeFilters()}\n"
         '\n'
