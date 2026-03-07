@@ -55,13 +55,15 @@ def save_state(state):
 
 
 def fetch_all_products(api_key):
-    """Fetch all Game-type products from xct.live store API."""
+    """Fetch Xbox One/Series X|S games with achievements from xct.live."""
     products = []
     page = 0
     per_page = 200
     while True:
         params = {
             "type": "Game",
+            "plat": "Xbox One,Xbox Series X|S",
+            "ach": "1",
             "sort": "name",
             "page": page,
             "per_page": per_page,
