@@ -4054,6 +4054,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<span style="font-weight:600;font-size:12px;color:#ccc">Filters</span>'
         '<span class="pill" onclick="clearAllFilters()" style="font-size:11px;padding:3px 8px;margin:0" title="Reset all filters">Clear All</span>'
         '</div>\n'
+        # Saved Filters
+        '<div class="mkt-sf"><select id="lib-saved" onchange="_libLoadSaved(this.value)" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px"><option value="">Saved Filters</option><option value="__save__">Save Current Filter...</option></select></div>\n'
         # Search
         '<div class="mkt-sf"><input type="text" id="lib-search" placeholder="Search..." oninput="libPage=0;filterLib()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px;box-sizing:border-box"></div>\n'
         # Sort
@@ -5147,6 +5149,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('lib-ach').value='all';"
         "document.getElementById('lib-sort').value='name';libSortCol=null;"
         "document.getElementById('lib-search').value='';"
+        "_libActiveSaved='';_libInitSaved();"
         "libPage=0;filterLib()}\n"
         "function clearMktFilters(){"
         "document.querySelectorAll('#marketplace .cb-panel input[type=checkbox]').forEach(c=>c.checked=true);"
@@ -5246,7 +5249,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "return true}\n"
 
         # -- Library filter serialization --
-        "function _libSerializeFilters(){"
+        "function _libSerializeState(){"
         "const p=new URLSearchParams();"
         "const q=document.getElementById('lib-search').value;"
         "if(q)p.set('q',q);"
@@ -5258,7 +5261,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "cbMap.forEach(([id,key])=>{const v=_mktGetCBChecked(id);if(v)p.set(key,v.join(','))});"
         "['gp','dlc','cdn','trial','ach'].forEach(k=>{"
         "const el=document.getElementById('lib-'+k);if(el){const v=el.value;if(v)p.set(k,v)}});"
-        "_setRoute('library',p.toString())}\n"
+        "return p.toString()}\n"
+        "function _libSerializeFilters(){_setRoute('library',_libSerializeState())}\n"
 
         "function _libDeserializeFilters(qs){"
         "if(!qs)return false;"
@@ -5272,6 +5276,68 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "['gp','dlc','cdn','trial','ach'].forEach(k=>{"
         "const el=document.getElementById('lib-'+k);if(el&&p.has(k))el.value=p.get(k)});"
         "return true}\n"
+
+        # -- Library saved filters --
+        "let _libSavedFilters=[];let _libActiveSaved='';\n"
+        "function _libInitSaved(){"
+        "try{_libSavedFilters=JSON.parse(localStorage.getItem('xct_lib_saved')||'[]')}catch(e){_libSavedFilters=[]}"
+        "const sel=document.getElementById('lib-saved');if(!sel)return;"
+        "let h='<option value=\"\">Saved Filters</option>';"
+        "_libSavedFilters.forEach(f=>{h+='<option value=\"'+f.name.replace(/\"/g,'&quot;')+'\">'+f.name+'</option>'});"
+        "h+='<option disabled>───────────</option>';"
+        "h+='<option value=\"__save__\">Save Current Filter...</option>';"
+        "h+='<option value=\"__update__\"'+ (_libActiveSaved?'':' disabled')+'>Update Current Filter</option>';"
+        "h+='<option value=\"__delete__\"'+ (_libActiveSaved?'':' disabled')+'>Delete Current Filter</option>';"
+        "sel.innerHTML=h;sel.value=_libActiveSaved}\n"
+
+        "function _libLoadSaved(val){"
+        "const sel=document.getElementById('lib-saved');"
+        "if(val==='__delete__'){"
+        "if(!_libActiveSaved){sel.value=_libActiveSaved;return}"
+        "if(!confirm('Delete filter \"'+_libActiveSaved+'\"?')){sel.value=_libActiveSaved;return}"
+        "_libSavedFilters=_libSavedFilters.filter(f=>f.name!==_libActiveSaved);"
+        "localStorage.setItem('xct_lib_saved',JSON.stringify(_libSavedFilters));"
+        "_libActiveSaved='';_libInitSaved();return}"
+        "if(val==='__update__'){"
+        "if(!_libActiveSaved){sel.value=_libActiveSaved;return}"
+        "var uf=_libSavedFilters.find(f=>f.name===_libActiveSaved);"
+        "if(!uf){sel.value=_libActiveSaved;return}"
+        "uf.params=_libSerializeState();"
+        "localStorage.setItem('xct_lib_saved',JSON.stringify(_libSavedFilters));"
+        "sel.value=_libActiveSaved;return}"
+        "if(val==='__save__'){"
+        "const name=prompt('Filter name:',_libSuggestName());"
+        "if(!name){sel.value=_libActiveSaved;return}"
+        "_libSavedFilters.push({name:name,params:_libSerializeState()});"
+        "localStorage.setItem('xct_lib_saved',JSON.stringify(_libSavedFilters));"
+        "_libActiveSaved=name;_libInitSaved();return}"
+        # Load saved filter
+        "if(!val){_libActiveSaved='';_libInitSaved();return}"
+        "const found=_libSavedFilters.find(f=>f.name===val);"
+        "if(!found){_libActiveSaved='';_libInitSaved();return}"
+        # Reset all filters first
+        "document.querySelectorAll('#library .cb-panel input[type=checkbox]').forEach(c=>c.checked=true);"
+        "document.querySelectorAll('#library .cb-clear').forEach(c=>c.textContent='Clear All');"
+        "document.getElementById('lib-sort').value='name';libSortCol=null;"
+        "document.getElementById('lib-gp').value='owned';"
+        "document.getElementById('lib-dlc').value='all';"
+        "document.getElementById('lib-cdn').value='all';"
+        "document.getElementById('lib-trial').value='all';"
+        "document.getElementById('lib-ach').value='all';"
+        "document.getElementById('lib-search').value='';"
+        # Apply saved params
+        "_libDeserializeFilters(found.params);"
+        "_libActiveSaved=val;_libInitSaved();libPage=0;filterLib()}\n"
+
+        "function _libSuggestName(){"
+        "var parts=[];"
+        "var v=_mktGetCBChecked('lib-type');if(v&&v.length&&v.length<3)parts.push(v.map(x=>x==='Durable'?'DLC':x).join('+'));"
+        "v=_mktGetCBChecked('lib-plat');if(v&&v.length)parts.push(v.join('+'));"
+        "v=_mktGetCBChecked('lib-status');if(v&&v.length&&v.length<3)parts.push(v.join('+'));"
+        "var gp=document.getElementById('lib-gp').value;if(gp==='gamepass')parts.push('Game Pass');"
+        "var ach=document.getElementById('lib-ach').value;if(ach==='has')parts.push('Achievements');if(ach==='earned')parts.push('Ach. Earned');"
+        "var q=document.getElementById('lib-search').value.trim();if(q)parts.push('\"'+q+'\"');"
+        "return parts.join(' + ')||'My Filter'}\n"
 
         # -- Play History filter serialization --
         "function _phSerializeFilters(){"
@@ -7711,7 +7777,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
 
     html += (
         '_loadImports().catch(()=>{}).then(()=>{\n'
-        'try{initDropdowns();_mktInitSaved();\n'
+        'try{initDropdowns();_libInitSaved();_mktInitSaved();\n'
         "var _savedCur=localStorage.getItem('xct_currency');if(_savedCur){var _curSel=document.getElementById('lib-cur');if(_curSel){_curSel.value=_savedCur;_cc=_savedCur}}\n"
         "var _revSlug={summary:'summary',library:'library',store:'marketplace',marketplace:'marketplace',subscriptions:'subscriptions',gamepass:'gamepass',"
         "playhistory:'playhistory',scanlog:'history',gamertags:'gamertags',"
