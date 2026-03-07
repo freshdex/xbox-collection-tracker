@@ -127,6 +127,28 @@ def init_db():
         conn.commit()
     except Exception:
         conn.rollback()
+    # Add purchases column if missing (migration)
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            ALTER TABLE user_collections ADD COLUMN IF NOT EXISTS purchases JSONB
+        """)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    # OAuth state table (needed for multi-worker gunicorn)
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS oauth_states (
+                state       TEXT PRIMARY KEY,
+                data        JSONB NOT NULL,
+                created_at  TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        conn.commit()
+    except Exception:
+        conn.rollback()
     # Marketplace scanner tables — separate transaction so core tables
     # are committed even if these fail (e.g. on first deploy before migration)
     try:
@@ -358,6 +380,75 @@ def init_db():
     except Exception as e:
         conn.rollback()
         print(f"[!] Profile columns migration failed ({e}) — run manually")
+    # CDN Version Monitor tables
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS cdn_version_scans (
+                id                  SERIAL PRIMARY KEY,
+                started_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                completed_at        TIMESTAMPTZ,
+                status              VARCHAR(16) NOT NULL DEFAULT 'running',
+                scan_type           VARCHAR(32) NOT NULL DEFAULT 'full',
+                content_ids_total   INTEGER DEFAULT 0,
+                content_ids_checked INTEGER DEFAULT 0,
+                versions_found      INTEGER DEFAULT 0,
+                new_versions        INTEGER DEFAULT 0,
+                purged_detected     INTEGER DEFAULT 0,
+                errors              JSONB DEFAULT '[]',
+                duration_seconds    REAL
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS cdn_version_snapshots (
+                id              SERIAL PRIMARY KEY,
+                content_id      VARCHAR(64) NOT NULL,
+                store_id        VARCHAR(16) NOT NULL DEFAULT '',
+                version         VARCHAR(64) NOT NULL,
+                build_id        VARCHAR(64) NOT NULL DEFAULT '',
+                version_id      VARCHAR(128) NOT NULL DEFAULT '',
+                cdn_url         TEXT NOT NULL DEFAULT '',
+                file_size       BIGINT DEFAULT 0,
+                filename        VARCHAR(512) NOT NULL DEFAULT '',
+                status          VARCHAR(16) NOT NULL DEFAULT 'live',
+                first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                purged_at       TIMESTAMPTZ,
+                scan_id         INTEGER REFERENCES cdn_version_scans(id),
+                UNIQUE(content_id, version_id)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS cdn_version_changes (
+                id              SERIAL PRIMARY KEY,
+                scan_id         INTEGER REFERENCES cdn_version_scans(id),
+                change_type     VARCHAR(32) NOT NULL,
+                content_id      VARCHAR(64) NOT NULL,
+                store_id        VARCHAR(16) NOT NULL DEFAULT '',
+                title           TEXT NOT NULL DEFAULT '',
+                version         VARCHAR(64) NOT NULL DEFAULT '',
+                build_id        VARCHAR(64) NOT NULL DEFAULT '',
+                old_value       TEXT NOT NULL DEFAULT '',
+                new_value       TEXT NOT NULL DEFAULT '',
+                created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_cdn_ver_snap_content
+            ON cdn_version_snapshots(content_id)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_cdn_ver_snap_status
+            ON cdn_version_snapshots(status)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_cdn_ver_changes_scan
+            ON cdn_version_changes(scan_id)
+        """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[!] CDN version monitor tables init failed ({e}) — run migration manually")
     finally:
         conn.close()
 
@@ -550,82 +641,6 @@ def data_js():
         gfwl = _load_shared("gfwl", [])
         gp = _load_shared("gp", [])
 
-        # CDN DB from cdn_entries table
-        cdn_db = {}
-        enrichment = {}
-        cur.execute("SELECT data FROM shared_data WHERE key = 'cdn'")
-        row = cur.fetchone()
-        if row and isinstance(row["data"], dict):
-            for sid, rec in row["data"].items():
-                t = rec.get("title") or ""
-                if t:
-                    enrichment[sid] = {"title": t, "developer": rec.get("developer",""), "publisher": rec.get("publisher","")}
-
-        cur.execute("""
-            SELECT store_id, content_id, package_name, build_version, build_id,
-                   platform, size_bytes, cdn_urls, content_types, devices, language
-            FROM cdn_entries WHERE NOT deleted
-            ORDER BY store_id, build_version
-        """)
-        for row in cur:
-            sid = row["store_id"]
-            entry = {
-                "contentId": row["content_id"] or "",
-                "storeId": sid,
-                "packageName": row["package_name"] or "",
-                "buildVersion": row["build_version"] or "",
-                "buildId": row["build_id"] or "",
-                "platform": row["platform"] or "",
-                "sizeBytes": row["size_bytes"] or 0,
-                "cdnUrls": row["cdn_urls"] or [],
-                "contentTypes": row["content_types"] or "",
-                "devices": row["devices"] or "",
-                "language": row["language"] or "",
-            }
-            enr = enrichment.get(sid, {})
-            if enr:
-                entry["title"] = enr.get("title","")
-                entry["developer"] = enr.get("developer","")
-                entry["publisher"] = enr.get("publisher","")
-            if sid not in cdn_db:
-                cdn_db[sid] = entry
-            else:
-                existing = cdn_db[sid]
-                if "versions" not in existing:
-                    existing["versions"] = []
-                existing["versions"].append(entry)
-
-        # Leaderboard
-        cur.execute("""
-            SELECT username, total_points, last_sync_at
-            FROM contributors WHERE total_points > 0
-            ORDER BY total_points DESC LIMIT 50
-        """)
-        lb = [{"username":r["username"],"points":r["total_points"],
-               "lastSync":r["last_sync_at"].isoformat() if r["last_sync_at"] else None}
-              for r in cur.fetchall()]
-        cur.execute("SELECT COUNT(*) as c FROM contributors WHERE total_points > 0")
-        tc = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) as c FROM cdn_entries WHERE NOT deleted")
-        te = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(DISTINCT store_id) as c FROM cdn_entries WHERE NOT deleted")
-        tg = cur.fetchone()["c"]
-        lb_stats = {"total_contributors":tc,"total_entries":te,"total_games":tg}
-
-        # CDN contributor map as sync meta
-        cur.execute("""
-            SELECT e.store_id, c2.username
-            FROM cdn_entries e
-            JOIN contributions c ON c.cdn_entry_id = e.id
-            JOIN contributors c2 ON c2.id = c.contributor_id
-            WHERE NOT e.deleted
-        """)
-        cdn_meta = {}
-        for row in cur:
-            sid = row["store_id"]
-            if sid not in cdn_meta:
-                cdn_meta[sid] = {"source":"synced","contributor":row["username"]}
-
         import json as _json
         js = (
             "var LIB=[];\n"
@@ -637,15 +652,16 @@ def data_js():
             "var ACCOUNTS=[];\n"
             "var RATES=" + _json.dumps(rates, ensure_ascii=False) + ";\n"
             "var GC_FACTOR=0.81;\n"
-            "var CDN_DB=" + _json.dumps(cdn_db, ensure_ascii=False) + ";\n"
+            "var CDN_DB={};\n"
             "var GFWL=" + _json.dumps(gfwl, ensure_ascii=False) + ";\n"
-            "var CDN_LEADERBOARD=" + _json.dumps(lb, ensure_ascii=False) + ";\n"
-            "var CDN_LB_STATS=" + _json.dumps(lb_stats, ensure_ascii=False) + ";\n"
-            "var CDN_SYNC_META=" + _json.dumps(cdn_meta, ensure_ascii=False) + ";\n"
+            "var CDN_LEADERBOARD=[];\n"
+            "var CDN_LB_STATS={};\n"
+            "var CDN_SYNC_META={};\n"
             "var _MKT_TAGS={};\n"
             "var _MKT_LAST_SCAN=null;\n"
             "var CDN_SYNC_USER=\"\";\n"
             "var CDN_SYNC_LOG=[];\n"
+            "var PURCHASES=[];\n"
         )
 
         js_bytes = js.encode("utf-8")
@@ -668,8 +684,8 @@ def data_js():
     finally:
         conn.close()
 _TAB_SLUGS = {
-    "library", "store", "marketplace", "gamepass", "playhistory", "scanlog",
-    "gamertags", "gfwl", "xvcdb", "imports", "achievements", "admin",
+    "summary", "library", "store", "marketplace", "gamepass", "playhistory", "scanlog",
+    "gamertags", "gfwl", "xvcdb", "imports", "purchases", "achievements", "admin",
 }
 
 # GP PIDs set (loaded from shared_data, refreshed every 5 minutes)
@@ -704,6 +720,146 @@ def _refresh_exchange_rates(cur):
     if row and isinstance(row["data"], dict):
         _exchange_rates = row["data"].get("rates", row["data"])
     _exchange_rates_time = now
+
+
+def _legal_page(title, other_slug, other_label, body):
+    return (
+        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        f'<title>{title} — XCT Live</title>'
+        '<style>'
+        '*{margin:0;padding:0;box-sizing:border-box}'
+        'body{background:#111;color:#ccc;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.7}'
+        '.header{background:#1a1a1a;border-bottom:1px solid #222;padding:14px 24px;display:flex;align-items:center;gap:10px}'
+        '.header a{color:#ccc;text-decoration:none;font-size:14px}'
+        '.header a:hover{color:#107c10}'
+        '.header .logo{font-weight:600;font-size:16px;color:#fff}'
+        '.container{max-width:720px;margin:0 auto;padding:32px 24px 48px}'
+        'h1{color:#fff;font-size:22px;margin-bottom:6px}'
+        '.updated{color:#666;font-size:12px;margin-bottom:28px}'
+        'h2{color:#ddd;font-size:16px;margin:24px 0 8px;padding-top:16px;border-top:1px solid #222}'
+        'p{margin-bottom:12px;font-size:14px}'
+        'ul{margin:0 0 12px 20px;font-size:14px}'
+        'li{margin-bottom:4px}'
+        'a{color:#107c10}'
+        '.footer{text-align:center;padding:24px;font-size:11px;color:#555;border-top:1px solid #222}'
+        '.footer a{color:#666;text-decoration:none;margin:0 10px}'
+        '</style></head><body>'
+        f'<div class="header"><a href="/" class="logo">XCT Live</a>'
+        f'<span style="color:#333">|</span><a href="/{other_slug}">{other_label}</a></div>'
+        f'<div class="container">{body}</div>'
+        '<div class="footer"><a href="/terms">Terms of Service</a>'
+        '<span style="color:#333">|</span><a href="/privacy">Privacy Policy</a></div>'
+        '</body></html>'
+    )
+
+
+@app.route("/terms")
+def terms():
+    body = (
+        '<h1>Terms of Service</h1>'
+        '<p class="updated">Last updated: March 7, 2026</p>'
+        '<h2>1. Acceptance</h2>'
+        '<p>By using XCT Live ("the Service"), operated at xct.live, you agree to these terms. If you do not agree, do not use the Service.</p>'
+        '<h2>2. Description</h2>'
+        '<p>XCT Live is a free community tool that lets you browse Xbox marketplace data, view Game Pass catalogs, and optionally upload your personal Xbox collection data for online viewing. The Service also provides CDN package tracking and community leaderboard features.</p>'
+        '<h2>3. Accounts</h2>'
+        '<p>You may create an account using a username and passphrase, or sign in with your Xbox/Microsoft account. You are responsible for keeping your credentials secure. Do not share your API key.</p>'
+        '<h2>4. User Data</h2>'
+        '<p>You may upload Xbox collection exports (library, play history, order history) to the Service. This data is stored on our servers and accessible only through your authenticated account. You retain ownership of your data and may request its deletion at any time.</p>'
+        '<h2>5. Xbox Account Linking</h2>'
+        '<p>When you link your Xbox account via Microsoft OAuth, the Service receives a limited authorization token to access your Xbox profile information (gamertag, avatar, XUID) and achievement data. You can disconnect your Xbox account at any time, which revokes the stored tokens.</p>'
+        '<h2>6. Acceptable Use</h2>'
+        '<p>You agree not to:</p>'
+        '<ul>'
+        '<li>Abuse, disrupt, or overload the Service</li>'
+        '<li>Attempt to access other users\' data or accounts</li>'
+        '<li>Use automated tools to scrape or bulk-download data from the Service beyond normal usage</li>'
+        '<li>Upload false, misleading, or malicious data</li>'
+        '</ul>'
+        '<h2>7. CDN Sync &amp; Leaderboard</h2>'
+        '<p>CDN Sync is a voluntary community feature. Data you contribute to the shared CDN database is visible to other contributors. Points and leaderboard standings are for community recognition only and hold no monetary value.</p>'
+        '<h2>8. No Warranty</h2>'
+        '<p>The Service is provided "as is" without warranty of any kind. We do not guarantee uptime, data accuracy, or availability. Xbox marketplace data, prices, and Game Pass listings are sourced from Microsoft APIs and may be outdated or incorrect.</p>'
+        '<h2>9. Limitation of Liability</h2>'
+        '<p>XCT Live and its operators are not liable for any damages arising from your use of the Service, including but not limited to data loss, account issues, or reliance on displayed pricing or availability information.</p>'
+        '<h2>10. Third-Party Services</h2>'
+        '<p>The Service interacts with Microsoft/Xbox APIs. Your use of Xbox features is also subject to the '
+        '<a href="https://www.xbox.com/legal/livetou" target="_blank" rel="noopener">Microsoft Services Agreement</a> and '
+        '<a href="https://privacy.microsoft.com/privacystatement" target="_blank" rel="noopener">Microsoft Privacy Statement</a>.</p>'
+        '<h2>11. Termination</h2>'
+        '<p>We may suspend or terminate accounts that violate these terms or abuse the Service. You may stop using the Service and request account deletion at any time.</p>'
+        '<h2>12. Changes</h2>'
+        '<p>We may update these terms at any time. Continued use of the Service after changes constitutes acceptance of the updated terms.</p>'
+        '<h2>13. Contact</h2>'
+        '<p>For questions about these terms, reach out via the XCT community channels or GitHub repository.</p>'
+    )
+    return Response(_legal_page("Terms of Service", "privacy", "Privacy Policy", body),
+                    content_type="text/html; charset=utf-8")
+
+
+@app.route("/privacy")
+def privacy():
+    body = (
+        '<h1>Privacy Policy</h1>'
+        '<p class="updated">Last updated: March 7, 2026</p>'
+        '<h2>1. Overview</h2>'
+        '<p>XCT Live ("the Service") respects your privacy. This policy explains what data we collect, how we use it, and your rights regarding that data.</p>'
+        '<h2>2. Data We Collect</h2>'
+        '<p><strong>Account Information:</strong> When you register, we store your chosen username and a hashed version of your passphrase. We generate a unique API key for authentication. We do not collect your email address.</p>'
+        '<p><strong>Xbox Account Data:</strong> If you link your Xbox account, we store your gamertag, Xbox User ID (XUID), avatar URL, and an encrypted Microsoft refresh token. This token is used to access your Xbox achievement data and profile information.</p>'
+        '<p><strong>Collection Data:</strong> If you upload your Xbox collection export, we store your library, play history, scan history, account list, and order/purchase history. This data is only accessible through your authenticated API key.</p>'
+        '<p><strong>CDN Sync Data:</strong> If you participate in CDN Sync, your contributed CDN package entries are stored in the shared database with your contributor username attached.</p>'
+        '<p><strong>Server Logs:</strong> Standard web server logs may include IP addresses, request timestamps, and user agents. These are used for security monitoring and are not shared with third parties.</p>'
+        '<h2>3. How We Use Your Data</h2>'
+        '<ul>'
+        '<li>Display your collection, achievements, and purchase history in the web interface</li>'
+        '<li>Maintain CDN Sync leaderboard standings</li>'
+        '<li>Authenticate your sessions via API key</li>'
+        '<li>Monitor and prevent abuse of the Service</li>'
+        '</ul>'
+        '<h2>4. Data Sharing</h2>'
+        '<p>We do not sell, rent, or share your personal data with third parties. Your collection data is private to your account. CDN Sync contributions are shared with other CDN Sync participants by design.</p>'
+        '<h2>5. Data Storage &amp; Security</h2>'
+        '<p>Data is stored on secured servers. Xbox refresh tokens are encrypted at rest using Fernet symmetric encryption. Passphrases are hashed before storage. While we take reasonable measures to protect your data, no system is completely secure.</p>'
+        '<h2>6. Microsoft / Xbox Data</h2>'
+        '<p>When you sign in with Xbox, the Service accesses your data through Microsoft\'s OAuth2 authorization flow. We only request the scopes necessary for the features you use. Your Microsoft password is never transmitted to or stored by the Service. You can revoke access at any time by disconnecting your Xbox account in the Service or removing the app from your '
+        '<a href="https://account.live.com/consent/Manage" target="_blank" rel="noopener">Microsoft account permissions</a>.</p>'
+        '<h2>7. Cookies &amp; Local Storage</h2>'
+        '<p>The Service uses browser localStorage to store your API key, username, gamertag, and display preferences. No tracking cookies or third-party analytics are used.</p>'
+        '<h2>8. Data Retention</h2>'
+        '<p>Your data is retained as long as your account is active. If you request account deletion, all associated data (collection, tokens, profile) will be removed from our servers.</p>'
+        '<h2>9. Your Rights</h2>'
+        '<p>You have the right to:</p>'
+        '<ul>'
+        '<li>Access your stored data through the API</li>'
+        '<li>Disconnect your Xbox account at any time</li>'
+        '<li>Request deletion of your account and all associated data</li>'
+        '<li>Export your collection data</li>'
+        '</ul>'
+        '<h2>10. Children\'s Privacy</h2>'
+        '<p>The Service is not directed at children under 13. We do not knowingly collect data from children under 13.</p>'
+        '<h2>11. Changes</h2>'
+        '<p>We may update this policy at any time. Material changes will be noted by updating the "Last updated" date at the top of this page.</p>'
+        '<h2>12. Contact</h2>'
+        '<p>For privacy-related questions or data deletion requests, reach out via the XCT community channels or GitHub repository.</p>'
+    )
+    return Response(_legal_page("Privacy Policy", "terms", "Terms of Service", body),
+                    content_type="text/html; charset=utf-8")
+
+
+@app.route("/xctbanner.jpg")
+def banner_image():
+    """Serve the summary tab banner image."""
+    img_path = os.path.join(os.path.dirname(__file__), "xctbanner.jpg")
+    if not os.path.isfile(img_path):
+        return Response("Not found", status=404)
+    with open(img_path, "rb") as f:
+        data = f.read()
+    return Response(data, status=200, headers={
+        "Content-Type": "image/jpeg",
+        "Cache-Control": "public, max-age=86400",
+    })
 
 
 @app.route("/<slug>")
@@ -1230,6 +1386,9 @@ def store_products():
         do_group = request.args.get("group", "")
         hide_owned_ed = request.args.get("hoe", "")
         regions_raw = request.args.get("regions", "")
+        nosub = request.args.get("nosub", "")
+        nodemo = request.args.get("nodemo", "")
+        noplayed = request.args.get("noplayed", "")
 
         # Sort
         sort_sql, needs_us_price = _STORE_SORT_MAP.get(sort_key, _STORE_SORT_MAP["relDesc"])
@@ -1299,20 +1458,31 @@ def store_products():
                 wheres.append("p.category = ANY(%(categories)s)")
                 params["categories"] = c_list
 
-        # Subscriptions filter
+        # Subscriptions filter — accepts tier names (e.g. "Game Pass PC")
+        # or legacy short codes ("gp", "ea", "none")
         if subs_raw:
             s_list = [s.strip() for s in subs_raw.split(",") if s.strip()]
             subs_conds = []
+            # Collect actual tier names for DB query
+            tier_names = [s for s in s_list if s not in ("gp", "ea", "none")]
+            # Legacy short codes
             if "gp" in s_list:
                 if _gp_pids:
                     subs_conds.append("p.product_id = ANY(%(gp_pids)s)")
                     params["gp_pids"] = list(_gp_pids)
             if "ea" in s_list:
-                subs_conds.append("p.is_ea_play = TRUE")
+                tier_names.append("EA Play")
+            if tier_names:
+                subs_conds.append(
+                    "EXISTS (SELECT 1 FROM marketplace_subscriptions ms "
+                    "WHERE ms.product_id = p.product_id AND ms.tier = ANY(%(sub_tiers)s))")
+                params["sub_tiers"] = tier_names
             if "none" in s_list:
-                none_cond = "p.is_ea_play = FALSE"
+                none_cond = (
+                    "NOT EXISTS (SELECT 1 FROM marketplace_subscriptions ms2 "
+                    "WHERE ms2.product_id = p.product_id)")
                 if _gp_pids:
-                    none_cond += " AND NOT (p.product_id = ANY(%(gp_pids_none)s))"
+                    none_cond = "(" + none_cond + " AND NOT (p.product_id = ANY(%(gp_pids_none)s)))"
                     params["gp_pids_none"] = list(_gp_pids)
                 subs_conds.append("(" + none_cond + ")")
             if subs_conds:
@@ -1436,6 +1606,38 @@ def store_products():
             wheres.append("p.has_trial_sku = TRUE")
         if ach == "1":
             wheres.append("p.has_achievements = TRUE")
+
+        # Hide all subscription games
+        if nosub == "1":
+            wheres.append(
+                "NOT EXISTS (SELECT 1 FROM marketplace_subscriptions ms "
+                "WHERE ms.product_id = p.product_id)")
+
+        # Hide demos (titles ending with "Demo" or containing "(Demo)")
+        if nodemo == "1":
+            wheres.append(
+                "p.title !~* '\\mDemo$' AND p.title NOT ILIKE '%%(Demo)%%'")
+
+        # Hide played games (cross-reference user's play history)
+        if noplayed == "1" and auth_header.startswith("Bearer "):
+            api_key = auth_header[7:].strip()
+            if api_key:
+                contributor = _get_contributor(cur, api_key)
+                if contributor:
+                    cur.execute(
+                        "SELECT play_history FROM user_collections "
+                        "WHERE contributor_id = %s", (contributor["id"],))
+                    uc_row = cur.fetchone()
+                    if uc_row and uc_row["play_history"]:
+                        played_pids = [
+                            item["productId"]
+                            for item in uc_row["play_history"]
+                            if isinstance(item, dict) and item.get("productId")
+                            and item.get("lastTimePlayed")]
+                        if played_pids:
+                            wheres.append(
+                                "p.product_id != ALL(%(played_pids)s)")
+                            params["played_pids"] = played_pids
 
         # Region availability filter
         if regions_raw and regions_raw in ("myregions", "notmy"):
@@ -1724,6 +1926,12 @@ def store_product_detail(product_id):
             (product_id,))
         channels = [r["channel"] for r in cur.fetchall()]
 
+        # Subscriptions
+        cur.execute(
+            "SELECT tier FROM marketplace_subscriptions WHERE product_id = %s",
+            (product_id,))
+        subscriptions = [r["tier"] for r in cur.fetchall()]
+
         # Tags
         cur.execute(
             "SELECT tag_type, tag_value FROM marketplace_tags WHERE product_id = %s",
@@ -1798,6 +2006,7 @@ def store_product_detail(product_id):
             "onGP": p["product_id"] in _gp_pids,
             "_onSale": is_on_sale,
             "capabilities": p["capabilities"] or [],
+            "subscriptions": subscriptions,
         }
         return _gzip_json_response(result)
     except Exception as e:
@@ -2396,6 +2605,7 @@ def collection_upload(conn=None, cur=None, contributor=None, api_key=None):
     ph = data.get("playHistory", [])
     history = data.get("history", [])
     accounts = data.get("accounts", [])
+    purchases = data.get("purchases", [])
 
     if not isinstance(ph, list):
         ph = []
@@ -2403,6 +2613,8 @@ def collection_upload(conn=None, cur=None, contributor=None, api_key=None):
         history = []
     if not isinstance(accounts, list):
         accounts = []
+    if not isinstance(purchases, list):
+        purchases = []
 
     # Cap history to 100 entries
     history = history[:100]
@@ -2413,15 +2625,28 @@ def collection_upload(conn=None, cur=None, contributor=None, api_key=None):
         if isinstance(a, dict) and a.get("gamertag"):
             safe_accounts.append({"gamertag": a["gamertag"]})
 
+    # Allowlist purchase fields
+    _PURCH_ALLOWED = {
+        "gamertag", "orderId", "vanityOrderId", "orderDate", "market", "currency",
+        "orderTotal", "orderType", "productId", "title", "type", "status",
+        "isPurchased", "isCanceled", "isGift", "isPreorder", "isSubscription",
+        "quantity", "listPrice", "amountPaid", "developer", "publisher",
+        "image", "boxArt", "category", "releaseDate", "platforms",
+        "productKind", "priceUSD", "currentPriceUSD",
+    }
+    purchases = [{k: v for k, v in item.items() if k in _PURCH_ALLOWED}
+                 for item in purchases if isinstance(item, dict)]
+
     try:
         cur.execute("""
-            INSERT INTO user_collections (contributor_id, lib, play_history, scan_history, accounts_meta, uploaded_at, version)
-            VALUES (%s, %s, %s, %s, %s, NOW(), 1)
+            INSERT INTO user_collections (contributor_id, lib, play_history, scan_history, accounts_meta, purchases, uploaded_at, version)
+            VALUES (%s, %s, %s, %s, %s, %s, NOW(), 1)
             ON CONFLICT (contributor_id) DO UPDATE SET
                 lib = EXCLUDED.lib,
                 play_history = EXCLUDED.play_history,
                 scan_history = EXCLUDED.scan_history,
                 accounts_meta = EXCLUDED.accounts_meta,
+                purchases = EXCLUDED.purchases,
                 uploaded_at = NOW(),
                 version = user_collections.version + 1
         """, (
@@ -2430,6 +2655,7 @@ def collection_upload(conn=None, cur=None, contributor=None, api_key=None):
             psycopg2.extras.Json(ph),
             psycopg2.extras.Json(history),
             psycopg2.extras.Json(safe_accounts),
+            psycopg2.extras.Json(purchases),
         ))
         conn.commit()
         return jsonify(
@@ -2438,6 +2664,7 @@ def collection_upload(conn=None, cur=None, contributor=None, api_key=None):
             playHistory=len(ph),
             history=len(history),
             accounts=len(safe_accounts),
+            purchases=len(purchases),
         )
     except Exception as e:
         conn.rollback()
@@ -2450,14 +2677,14 @@ def collection_get(conn=None, cur=None, contributor=None, api_key=None):
     """Retrieve stored collection for the authenticated user."""
     try:
         cur.execute("""
-            SELECT lib, play_history, scan_history, accounts_meta, uploaded_at, version
+            SELECT lib, play_history, scan_history, accounts_meta, purchases, uploaded_at, version
             FROM user_collections
             WHERE contributor_id = %s
         """, (contributor["id"],))
         row = cur.fetchone()
         if not row:
             return jsonify(
-                library=[], playHistory=[], history=[], accounts=[],
+                library=[], playHistory=[], history=[], accounts=[], purchases=[],
                 username=contributor["username"],
                 settings=contributor.get("settings") or {},
                 uploaded=False)
@@ -2466,6 +2693,7 @@ def collection_get(conn=None, cur=None, contributor=None, api_key=None):
             playHistory=row["play_history"] or [],
             history=row["scan_history"] or [],
             accounts=row["accounts_meta"] or [],
+            purchases=row["purchases"] or [],
             username=contributor["username"],
             settings=contributor.get("settings") or {},
             uploadedAt=row["uploaded_at"].isoformat() if row["uploaded_at"] else None,
@@ -2576,11 +2804,47 @@ def import_shared(key, filepath):
 # ---------------------------------------------------------------------------
 
 def _cleanup_oauth_states():
-    """Remove expired OAuth state tokens."""
-    now = time.time()
-    expired = [s for s, v in _oauth_states.items() if now - v["created_at"] > OAUTH_STATE_TTL]
-    for s in expired:
-        del _oauth_states[s]
+    """Remove expired OAuth state tokens from DB."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM oauth_states WHERE created_at < NOW() - INTERVAL '%s seconds'",
+                    (OAUTH_STATE_TTL,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
+
+
+def _save_oauth_state(state, data):
+    """Save OAuth state to DB."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO oauth_states (state, data) VALUES (%s, %s)",
+                    (state, psycopg2.extras.Json(data)))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
+
+
+def _pop_oauth_state(state):
+    """Retrieve and delete OAuth state from DB. Returns data dict or None."""
+    conn = get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("DELETE FROM oauth_states WHERE state = %s RETURNING data", (state,))
+        row = cur.fetchone()
+        conn.commit()
+        return row["data"] if row else None
+    except Exception:
+        conn.rollback()
+        return None
+    finally:
+        conn.close()
 
 
 def _ensure_xbl3_token(cur, conn, contributor_id):
@@ -2742,7 +3006,7 @@ def xbox_auth_start():
         finally:
             conn.close()
 
-    _oauth_states[state] = state_data
+    _save_oauth_state(state, state_data)
 
     url = xba.build_authorize_url(XBOX_CLIENT_ID, XBOX_REDIRECT_URI, state)
     return redirect(url)
@@ -2762,9 +3026,9 @@ def xbox_auth_callback():
     if not code or not state:
         return redirect("/?xbox_auth=error&message=Missing+code+or+state")
 
-    # Validate state (CSRF)
+    # Validate state (CSRF) — stored in DB for multi-worker support
     _cleanup_oauth_states()
-    state_data = _oauth_states.pop(state, None)
+    state_data = _pop_oauth_state(state)
     if not state_data:
         return redirect("/?xbox_auth=error&message=Invalid+or+expired+state")
 
@@ -3646,6 +3910,425 @@ def profile_put(conn=None, cur=None, contributor=None, api_key=None):
 
 
 # ---------------------------------------------------------------------------
+# CDN Version Monitor
+# ---------------------------------------------------------------------------
+
+_cdn_mon_active = False
+_cdn_mon_status = {"state": "idle", "checked": 0, "total": 0, "new": 0, "purged": 0, "errors": 0}
+_cdn_mon_log = []
+_CDN_MON_LOG_MAX = 500
+_cdn_mon_current = ""
+
+
+def _cdn_mon_log_msg(msg):
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    entry = f"[{ts}] {msg}"
+    _cdn_mon_log.append(entry)
+    if len(_cdn_mon_log) > _CDN_MON_LOG_MAX:
+        del _cdn_mon_log[:len(_cdn_mon_log) - _CDN_MON_LOG_MAX]
+
+
+def _cdn_mon_get_update_token(cur, conn, contributor_id):
+    """Get XBL3.0 token for http://update.xboxlive.com RP."""
+    cur.execute(
+        "SELECT refresh_token_enc FROM xbox_auth WHERE contributor_id = %s",
+        (contributor_id,))
+    row = cur.fetchone()
+    if not row:
+        raise ValueError("No Xbox account linked — link Xbox on your profile first")
+    if not _fernet:
+        raise ValueError("XBOX_ENCRYPTION_KEY not configured on server")
+    refresh_token = _fernet.decrypt(bytes(row["refresh_token_enc"])).decode()
+    msa = xba.refresh_msa_token(XBOX_CLIENT_ID, XBOX_CLIENT_SECRET, refresh_token)
+    new_refresh_enc = _fernet.encrypt(msa["refresh_token"].encode())
+    cur.execute("UPDATE xbox_auth SET refresh_token_enc = %s WHERE contributor_id = %s",
+                (new_refresh_enc, contributor_id))
+    conn.commit()
+    user_token = xba.get_xbox_user_token(msa["access_token"])
+    xsts_token, uhs, _, _ = xba.get_xsts_token(
+        user_token, relying_party="http://update.xboxlive.com")
+    return xba.build_xbl3_token(xsts_token, uhs)
+
+
+def _cdn_mon_api_get(url, xbl3_token, timeout=15):
+    """GET packagespc.xboxlive.com. Returns parsed JSON."""
+    import urllib.request as _ur
+    req = _ur.Request(url)
+    req.add_header("Authorization", xbl3_token)
+    req.add_header("User-Agent", "Microsoft-Delivery-Optimization/10.0")
+    req.add_header("Accept", "application/json")
+    with _ur.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _cdn_mon_head_check(url, timeout=10):
+    """HEAD-check a CDN URL. Returns True=live, False=purged, None=error."""
+    import urllib.request as _ur
+    import urllib.error as _ue
+    try:
+        req = _ur.Request(url, method="HEAD")
+        req.add_header("User-Agent", "Microsoft-Delivery-Optimization/10.0")
+        _ur.urlopen(req, timeout=timeout)
+        return True
+    except _ue.HTTPError as e:
+        if e.code in (404, 403):
+            return False
+        return None
+    except Exception:
+        return None
+
+
+def _cdn_mon_parse_version_id(vid):
+    """Parse '1.0.0.8.guid-here' → (version='1.0.0.8', build_id='guid-here')."""
+    if not vid:
+        return "", ""
+    dots = [i for i, c in enumerate(vid) if c == "."]
+    if len(dots) >= 4:
+        return vid[:dots[3]], vid[dots[3] + 1:]
+    return vid, ""
+
+
+def _cdn_mon_resolve_title(cur, store_id):
+    """Resolve display title from marketplace_products."""
+    if not store_id:
+        return ""
+    try:
+        cur.execute("SELECT title FROM marketplace_products WHERE product_id = %s",
+                    (store_id,))
+        row = cur.fetchone()
+        return row["title"] if row and row.get("title") else ""
+    except Exception:
+        return ""
+
+
+def _cdn_mon_upsert_snapshot(cur, conn, scan_id, content_id, store_id,
+                             version, build_id, version_id, cdn_url,
+                             file_size, filename, title):
+    """Insert or update a version snapshot. Returns True if new."""
+    cur.execute("""
+        SELECT id, cdn_url, file_size FROM cdn_version_snapshots
+        WHERE content_id = %s AND version_id = %s
+    """, (content_id, version_id))
+    existing = cur.fetchone()
+    if existing:
+        updates = ["last_checked_at = NOW()"]
+        params = []
+        if cdn_url and not existing.get("cdn_url"):
+            updates.append("cdn_url = %s")
+            params.append(cdn_url)
+        if file_size and not existing.get("file_size"):
+            updates.append("file_size = %s")
+            params.append(file_size)
+        params.append(existing["id"])
+        cur.execute(f"UPDATE cdn_version_snapshots SET {', '.join(updates)} WHERE id = %s",
+                    params)
+        conn.commit()
+        return False
+    cur.execute("""
+        INSERT INTO cdn_version_snapshots
+            (content_id, store_id, version, build_id, version_id,
+             cdn_url, file_size, filename, status, scan_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (content_id, store_id, version, build_id, version_id,
+          cdn_url, file_size, filename,
+          'live' if cdn_url else 'unknown', scan_id))
+    cur.execute("""
+        INSERT INTO cdn_version_changes
+            (scan_id, change_type, content_id, store_id, title, version, build_id, new_value)
+        VALUES (%s, 'new_version', %s, %s, %s, %s, %s, %s)
+    """, (scan_id, content_id, store_id, title, version, build_id, cdn_url or version_id))
+    conn.commit()
+    return True
+
+
+def _bg_cdn_version_scan(xbl3_token, scan_type="full"):
+    """Background thread: scan content IDs for version changes + purge detection."""
+    global _cdn_mon_active, _cdn_mon_current
+    conn = get_db()
+    scan_id = None
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            INSERT INTO cdn_version_scans (scan_type, status)
+            VALUES (%s, 'running') RETURNING id
+        """, (scan_type,))
+        scan_id = cur.fetchone()["id"]
+        conn.commit()
+
+        cur.execute("""
+            SELECT DISTINCT ON (content_id) content_id, store_id
+            FROM cdn_entries
+            WHERE NOT deleted AND content_id IS NOT NULL AND content_id != ''
+            ORDER BY content_id
+        """)
+        content_ids = [(r["content_id"], r["store_id"] or "") for r in cur.fetchall()]
+
+        _cdn_mon_status.update(state="scanning", total=len(content_ids),
+                               checked=0, new=0, purged=0, errors=0)
+        cur.execute("UPDATE cdn_version_scans SET content_ids_total = %s WHERE id = %s",
+                    (len(content_ids), scan_id))
+        conn.commit()
+        _cdn_mon_log_msg(f"Scan started ({scan_type}): {len(content_ids)} content IDs")
+
+        errors_list = []
+        versions_found = 0
+        new_versions = 0
+
+        # Phase 1: API calls
+        if scan_type != "purge_check" and xbl3_token:
+            xsp_pat = re.compile(r"update-(\d+\.\d+\.\d+\.\d+)\.([0-9a-fA-F-]{36})\.xsp")
+            for content_id, store_id in content_ids:
+                if not _cdn_mon_active:
+                    _cdn_mon_log_msg("Scan aborted")
+                    break
+                _cdn_mon_current = content_id
+                try:
+                    title = _cdn_mon_resolve_title(cur, store_id)
+                    url = f"https://packagespc.xboxlive.com/GetBasePackage/{content_id}"
+                    data = _cdn_mon_api_get(url, xbl3_token)
+                    if not data.get("PackageFound"):
+                        _cdn_mon_status["checked"] += 1
+                        continue
+
+                    latest_vid = data.get("VersionId", "")
+                    files = data.get("PackageFiles", [])
+                    version, build_id = _cdn_mon_parse_version_id(latest_vid)
+
+                    base_pkg = None
+                    for f in files:
+                        if not f.get("FileName", "").endswith(".xsp"):
+                            base_pkg = f
+                            break
+                    if base_pkg:
+                        cdn_roots = base_pkg.get("CdnRootPaths", [])
+                        rel_url = base_pkg.get("RelativeUrl", "")
+                        cdn_url = (cdn_roots[0] + rel_url) if cdn_roots and rel_url else ""
+                        is_new = _cdn_mon_upsert_snapshot(
+                            cur, conn, scan_id, content_id, store_id,
+                            version, build_id, latest_vid, cdn_url,
+                            base_pkg.get("FileSize", 0),
+                            base_pkg.get("FileName", ""), title)
+                        versions_found += 1
+                        if is_new:
+                            new_versions += 1
+                            _cdn_mon_status["new"] += 1
+                            _cdn_mon_log_msg(f"NEW: {title or store_id or content_id[:8]} v{version}")
+
+                    for f in files:
+                        m = xsp_pat.match(f.get("FileName", ""))
+                        if m:
+                            ver, bid = m.group(1), m.group(2)
+                            vid = f"{ver}.{bid}"
+                            is_new = _cdn_mon_upsert_snapshot(
+                                cur, conn, scan_id, content_id, store_id,
+                                ver, bid, vid, "", 0, "", title)
+                            versions_found += 1
+                            if is_new:
+                                new_versions += 1
+                                _cdn_mon_status["new"] += 1
+
+                    _cdn_mon_status["checked"] += 1
+                except Exception as e:
+                    err_str = str(e)[:100]
+                    if "401" in err_str or "Unauthorized" in err_str:
+                        _cdn_mon_log_msg(f"AUTH EXPIRED at {_cdn_mon_status['checked']}/{len(content_ids)} — stopping API phase")
+                        errors_list.append("Token expired")
+                        _cdn_mon_status["errors"] += 1
+                        break
+                    errors_list.append(f"{content_id[:8]}: {err_str}")
+                    _cdn_mon_status["errors"] += 1
+                    _cdn_mon_status["checked"] += 1
+                time.sleep(1)
+
+        # Phase 2: HEAD-check purge detection
+        purged_count = 0
+        if scan_type != "api_only" and _cdn_mon_active:
+            _cdn_mon_log_msg("Starting purge detection...")
+            _cdn_mon_status["state"] = "purge_check"
+            cur.execute("""
+                SELECT id, content_id, store_id, version, cdn_url
+                FROM cdn_version_snapshots
+                WHERE status = 'live' AND cdn_url != ''
+            """)
+            live_urls = cur.fetchall()
+            _cdn_mon_log_msg(f"HEAD-checking {len(live_urls)} live CDN URLs...")
+            for i, row in enumerate(live_urls):
+                if not _cdn_mon_active:
+                    break
+                _cdn_mon_current = f"{row['content_id'][:8]} v{row['version']}"
+                result = _cdn_mon_head_check(row["cdn_url"])
+                if result is False:
+                    cur.execute("""
+                        UPDATE cdn_version_snapshots
+                        SET status = 'purged', purged_at = NOW(), last_checked_at = NOW()
+                        WHERE id = %s
+                    """, (row["id"],))
+                    cur.execute("""
+                        INSERT INTO cdn_version_changes
+                            (scan_id, change_type, content_id, store_id, version, old_value, new_value)
+                        VALUES (%s, 'purged', %s, %s, %s, 'live', 'purged')
+                    """, (scan_id, row["content_id"], row["store_id"] or "", row["version"]))
+                    conn.commit()
+                    purged_count += 1
+                    _cdn_mon_status["purged"] += 1
+                    title = _cdn_mon_resolve_title(cur, row.get("store_id", ""))
+                    _cdn_mon_log_msg(f"PURGED: {title or row['content_id'][:8]} v{row['version']}")
+                elif result is True:
+                    cur.execute("UPDATE cdn_version_snapshots SET last_checked_at = NOW() WHERE id = %s",
+                                (row["id"],))
+                    if (i + 1) % 50 == 0:
+                        conn.commit()
+                if (i + 1) % 200 == 0:
+                    _cdn_mon_log_msg(f"  HEAD-checked {i + 1}/{len(live_urls)}...")
+                time.sleep(0.2)
+            conn.commit()
+
+        status = "completed" if _cdn_mon_active else "aborted"
+        cur.execute("""
+            UPDATE cdn_version_scans SET
+                completed_at = NOW(), status = %s,
+                content_ids_checked = %s, versions_found = %s,
+                new_versions = %s, purged_detected = %s,
+                errors = %s,
+                duration_seconds = EXTRACT(EPOCH FROM (NOW() - started_at))
+            WHERE id = %s
+        """, (status, _cdn_mon_status["checked"], versions_found,
+              new_versions, purged_count,
+              psycopg2.extras.Json(errors_list[:50]), scan_id))
+        conn.commit()
+        _cdn_mon_status["state"] = status
+        _cdn_mon_current = ""
+        _cdn_mon_log_msg(f"Scan {status}: {_cdn_mon_status['checked']} checked, "
+                         f"{new_versions} new versions, {purged_count} purged, "
+                         f"{_cdn_mon_status['errors']} errors")
+    except Exception as e:
+        _cdn_mon_status["state"] = f"error: {e}"
+        _cdn_mon_current = ""
+        _cdn_mon_log_msg(f"Scan FAILED: {e}")
+        if scan_id:
+            try:
+                cur.execute("""
+                    UPDATE cdn_version_scans SET
+                        completed_at = NOW(), status = 'error',
+                        errors = %s,
+                        duration_seconds = EXTRACT(EPOCH FROM (NOW() - started_at))
+                    WHERE id = %s
+                """, (psycopg2.extras.Json([str(e)[:200]]), scan_id))
+                conn.commit()
+            except Exception:
+                pass
+    finally:
+        _cdn_mon_active = False
+        conn.close()
+
+
+@app.route("/api/v1/admin/cdn-monitor/scan", methods=["POST"])
+@require_auth
+def admin_cdn_monitor_scan(conn=None, cur=None, contributor=None, api_key=None):
+    """Trigger CDN version scan. Freshdex admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+    global _cdn_mon_active
+    if _cdn_mon_active:
+        return jsonify(error="Scan already running", status=_cdn_mon_status), 409
+    data = request.get_json(silent=True) or {}
+    scan_type = data.get("type", "full")
+    xbl3 = None
+    if scan_type != "purge_check":
+        try:
+            xbl3 = _cdn_mon_get_update_token(cur, conn, contributor["id"])
+            _cdn_mon_log_msg(f"Update token acquired ({len(xbl3)} chars)")
+        except Exception as e:
+            return jsonify(error=f"Auth failed: {e}"), 401
+    _cdn_mon_active = True
+    _cdn_mon_log.clear()
+    threading.Thread(target=_bg_cdn_version_scan, args=(xbl3, scan_type), daemon=True).start()
+    return jsonify(ok=True, message=f"CDN version scan triggered ({scan_type})")
+
+
+@app.route("/api/v1/admin/cdn-monitor/scans", methods=["GET"])
+@require_auth
+def admin_cdn_monitor_scans(conn=None, cur=None, contributor=None, api_key=None):
+    """Recent CDN version scans. Freshdex admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+    cur.execute("""
+        SELECT s.*,
+               (SELECT COUNT(*) FROM cdn_version_changes c WHERE c.scan_id = s.id AND c.change_type = 'new_version') AS new_count,
+               (SELECT COUNT(*) FROM cdn_version_changes c WHERE c.scan_id = s.id AND c.change_type = 'purged') AS purge_count
+        FROM cdn_version_scans s
+        ORDER BY s.started_at DESC LIMIT 50
+    """)
+    scans = [dict(r) for r in cur.fetchall()]
+    for sc in scans:
+        for k in ("started_at", "completed_at"):
+            if sc.get(k):
+                sc[k] = sc[k].isoformat()
+    return jsonify(scans=scans)
+
+
+@app.route("/api/v1/admin/cdn-monitor/status", methods=["GET"])
+@require_auth
+def admin_cdn_monitor_status(conn=None, cur=None, contributor=None, api_key=None):
+    """Live CDN monitor status. Freshdex admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+    try:
+        cur.execute("SELECT COUNT(*) as cnt FROM cdn_version_snapshots")
+        total_v = cur.fetchone()["cnt"]
+        cur.execute("SELECT COUNT(*) as cnt FROM cdn_version_snapshots WHERE status = 'live'")
+        live_v = cur.fetchone()["cnt"]
+        cur.execute("SELECT COUNT(*) as cnt FROM cdn_version_snapshots WHERE status = 'purged'")
+        purged_v = cur.fetchone()["cnt"]
+        cur.execute("SELECT COUNT(DISTINCT content_id) as cnt FROM cdn_version_snapshots")
+        tracked = cur.fetchone()["cnt"]
+    except Exception:
+        total_v = live_v = purged_v = tracked = 0
+    return jsonify(
+        active=_cdn_mon_active,
+        scanStatus=_cdn_mon_status,
+        currentContentId=_cdn_mon_current,
+        log=_cdn_mon_log[-200:],
+        dbStats={"totalVersions": total_v, "liveVersions": live_v,
+                 "purgedVersions": purged_v, "trackedContentIds": tracked})
+
+
+@app.route("/api/v1/admin/cdn-monitor/purged", methods=["GET"])
+@require_auth
+def admin_cdn_monitor_purged(conn=None, cur=None, contributor=None, api_key=None):
+    """All purged versions. Freshdex admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+    cur.execute("""
+        SELECT s.content_id, s.store_id, s.version, s.build_id,
+               s.cdn_url, s.file_size, s.filename,
+               s.first_seen_at, s.purged_at
+        FROM cdn_version_snapshots s
+        WHERE s.status = 'purged'
+        ORDER BY s.purged_at DESC NULLS LAST
+        LIMIT 500
+    """)
+    rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        for k in ("first_seen_at", "purged_at"):
+            if r.get(k):
+                r[k] = r[k].isoformat()
+    return jsonify(purged=rows)
+
+
+@app.route("/api/v1/admin/cdn-monitor/stop", methods=["POST"])
+@require_auth
+def admin_cdn_monitor_stop(conn=None, cur=None, contributor=None, api_key=None):
+    """Stop CDN version scan. Freshdex admin only."""
+    global _cdn_mon_active
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin only"), 403
+    _cdn_mon_active = False
+    _cdn_mon_log_msg("Scan stop requested by admin")
+    return jsonify(status="ok", message="Stop signal sent")
+
+
+# ---------------------------------------------------------------------------
 # CORS (allow xct.freshdex.app frontend)
 # ---------------------------------------------------------------------------
 
@@ -3681,6 +4364,11 @@ def add_cors_headers(response):
 @app.route("/api/v1/store/products", methods=["OPTIONS"])
 @app.route("/api/v1/store/product/<product_id>", methods=["OPTIONS"])
 @app.route("/api/v1/store/editions/<xbox_title_id>", methods=["OPTIONS"])
+@app.route("/api/v1/admin/cdn-monitor/scan", methods=["OPTIONS"])
+@app.route("/api/v1/admin/cdn-monitor/scans", methods=["OPTIONS"])
+@app.route("/api/v1/admin/cdn-monitor/status", methods=["OPTIONS"])
+@app.route("/api/v1/admin/cdn-monitor/purged", methods=["OPTIONS"])
+@app.route("/api/v1/admin/cdn-monitor/stop", methods=["OPTIONS"])
 def cors_preflight():
     return Response(status=204)
 

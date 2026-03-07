@@ -3836,6 +3836,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '.dlc-count{font-size:9px;margin-left:4px;background:#1a2e1a;color:#4caf50;padding:1px 5px;border-radius:8px;vertical-align:middle}\n'
         '.gp-list .lv-head{grid-template-columns:50px 1fr 160px 120px 90px 80px}\n'
         '.gp-list .lv-row{grid-template-columns:50px 1fr 160px 120px 90px 80px}\n'
+        '#purch-list .lv-head,#purch-list .lv-row{grid-template-columns:42px minmax(180px,1fr) 100px 120px 80px 90px 50px 50px 90px 80px 70px}\n'
+        '#purch-list .lv-head{position:sticky;top:47px;z-index:20}\n'
         '#mkt-list .lv-head,#mkt-list .lv-row,#mkt-list .mkt-alt{grid-template-columns:50px 280px 160px 90px 90px repeat(10,80px) 80px}\n'
         '#mkt-list .lv-row{min-height:46px}\n'
         '#mkt-list .lv-head{position:relative;top:auto;z-index:2}\n'
@@ -3898,19 +3900,51 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '.cb-divider button{background:none;border:none;color:#c62828;cursor:pointer;font-size:12px;padding:0 2px}\n'
         '.cb-divider button:hover{color:#e53935}\n'
         '@keyframes spin{to{transform:rotate(360deg)}}\n'
+        # -- Summary tab styles --
+        '#summary{background:#0a0a0a;padding:0}\n'
+        '.sum-banner{width:100%;max-height:260px;object-fit:cover;display:block;border-radius:0 0 12px 12px}\n'
+        '.sum-body{padding:20px 24px 32px}\n'
+        '.sum-gt-bar{display:flex;align-items:center;gap:12px;margin-bottom:20px}\n'
+        '.sum-gt-bar select{padding:6px 12px;background:#1a1a1a;color:#e0e0e0;border:1px solid #333;border-radius:6px;font-size:13px}\n'
+        '.sum-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}\n'
+        '.sum-card{background:linear-gradient(135deg,#111 0%,#1a1a1a 100%);border:1px solid #222;border-radius:10px;padding:20px;position:relative;overflow:hidden}\n'
+        '.sum-card::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#107c10,#0d5c0d)}\n'
+        '.sum-card h3{margin:0 0 14px;font-size:13px;text-transform:uppercase;letter-spacing:1.5px;color:#888}\n'
+        '.sum-big{font-size:32px;font-weight:700;color:#107c10;line-height:1.1;margin-bottom:4px}\n'
+        '.sum-big.blue{color:#42a5f5}\n'
+        '.sum-sub{font-size:12px;color:#666;margin-top:2px}\n'
+        '.sum-row{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid #1a1a1a}\n'
+        '.sum-row:last-child{border-bottom:none}\n'
+        '.sum-lbl{color:#999;font-size:12px}\n'
+        '.sum-val{color:#e0e0e0;font-size:13px;font-weight:600}\n'
+        '.sum-val.green{color:#107c10}\n'
+        '.sum-val.blue{color:#42a5f5}\n'
+        '.sum-tbl{width:100%;border-collapse:collapse;font-size:12px;margin-top:10px}\n'
+        '.sum-tbl th{text-align:left;padding:6px 8px;color:#666;font-weight:500;border-bottom:1px solid #222;text-transform:uppercase;font-size:10px;letter-spacing:0.5px}\n'
+        '.sum-tbl td{padding:6px 8px;color:#ccc;border-bottom:1px solid #1a1a1a}\n'
+        '.sum-tbl td.num{text-align:right;font-variant-numeric:tabular-nums}\n'
+        '.sum-tbl th.num{text-align:right}\n'
+        '.sum-tbl tr:hover td{background:#151515}\n'
+        '.sum-bar-track{height:6px;background:#1a1a1a;border-radius:3px;overflow:hidden;margin-top:6px}\n'
+        '.sum-bar-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,#107c10,#1db954)}\n'
+        '.sum-wide{grid-column:1 / -1}\n'
+        '.sum-half{grid-column:span 1}\n'
+        '@media(min-width:900px){.sum-grid{grid-template-columns:repeat(4,1fr)}.sum-wide{grid-column:span 2}}\n'
         '</style>\n'
         '</head>\n'
         '<body>\n'
 
         # -- Loading overlay --
         '<div id="loading-overlay" style="position:fixed;inset:0;background:#111;display:flex;'
-        'align-items:center;justify-content:center;z-index:9999">'
-        '<div id="loading-status" style="color:#888;font-size:14px">Loading...</div></div>\n'
+        'align-items:center;justify-content:center;z-index:9999;flex-direction:column;gap:16px">'
+        '<div style="width:32px;height:32px;border:3px solid #333;border-top-color:#107c10;border-radius:50%;animation:spin .8s linear infinite"></div>'
+        '<div id="loading-status" style="color:#888;font-size:15px;letter-spacing:0.5px">Loading xct.live</div></div>\n'
 
         # -- Tabs (counts populated by JS) --
         '<div class="tabs">\n'
         '<img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCAAcADMDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD5BgUE8g1s2ES5DFwGDAbByceo7Vn2UKvOq7wCR1X2z/Ouh8PRpFrcEbLFKN2SJSVA+uOh/OlKokcc5pHo/gTwRFeQ28+sS3UQuc/Z7a1t2muJgDglUHRQeCzFVB4znIHR+OPAvhXSbWO4kv73S03YZb9EDv7oEZ93px09a2bTW9E0vXrC90xLi7uLjyIbSzvXzbWUjbU8ybbgOqgZUY6E5wWqHxv4v8Fza/eXMWn+KL3Uorsw3GqS3dvE06K3zeTG0Z2htpCgcAHJz38eGKrVpLldl93yS3+b36Hnqq6j92R494z8NQ2NhHqdle/ard5WhZXQxyRsoB5Q84OetcVqEcaxHHXABA7V758ctR8C6Xpk+n6To+rXuq3Nvbq+oX16rxoBGpKbUVdzJwuTwSvTpXz1dTOxYAnBPSvTw0pyheTv5nZQ5uX3nfzKn4UUh4JB/nRXSdRJA4BJOc+oNbPheSeXVoIIZvLmkcKj4DEH29Olc6tSKSDwe9RKPMmhThdNHuI0yS11OZ9K1aS4lmtwslna3CTTyyA4DKfugYAYrncOQOxq1ra+LbzTEGq3ElpZKgQ3eoQm1htgMhtqHDzS8kAAHGT68eExTyxsCkjKR3Bqa6v7y4A8+5llwMDexPFef9SqJp8y9ba/1/TucCwck1qvWx0/jXWrfUr0rBLPNbpkJJM2ZH9WbHGSecDgZx2rmZnAJK4yegHaq6MwcNnkVbjRHjLsoJOTXYkqSUUdKiqSSKZUk5Oc0U5sk5yaKvmNbn//2Q==" '
         'alt="XCT" style="height:24px;margin:0 4px 0 6px;vertical-align:middle">\n'
+        '<div class="tab" id="tab-summary" onclick="switchTab(\'summary\',this)">Summary</div>\n'
         '<div class="tab" id="tab-mkt" onclick="switchTab(\'marketplace\',this)" style="display:none">Store <span class="cnt" id="tab-mkt-cnt"></span></div>\n'
         '<div class="tab active" onclick="switchTab(\'library\',this)">Collection <span class="cnt" id="tab-lib-cnt"></span></div>\n'
         '<div class="tab" id="tab-purch" onclick="switchTab(\'purchases\',this)" style="display:none">Purchases <span class="cnt" id="tab-purch-cnt"></span></div>\n'
@@ -3970,12 +4004,26 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
     )
 
     html += (
+        # -- Summary section --
+        '<div class="section" id="summary">\n'
+        '<img class="sum-banner" src="xctbanner.jpg" onerror="this.style.display=\'none\'" alt="">\n'
+        '<div class="sum-body">\n'
+        '<div class="sum-gt-bar">\n'
+        '<select id="sum-gt" onchange="renderSummary()" style="min-width:160px"><option value="">All Gamertags</option></select>\n'
+        '<span id="sum-gt-label" style="color:#666;font-size:12px"></span>\n'
+        '</div>\n'
+        '<div class="sum-grid" id="sum-grid"></div>\n'
+        '</div>\n'
+        '</div>\n'
+    )
+
+    html += (
         # -- Game Pass section --
         '<div class="section" id="gamepass">\n'
         '<h2>Game Pass Catalog</h2>\n'
         '<p class="sub" id="gp-sub"></p>\n'
         '<div class="filters">\n'
-        '<input type="text" id="gp-search" placeholder="Search Game Pass..." oninput="filterGP()">\n'
+        '<input type="text" id="gp-search" placeholder="Search Game Pass..." oninput="gpPage=0;filterGP()">\n'
         '<div class="pill active" onclick="setGPFilter(\'all\',this)">All</div>\n'
         '<div class="pill" onclick="setGPFilter(\'notOwned\',this)">Not Owned</div>\n'
         '<div class="pill" onclick="setGPFilter(\'owned\',this)">Owned</div>\n'
@@ -3987,6 +4035,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="cbar" id="gp-cbar"></div>\n'
         '<div class="grid" id="gp-grid" style="display:none"></div>\n'
         '<div class="list-view gp-list" id="gp-list"></div>\n'
+        '<div class="pagination" id="gp-pager" style="display:flex;justify-content:center;align-items:center;gap:8px;padding:16px 0;flex-wrap:wrap"></div>\n'
         '</div>\n'
 
         # -- Library section (active by default) --
@@ -3994,7 +4043,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<p class="sub" id="lib-sub"></p>\n'
         '<div class="cbar" id="lib-cbar"></div>\n'
         '<div class="search-row" style="display:flex;gap:8px;align-items:center">'
-        '<input type="text" id="lib-search" placeholder="Search collection..." oninput="filterLib()" style="flex:1">'
+        '<input type="text" id="lib-search" placeholder="Search collection..." oninput="libPage=0;filterLib()" style="flex:1">'
         '<button class="xct-iobtn" onclick="xctExport()" title="Export your collection as a shareable JSON file">Export</button>'
         '<button class="xct-iobtn" onclick="document.getElementById(\'imp-file\').click()" title="Import a collection from a JSON file">Import</button>'
         '<input type="file" id="imp-file" accept=".json" style="display:none" onchange="xctImport(this)">'
@@ -4003,25 +4052,25 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="pill" onclick="clearAllFilters()" title="Reset all checkbox filters to default">Clear Filters</div>\n'
         '<div class="cb-drop" id="lib-gamertag" style="display:none"><div class="cb-btn" onclick="toggleCB(this)">Gamertag &#9662;</div><div class="cb-panel"></div></div>\n'
         '<div class="cb-drop" id="lib-status"><div class="cb-btn" onclick="toggleCB(this)">Status &#9662;</div><div class="cb-panel">'
-        '<label><input type="checkbox" value="Active" checked onchange="filterLib()"> Active</label>'
-        '<label><input type="checkbox" value="Expired" onchange="filterLib()"> Expired</label>'
-        '<label><input type="checkbox" value="Revoked" onchange="filterLib()"> Revoked</label>'
+        '<label><input type="checkbox" value="Active" checked onchange="libPage=0;filterLib()"> Active</label>'
+        '<label><input type="checkbox" value="Expired" onchange="libPage=0;filterLib()"> Expired</label>'
+        '<label><input type="checkbox" value="Revoked" onchange="libPage=0;filterLib()"> Revoked</label>'
         '<div class="cb-clear" onclick="cbToggleAll(this)">Clear All</div>'
         '</div></div>\n'
         '<div class="cb-drop" id="lib-type"><div class="cb-btn" onclick="toggleCB(this)">Type &#9662;</div><div class="cb-panel">'
-        '<label><input type="checkbox" value="Game" checked onchange="filterLib()"> Game</label>'
-        '<label><input type="checkbox" value="Durable" checked onchange="filterLib()"> DLC</label>'
-        '<label><input type="checkbox" value="Application" onchange="filterLib()"> App</label>'
-        '<label><input type="checkbox" value="Consumable" onchange="filterLib()"> Consumable</label>'
-        '<label><input type="checkbox" value="Pass" onchange="filterLib()"> Pass</label>'
-        '<label><input type="checkbox" value="_preorder" checked onchange="filterLib()"> Pre-orders</label>'
-        '<label><input type="checkbox" value="_trials" onchange="filterLib()"> Trials/Demos</label>'
-        '<label><input type="checkbox" value="_indie" onchange="filterLib()"> Indie</label>'
-        '<label><input type="checkbox" value="_invalid" onchange="filterLib()"> Invalid</label>'
+        '<label><input type="checkbox" value="Game" checked onchange="libPage=0;filterLib()"> Game</label>'
+        '<label><input type="checkbox" value="Durable" checked onchange="libPage=0;filterLib()"> DLC</label>'
+        '<label><input type="checkbox" value="Application" onchange="libPage=0;filterLib()"> App</label>'
+        '<label><input type="checkbox" value="Consumable" onchange="libPage=0;filterLib()"> Consumable</label>'
+        '<label><input type="checkbox" value="Pass" onchange="libPage=0;filterLib()"> Pass</label>'
+        '<label><input type="checkbox" value="_preorder" checked onchange="libPage=0;filterLib()"> Pre-orders</label>'
+        '<label><input type="checkbox" value="_trials" onchange="libPage=0;filterLib()"> Trials/Demos</label>'
+        '<label><input type="checkbox" value="_indie" onchange="libPage=0;filterLib()"> Indie</label>'
+        '<label><input type="checkbox" value="_invalid" onchange="libPage=0;filterLib()"> Invalid</label>'
         '<div class="cb-clear" onclick="cbToggleAll(this)">Clear All</div>'
         '</div></div>\n'
         '<div class="filter-group"><div class="filter-label">Ownership</div>'
-        '<select id="lib-gp" onchange="filterLib()">'
+        '<select id="lib-gp" onchange="libPage=0;filterLib()">'
         '<option value="owned">Owned</option>'
         '<option value="gamepass">Game Pass</option>'
         '<option value="all">All</option>'
@@ -4035,31 +4084,31 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="cb-drop" id="lib-sku"><div class="cb-btn" onclick="toggleCB(this)">SKU &#9662;</div><div class="cb-panel"></div></div>\n'
         '<div class="cb-drop" id="lib-delist"><div class="cb-btn" onclick="toggleCB(this)">Listing Status &#9662;</div>'
         '<div class="cb-panel">'
-        '<label><input type="checkbox" value="Listed" checked onchange="filterLib()"> Listed</label>'
-        '<label><input type="checkbox" value="Delisted" checked onchange="filterLib()"> Delisted</label>'
-        '<label><input type="checkbox" value="Hard Delisted" checked onchange="filterLib()"> Hard Delisted</label>'
+        '<label><input type="checkbox" value="Listed" checked onchange="libPage=0;filterLib()"> Listed</label>'
+        '<label><input type="checkbox" value="Delisted" checked onchange="libPage=0;filterLib()"> Delisted</label>'
+        '<label><input type="checkbox" value="Hard Delisted" checked onchange="libPage=0;filterLib()"> Hard Delisted</label>'
         '</div></div>\n'
         '<div class="filter-group"><div class="filter-label">DLC</div>'
-        '<select id="lib-dlc" onchange="filterLib()">'
+        '<select id="lib-dlc" onchange="libPage=0;filterLib()">'
         '<option value="all">All</option>'
         '<option value="has">Has DLC</option>'
         '<option value="no">No DLC</option>'
         '</select></div>\n'
         '<div class="filter-group"><div class="filter-label">CDN</div>'
-        '<select id="lib-cdn" onchange="filterLib()">'
+        '<select id="lib-cdn" onchange="libPage=0;filterLib()">'
         '<option value="all">All</option>'
         '<option value="has">Has CDN Links</option>'
         '<option value="no">No CDN Links</option>'
         '<option value="multi">Multiple Versions</option>'
         '</select></div>\n'
         '<div class="filter-group"><div class="filter-label">Trial</div>'
-        '<select id="lib-trial" onchange="filterLib()">'
+        '<select id="lib-trial" onchange="libPage=0;filterLib()">'
         '<option value="all">All</option>'
         '<option value="has">Has Trial</option>'
         '<option value="no">No Trial</option>'
         '</select></div>\n'
         '<div class="filter-group"><div class="filter-label">Achievements</div>'
-        '<select id="lib-ach" onchange="filterLib()">'
+        '<select id="lib-ach" onchange="libPage=0;filterLib()">'
         '<option value="all">All</option>'
         '<option value="has">Has Achievements</option>'
         '<option value="no">No Achievements</option>'
@@ -4067,7 +4116,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<option value="notearned">No Achievements Earned</option>'
         '</select></div>\n'
         '<div class="filter-group"><div class="filter-label">Sort</div>'
-        '<select id="lib-sort" onchange="libSortCol=null;filterLib()"><option value="name">Name</option>'
+        '<select id="lib-sort" onchange="libSortCol=null;libPage=0;filterLib()"><option value="name">Name</option>'
         '<option value="priceDesc">Price (High-Low)</option>'
         '<option value="priceAsc">Price (Low-High)</option>'
         '<option value="pubAsc">Publisher A-Z</option>'
@@ -4088,17 +4137,18 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '</div>\n'
         '<div class="lib-grid" id="lib-grid" style="display:none"></div>\n'
         '<div class="list-view" id="lib-list"></div>\n'
+        '<div class="pagination" id="lib-pager" style="display:flex;justify-content:center;align-items:center;gap:8px;padding:16px 0;flex-wrap:wrap"></div>\n'
         '</div>\n'
 
         # -- Play History section --
         '<div class="section" id="playhistory">\n'
         '<h2>Play History</h2>\n'
         '<p class="sub" id="ph-sub">Games from TitleHub not in your Collections (disc, trials, rentals, etc.)</p>\n'
-        '<div class="search-row"><input type="text" id="ph-search" placeholder="Search play history..." oninput="filterPH()"></div>\n'
+        '<div class="search-row"><input type="text" id="ph-search" placeholder="Search play history..." oninput="phPage=0;filterPH()"></div>\n'
         '<div class="filters">\n'
         '<div class="cb-drop" id="ph-gamertag" style="display:none"><div class="cb-btn" onclick="toggleCB(this)">Gamertag &#9662;</div><div class="cb-panel"></div></div>\n'
         '<div class="filter-group"><div class="filter-label">Sort</div>'
-        '<select id="ph-sort" onchange="filterPH()"><option value="playDesc" selected>Last Played (Recent)</option>'
+        '<select id="ph-sort" onchange="phPage=0;filterPH()"><option value="playDesc" selected>Last Played (Recent)</option>'
         '<option value="playAsc">Last Played (Oldest)</option>'
         '<option value="name">Name</option></select></div>\n'
         '<div class="view-toggle"><button class="view-btn" onclick="setView(\'ph\',\'grid\',this)" title="Grid">&#9638;</button>'
@@ -4107,6 +4157,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="cbar" id="ph-cbar"></div>\n'
         '<div class="lib-grid" id="ph-grid" style="display:none"></div>\n'
         '<div class="list-view" id="ph-list"></div>\n'
+        '<div class="pagination" id="ph-pager" style="display:flex;justify-content:center;align-items:center;gap:8px;padding:16px 0;flex-wrap:wrap"></div>\n'
         '</div>\n'
 
         # -- Marketplace section --
@@ -4198,7 +4249,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="mkt-content">\n'
         '<div id="mkt-loading" style="display:none;text-align:center;padding:60px 0;color:#888;font-size:14px">'
         '<div class="spinner" style="margin:0 auto 12px;width:28px;height:28px;border:3px solid #333;border-top-color:#107c10;border-radius:50%;animation:spin .8s linear infinite"></div>'
-        '<div id="mkt-loading-text">Loading marketplace...</div></div>\n'
+        '<div id="mkt-loading-text">Loading xct.live</div></div>\n'
         '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
         '<div class="cbar" id="mkt-cbar" style="margin:0;font-size:12px"></div>'
         '<div style="margin-left:auto" class="view-toggle"><button class="view-btn" onclick="setView(\'mkt\',\'grid\',this)" title="Grid">&#9638;</button>'
@@ -4216,6 +4267,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<h2>Scan Log</h2>\n'
         '<p class="sub" id="hist-sub"></p>\n'
         '<div id="hist-cards"></div>\n'
+        '<div class="pagination" id="hist-pager" style="display:flex;justify-content:center;align-items:center;gap:8px;padding:16px 0;flex-wrap:wrap"></div>\n'
         '</div>\n'
 
         # -- Gamertags section --
@@ -4321,6 +4373,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<p class="sub" id="gfwl-sub"></p>\n'
         '<div class="search-row"><input type="text" id="gfwl-search" placeholder="Search GFWL games..." oninput="filterGFWL()"></div>\n'
         '<div id="gfwl-list"></div>\n'
+        '<div class="pagination" id="gfwl-pager" style="display:flex;justify-content:center;align-items:center;gap:8px;padding:16px 0;flex-wrap:wrap"></div>\n'
         '</div>\n'
 
         # -- CDN Sync section (entry browser + leaderboard) --
@@ -4333,6 +4386,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<button class="sub-tab" id="cdnsync-tab-log" onclick="_cdnSyncTab(\'log\')">Sync Log</button>\n'
         '</div>\n'
         '<div id="cdnsync-entries">\n'
+        '<div id="cdnsync-status" style="text-align:center;padding:20px 0"></div>\n'
         '<div id="cdnsync-summary"></div>\n'
         '<div class="search-row"><input type="text" id="cdnsync-search" placeholder="Search by game name, store ID, build version..." oninput="filterCDNSync()"></div>\n'
         '<div style="display:flex;gap:10px;margin:6px 0 10px 0;flex-wrap:wrap;align-items:center">\n'
@@ -4350,6 +4404,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#aaa"><input type="checkbox" id="cdnsync-ver" checked onchange="filterCDNSync()"> Show all versions</label>\n'
         '</div>\n'
         '<div id="cdnsync-list"></div>\n'
+        '<div class="pagination" id="cdn-pager" style="display:flex;justify-content:center;align-items:center;gap:8px;padding:16px 0;flex-wrap:wrap"></div>\n'
         '</div>\n'
         '<div id="cdnsync-lb" style="display:none">\n'
         '<div id="cdnlb-list"></div>\n'
@@ -4449,7 +4504,23 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
     html += (
         '<script>\n'
         "let gpF='all',mktPage=0;\n"
-        "const MKT_PAGE_SIZE=50;\n"
+        "const MKT_PAGE_SIZE=100;\n"
+        "var libPage=0,gpPage=0,phPage=0,histPage=0,gfwlPage=0;\n"
+        "const PAGE_SIZE=100;\n"
+        "function _renderPager(cid,cur,total,goFn){\n"
+        "const el=document.getElementById(cid);if(!el)return;\n"
+        "if(total<=1){el.innerHTML='';return}\n"
+        "let h='<button style=\"padding:6px 12px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;cursor:pointer'+(cur===0?';opacity:.4;cursor:default':'')+'\" '+(cur===0?'disabled':'')+' onclick=\"'+goFn+'('+(cur-1)+')\">&laquo; Prev</button>';\n"
+        "const maxBtns=9,half=Math.floor(maxBtns/2);\n"
+        "let lo=Math.max(0,cur-half),hi=Math.min(total-1,lo+maxBtns-1);\n"
+        "lo=Math.max(0,hi-maxBtns+1);\n"
+        "if(lo>0)h+='<button style=\"padding:6px 10px;background:#222;color:#aaa;border:1px solid #444;border-radius:4px;cursor:pointer\" onclick=\"'+goFn+'(0)\">1</button><span style=\"color:#666\">...</span>';\n"
+        "for(let p=lo;p<=hi;p++){"
+        "const active=p===cur?'background:#107c10;color:#fff;font-weight:bold':'background:#222;color:#ccc';"
+        "h+='<button style=\"padding:6px 10px;'+active+';border:1px solid #555;border-radius:4px;cursor:pointer\" onclick=\"'+goFn+'('+p+')\">'+(p+1)+'</button>'}\n"
+        "if(hi<total-1)h+='<span style=\"color:#666\">...</span><button style=\"padding:6px 10px;background:#222;color:#aaa;border:1px solid #444;border-radius:4px;cursor:pointer\" onclick=\"'+goFn+'('+(total-1)+')\">'+(total)+'</button>';\n"
+        "h+='<button style=\"padding:6px 12px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;cursor:pointer'+(cur>=total-1?';opacity:.4;cursor:default':'')+'\" '+(cur>=total-1?'disabled':'')+' onclick=\"'+goFn+'('+(cur+1)+')\">&raquo; Next</button>';\n"
+        "el.innerHTML=h}\n"
         "let views={gp:'list',lib:'list',ph:'list',mkt:'list'};\n"
         "const LS_KEY='" + ls_key + "';\n"
         "let libSortCol=null,libSortDir='asc';\n"
@@ -4512,9 +4583,234 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "h+='</tbody></table>';return h}\n"
         '\n'
 
+        # -- renderSummary --
+        "var _sumInited=false;\n"
+        "function renderSummary(){\n"
+        "const el=document.getElementById('sum-grid');if(!el)return;\n"
+        # Populate GT dropdown once
+        "if(!_sumInited){\n"
+        "  _sumInited=true;\n"
+        "  const sel=document.getElementById('sum-gt');\n"
+        "  const gts=new Set();\n"
+        "  LIB.forEach(x=>{if(x.gamertag)gts.add(x.gamertag)});\n"
+        "  if(typeof PURCHASES!=='undefined')PURCHASES.forEach(x=>{if(x.gamertag)gts.add(x.gamertag)});\n"
+        "  [...gts].sort().forEach(g=>{const o=document.createElement('option');o.value=g;o.textContent=g;sel.appendChild(o)});\n"
+        "  if(gts.size<2)document.querySelector('.sum-gt-bar').style.display='none';\n"
+        "}\n"
+        "const gtF=document.getElementById('sum-gt').value;\n"
+        "document.getElementById('sum-gt-label').textContent=gtF?gtF:'All Gamertags';\n"
+        # Filter data by gamertag
+        "const libAll=gtF?LIB.filter(x=>x.gamertag===gtF):LIB;\n"
+        # Dedup by productId
+        "const _seen={};const lib=libAll.filter(x=>{if(_seen[x.productId])return false;_seen[x.productId]=1;return true});\n"
+        "const owned=lib.filter(x=>x.owned);\n"
+        "const games=owned.filter(x=>x.productKind==='Game');\n"
+        "const dlc=owned.filter(x=>x.productKind==='Durable');\n"
+        "const totalVal=owned.reduce((s,x)=>s+(x.priceUSD||0),0);\n"
+        "const gameVal=games.reduce((s,x)=>s+(x.priceUSD||0),0);\n"
+        "const dlcVal=dlc.reduce((s,x)=>s+(x.priceUSD||0),0);\n"
+        # Platform breakdown
+        "const platCnt={};owned.forEach(x=>(x.platforms||[]).forEach(p=>{platCnt[p]=(platCnt[p]||0)+1}));\n"
+        "const platOrd=Object.entries(platCnt).sort((a,b)=>b[1]-a[1]);\n"
+        "const platMax=platOrd.length?platOrd[0][1]:1;\n"
+        # Category breakdown (top 8)
+        "const catCnt={};games.forEach(x=>{const c=x.category||'Other';catCnt[c]=(catCnt[c]||0)+1});\n"
+        "const catOrd=Object.entries(catCnt).sort((a,b)=>b[1]-a[1]).slice(0,8);\n"
+        "const catMax=catOrd.length?catOrd[0][1]:1;\n"
+        # Status breakdown
+        "const activeC=owned.filter(x=>x.status==='Active').length;\n"
+        "const expiredC=owned.filter(x=>x.status==='Expired').length;\n"
+        "const revokedC=owned.filter(x=>x.status==='Revoked').length;\n"
+        # Achievements
+        "const achGames=owned.filter(x=>x.hasAchievements);\n"
+        "const achPlayed=achGames.filter(x=>x.achievementsCurrent>0);\n"
+        "const totalGS=achGames.reduce((s,x)=>s+(x.gamerscoreCurrent||0),0);\n"
+        "const maxGS=achGames.reduce((s,x)=>s+(x.gamescoreTotal||0),0);\n"
+        "const achPct=maxGS>0?Math.round(totalGS/maxGS*100):0;\n"
+        # Delisted / flagged
+        "const flagged=typeof DEFAULT_FLAGS!=='undefined'?DEFAULT_FLAGS:{};\n"
+        "const delistedC=owned.filter(x=>{const f=flagged[x.productId];return f==='delisted'||f==='hardDelisted'}).length;\n"
+        "const hardDelistedC=owned.filter(x=>flagged[x.productId]==='hardDelisted').length;\n"
+        # Game Pass overlap
+        "const gpPids=new Set(GP.map(x=>x.productId));\n"
+        "const ownedOnGP=owned.filter(x=>gpPids.has(x.productId)).length;\n"
+        # Purchases
+        "const hasPurch=typeof PURCHASES!=='undefined'&&PURCHASES.length>0;\n"
+        "let purchItems=hasPurch?(gtF?PURCHASES.filter(x=>x.gamertag===gtF):PURCHASES):[];\n"
+        "const purchPaid=purchItems.filter(x=>(x.amountPaid||0)>0);\n"
+        "const purchCurrTotals={};\n"
+        "purchPaid.forEach(x=>{const c=x.currency||'???';purchCurrTotals[c]=(purchCurrTotals[c]||0)+(x.amountPaid||0)});\n"
+        "const purchGifts=purchItems.filter(x=>x.isGift).length;\n"
+        # CDN data
+        "const hasCDN=typeof CDN_DB!=='undefined'&&CDN_DB&&Object.keys(CDN_DB).length>0;\n"
+        "let cdnGames=0,cdnDLC=0,cdnVersions=0,cdnTotalSize=0;\n"
+        "if(hasCDN){Object.keys(CDN_DB).forEach(sid=>{\n"
+        "  if(sid.startsWith('_'))return;\n"
+        "  const r=CDN_DB[sid];\n"
+        "  const isOwned=_seen[sid];\n"
+        "  cdnGames++;\n"
+        "  cdnVersions+=(r.versions?r.versions.length:1);\n"
+        "  cdnTotalSize+=(r.sizeBytes||0);\n"
+        "})}\n"
+        # Play History
+        "const phAll=gtF?PH.filter(x=>x.gamertag===gtF):PH;\n"
+        # History
+        "const histAll=gtF?HISTORY.filter(x=>x.gamertag===gtF):HISTORY;\n"
+        "const lastScan=histAll.length?histAll[0]:null;\n"
+        # Store
+        "const storeTotal=MKT.length;\n"
+        # Top publishers (from owned games)
+        "const pubCnt={};games.forEach(x=>{const p=x.publisher||'Unknown';pubCnt[p]=(pubCnt[p]||0)+1});\n"
+        "const pubOrd=Object.entries(pubCnt).sort((a,b)=>b[1]-a[1]).slice(0,5);\n"
+        # Year distribution
+        "const yrCnt={};owned.forEach(x=>{const y=(x.acquiredDate||'').slice(0,4);if(/^\\d{4}$/.test(y))yrCnt[y]=(yrCnt[y]||0)+1});\n"
+        "const yrOrd=Object.entries(yrCnt).sort((a,b)=>b[0]-a[0]).slice(0,6);\n"
+        "const yrMax=yrOrd.reduce((m,e)=>Math.max(m,e[1]),1);\n"
+
+        # Build the grid HTML
+        "let h='';\n"
+
+        # Card 1: Collection Value (hero card)
+        "h+='<div class=\"sum-card sum-wide\">';\n"
+        "h+='<h3>Collection Value</h3>';\n"
+        "h+='<div class=\"sum-big\">'+_p(totalVal)+'</div>';\n"
+        "h+='<div class=\"sum-sub\">'+owned.length.toLocaleString()+' items across '+(Object.keys(platCnt).length)+' platforms</div>';\n"
+        "h+='<div style=\"display:flex;gap:24px;margin-top:14px;flex-wrap:wrap\">';\n"
+        "h+='<div><div style=\"color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px\">Games</div><div style=\"font-size:22px;font-weight:700;color:#e0e0e0\">'+games.length.toLocaleString()+'</div><div style=\"color:#42a5f5;font-size:13px;font-weight:600\">'+_p(gameVal)+'</div></div>';\n"
+        "h+='<div><div style=\"color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px\">DLC</div><div style=\"font-size:22px;font-weight:700;color:#e0e0e0\">'+dlc.length.toLocaleString()+'</div><div style=\"color:#42a5f5;font-size:13px;font-weight:600\">'+_p(dlcVal)+'</div></div>';\n"
+        "h+='<div><div style=\"color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px\">Active</div><div style=\"font-size:22px;font-weight:700;color:#4caf50\">'+activeC.toLocaleString()+'</div></div>';\n"
+        "if(expiredC)h+='<div><div style=\"color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px\">Expired</div><div style=\"font-size:22px;font-weight:700;color:#ff9800\">'+expiredC.toLocaleString()+'</div></div>';\n"
+        "if(revokedC)h+='<div><div style=\"color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px\">Revoked</div><div style=\"font-size:22px;font-weight:700;color:#f44336\">'+revokedC.toLocaleString()+'</div></div>';\n"
+        "if(delistedC)h+='<div><div style=\"color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px\">Delisted</div><div style=\"font-size:22px;font-weight:700;color:#ff9800\">'+delistedC.toLocaleString()+'</div></div>';\n"
+        "h+='</div></div>';\n"
+
+        # Card 2: Achievements
+        "h+='<div class=\"sum-card\">';\n"
+        "h+='<h3>Achievements</h3>';\n"
+        "h+='<div class=\"sum-big\">'+totalGS.toLocaleString()+'<span style=\"font-size:16px;color:#888\"> G</span></div>';\n"
+        "h+='<div class=\"sum-sub\">of '+maxGS.toLocaleString()+' G possible ('+achPct+'%)</div>';\n"
+        "h+='<div class=\"sum-bar-track\" style=\"margin-top:10px\"><div class=\"sum-bar-fill\" style=\"width:'+achPct+'%\"></div></div>';\n"
+        "h+='<div style=\"margin-top:12px\">';\n"
+        "h+='<div class=\"sum-row\"><span class=\"sum-lbl\">Games with achievements</span><span class=\"sum-val\">'+achGames.length.toLocaleString()+'</span></div>';\n"
+        "h+='<div class=\"sum-row\"><span class=\"sum-lbl\">Played</span><span class=\"sum-val\">'+achPlayed.length.toLocaleString()+'</span></div>';\n"
+        "h+='<div class=\"sum-row\"><span class=\"sum-lbl\">Unplayed</span><span class=\"sum-val\">'+(achGames.length-achPlayed.length).toLocaleString()+'</span></div>';\n"
+        "h+='</div></div>';\n"
+
+        # Card 3: Game Pass
+        "h+='<div class=\"sum-card\">';\n"
+        "h+='<h3>Game Pass</h3>';\n"
+        "h+='<div class=\"sum-big\" style=\"color:#107c10\">'+GP.length.toLocaleString()+'</div>';\n"
+        "h+='<div class=\"sum-sub\">titles in catalog</div>';\n"
+        "h+='<div style=\"margin-top:12px\">';\n"
+        "h+='<div class=\"sum-row\"><span class=\"sum-lbl\">You own from GP</span><span class=\"sum-val green\">'+ownedOnGP.toLocaleString()+'</span></div>';\n"
+        "h+='<div class=\"sum-row\"><span class=\"sum-lbl\">GP-exclusive (not owned)</span><span class=\"sum-val\">'+(GP.length-ownedOnGP).toLocaleString()+'</span></div>';\n"
+        "h+='</div></div>';\n"
+
+        # Card 4: Purchases
+        "if(hasPurch){\n"
+        "h+='<div class=\"sum-card sum-wide\">';\n"
+        "h+='<h3>Purchase History</h3>';\n"
+        "const topCurr=Object.entries(purchCurrTotals).sort((a,b)=>b[1]-a[1]);\n"
+        "if(topCurr.length){\n"
+        "  const mainC=topCurr[0];\n"
+        "  const sym={'USD':'$','GBP':'\\u00a3','EUR':'\\u20ac','AUD':'A$','NZD':'NZ$','JPY':'\\u00a5','BRL':'R$','CAD':'CA$','KRW':'\\u20a9','TRY':'\\u20ba','HKD':'HK$'};\n"
+        "  const d=mainC[0]==='JPY'||mainC[0]==='KRW'?0:2;\n"
+        "  h+='<div class=\"sum-big blue\">'+(sym[mainC[0]]||mainC[0]+' ')+mainC[1].toLocaleString('en',{minimumFractionDigits:d,maximumFractionDigits:d})+'</div>';\n"
+        "  h+='<div class=\"sum-sub\">total spend ('+mainC[0]+')</div>';\n"
+        "}\n"
+        "h+='<div style=\"display:flex;gap:24px;margin-top:14px;flex-wrap:wrap\">';\n"
+        "h+='<div><div style=\"color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px\">Total Items</div><div style=\"font-size:22px;font-weight:700;color:#e0e0e0\">'+purchItems.length.toLocaleString()+'</div></div>';\n"
+        "h+='<div><div style=\"color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px\">Paid</div><div style=\"font-size:22px;font-weight:700;color:#e0e0e0\">'+purchPaid.length.toLocaleString()+'</div></div>';\n"
+        "h+='<div><div style=\"color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px\">Free</div><div style=\"font-size:22px;font-weight:700;color:#e0e0e0\">'+(purchItems.length-purchPaid.length).toLocaleString()+'</div></div>';\n"
+        "if(purchGifts)h+='<div><div style=\"color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px\">Gifts</div><div style=\"font-size:22px;font-weight:700;color:#e0e0e0\">'+purchGifts.toLocaleString()+'</div></div>';\n"
+        "h+='</div>';\n"
+        # Show all currencies if multiple
+        "if(topCurr.length>1){\n"
+        "h+='<div style=\"margin-top:10px;font-size:12px;color:#888\">';\n"
+        "topCurr.forEach((e,i)=>{\n"
+        "  const sym={'USD':'$','GBP':'\\u00a3','EUR':'\\u20ac','AUD':'A$','NZD':'NZ$','JPY':'\\u00a5','BRL':'R$','CAD':'CA$','KRW':'\\u20a9','TRY':'\\u20ba','HKD':'HK$'};\n"
+        "  const d=e[0]==='JPY'||e[0]==='KRW'?0:2;\n"
+        "  h+=(i?'<span style=\"color:#333\"> | </span>':'')+e[0]+' <span style=\"color:#42a5f5\">'+(sym[e[0]]||'')+e[1].toLocaleString('en',{minimumFractionDigits:d,maximumFractionDigits:d})+'</span>';\n"
+        "});\n"
+        "h+='</div>'}\n"
+        "h+='</div>'}\n"
+
+        # Card 5: Platform Breakdown
+        "h+='<div class=\"sum-card\">';\n"
+        "h+='<h3>Platforms</h3>';\n"
+        "platOrd.forEach(([p,c])=>{\n"
+        "  const pct=Math.round(c/platMax*100);\n"
+        "  h+='<div style=\"margin-bottom:8px\">';\n"
+        "  h+='<div style=\"display:flex;justify-content:space-between;font-size:12px\"><span style=\"color:#ccc\">'+p+'</span><span style=\"color:#107c10;font-weight:600\">'+c.toLocaleString()+'</span></div>';\n"
+        "  h+='<div class=\"sum-bar-track\"><div class=\"sum-bar-fill\" style=\"width:'+pct+'%\"></div></div>';\n"
+        "  h+='</div>';\n"
+        "});\n"
+        "h+='</div>';\n"
+
+        # Card 6: Top Categories
+        "h+='<div class=\"sum-card\">';\n"
+        "h+='<h3>Top Categories</h3>';\n"
+        "catOrd.forEach(([c,n])=>{\n"
+        "  const pct=Math.round(n/catMax*100);\n"
+        "  h+='<div style=\"margin-bottom:8px\">';\n"
+        "  h+='<div style=\"display:flex;justify-content:space-between;font-size:12px\"><span style=\"color:#ccc\">'+c+'</span><span style=\"color:#107c10;font-weight:600\">'+n.toLocaleString()+'</span></div>';\n"
+        "  h+='<div class=\"sum-bar-track\"><div class=\"sum-bar-fill\" style=\"width:'+pct+'%\"></div></div>';\n"
+        "  h+='</div>';\n"
+        "});\n"
+        "h+='</div>';\n"
+
+        # Card 7: Top Publishers
+        "h+='<div class=\"sum-card\">';\n"
+        "h+='<h3>Top Publishers</h3>';\n"
+        "h+='<table class=\"sum-tbl\">';\n"
+        "h+='<tr><th>Publisher</th><th class=\"num\">Games</th></tr>';\n"
+        "pubOrd.forEach(([p,c])=>{\n"
+        "  h+='<tr><td>'+p+'</td><td class=\"num\">'+c.toLocaleString()+'</td></tr>';\n"
+        "});\n"
+        "h+='</table></div>';\n"
+
+        # Card 8: Acquired by Year
+        "if(yrOrd.length){\n"
+        "h+='<div class=\"sum-card\">';\n"
+        "h+='<h3>Acquired by Year</h3>';\n"
+        "yrOrd.forEach(([y,n])=>{\n"
+        "  const pct=Math.round(n/yrMax*100);\n"
+        "  h+='<div style=\"margin-bottom:8px\">';\n"
+        "  h+='<div style=\"display:flex;justify-content:space-between;font-size:12px\"><span style=\"color:#ccc\">'+y+'</span><span style=\"color:#107c10;font-weight:600\">'+n.toLocaleString()+'</span></div>';\n"
+        "  h+='<div class=\"sum-bar-track\"><div class=\"sum-bar-fill\" style=\"width:'+pct+'%\"></div></div>';\n"
+        "  h+='</div>';\n"
+        "});\n"
+        "h+='</div>'}\n"
+
+        # Card 9: CDN / XVC Database
+        "if(hasCDN){\n"
+        "h+='<div class=\"sum-card\">';\n"
+        "h+='<h3>XVC CDN Database</h3>';\n"
+        "h+='<div class=\"sum-big\" style=\"color:#81c784\">'+cdnGames.toLocaleString()+'</div>';\n"
+        "h+='<div class=\"sum-sub\">archived packages</div>';\n"
+        "h+='<div style=\"margin-top:12px\">';\n"
+        "h+='<div class=\"sum-row\"><span class=\"sum-lbl\">Total versions</span><span class=\"sum-val\">'+cdnVersions.toLocaleString()+'</span></div>';\n"
+        "h+='<div class=\"sum-row\"><span class=\"sum-lbl\">Total size</span><span class=\"sum-val\">'+(cdnTotalSize/1e12).toFixed(2)+' TB</span></div>';\n"
+        "h+='</div></div>'}\n"
+
+        # Card 10: Activity
+        "h+='<div class=\"sum-card\">';\n"
+        "h+='<h3>Activity</h3>';\n"
+        "h+='<div style=\"margin-top:4px\">';\n"
+        "if(phAll.length)h+='<div class=\"sum-row\"><span class=\"sum-lbl\">Play history titles</span><span class=\"sum-val\">'+phAll.length.toLocaleString()+'</span></div>';\n"
+        "if(histAll.length)h+='<div class=\"sum-row\"><span class=\"sum-lbl\">Scans recorded</span><span class=\"sum-val\">'+histAll.length.toLocaleString()+'</span></div>';\n"
+        "if(lastScan){h+='<div class=\"sum-row\"><span class=\"sum-lbl\">Last scan</span><span class=\"sum-val\">'+(lastScan.timestamp||'').replace('T',' ').slice(0,16)+'</span></div>';\n"
+        "const cl=lastScan.changelog||{};\n"
+        "if((cl.newItems||[]).length)h+='<div class=\"sum-row\"><span class=\"sum-lbl\">Last scan added</span><span class=\"sum-val green\">+'+(cl.newItems||[]).length+'</span></div>'}\n"
+        "if(storeTotal)h+='<div class=\"sum-row\"><span class=\"sum-lbl\">Store catalog</span><span class=\"sum-val\">'+storeTotal.toLocaleString()+' products</span></div>';\n"
+        "h+='</div></div>';\n"
+
+        "el.innerHTML=h;\n"
+        "}\n\n"
+
         # -- Column sort handler --
         "function sortByCol(col){if(libSortCol===col){libSortDir=libSortDir==='asc'?'desc':'asc'}else{libSortCol=col;libSortDir='asc'}"
-        "filterLib()}\n"
+        "libPage=0;filterLib()}\n"
         "function mktColArrow(c){return mktSortCol===c?(mktSortDir==='asc'?' \\u25B2':' \\u25BC'):''}\n"
         "function sortMktCol(col){if(mktSortCol===col){mktSortDir=mktSortDir==='asc'?'desc':'asc'}else{mktSortCol=col;mktSortDir='asc'}"
         "mktPage=0;filterMKT()}\n"
@@ -4528,7 +4824,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const boxes=panel.querySelectorAll('input[type=checkbox]');"
         "const anyChecked=[...boxes].some(c=>c.checked);"
         "boxes.forEach(c=>c.checked=!anyChecked);"
-        "clr.textContent=anyChecked?'Select All':'Clear All';filterLib()}\n"
+        "clr.textContent=anyChecked?'Select All':'Clear All';libPage=0;filterLib()}\n"
         "function clearAllFilters(){"
         "document.querySelectorAll('#library .cb-panel input[type=checkbox]').forEach(c=>c.checked=true);"
         "document.querySelectorAll('#library .cb-clear').forEach(c=>c.textContent='Clear All');"
@@ -4539,7 +4835,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('lib-ach').value='all';"
         "document.getElementById('lib-sort').value='name';libSortCol=null;"
         "document.getElementById('lib-search').value='';"
-        "filterLib()}\n"
+        "libPage=0;filterLib()}\n"
         "function clearMktFilters(){"
         "document.querySelectorAll('#marketplace .cb-panel input[type=checkbox]').forEach(c=>c.checked=true);"
         "document.querySelectorAll('#marketplace .cb-clear').forEach(c=>c.textContent='Clear All');"
@@ -4799,18 +5095,20 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '\n'
 
         # -- fill: global helper for checkbox dropdown panels --
+        "const _pageResetMap={filterLib:'libPage=0;',filterGP:'gpPage=0;',filterPH:'phPage=0;',filterMKT:'mktPage=0;',filterPurchases:'purchPage=0;',filterCDNSync:'_cdnPage=0;',filterGFWL:'gfwlPage=0;'};\n"
         "function fill(id,items,filterFn){const wrap=document.getElementById(id);if(!wrap)return;"
         "const panel=wrap.querySelector('.cb-panel');if(!panel)return;"
         "panel.innerHTML='';"
+        "const pr=_pageResetMap[filterFn]||'';"
         "items.forEach(([v,l])=>{const lbl=document.createElement('label');"
-        "lbl.innerHTML='<input type=\"checkbox\" value=\"'+v+'\" checked onchange=\"'+filterFn+'()\"> '+l;"
+        "lbl.innerHTML='<input type=\"checkbox\" value=\"'+v+'\" checked onchange=\"'+pr+filterFn+'()\"> '+l;"
         "panel.appendChild(lbl)});"
         "const n=items.length;const cols=n>24?3:n>12?2:1;"
         "if(cols>1){panel.classList.add('cb-cols');panel.style.columnCount=cols;panel.style.minWidth=(cols*180)+'px'}"
         "const clr=document.createElement('div');clr.className='cb-clear';"
         "clr.textContent='Clear All';clr.onclick=function(){const boxes=panel.querySelectorAll('input');"
         "const anyChecked=[...boxes].some(c=>c.checked);boxes.forEach(c=>c.checked=!anyChecked);"
-        "clr.textContent=anyChecked?'Select All':'Clear All';window[filterFn]();};"
+        "clr.textContent=anyChecked?'Select All':'Clear All';libPage=gpPage=phPage=mktPage=purchPage=gfwlPage=_cdnPage=0;window[filterFn]();};"
         "panel.querySelectorAll('input').forEach(c=>c.addEventListener('change',()=>{"
         "const anyOn=[...panel.querySelectorAll('input')].some(x=>x.checked);"
         "clr.textContent=anyOn?'Clear All':'Select All';}));"
@@ -4907,7 +5205,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "function _gtLabel(g,cnt,val){"
         "const vs=val>0?'$'+val.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}):'';"
         "const lbl=document.createElement('label');"
-        "lbl.innerHTML='<input type=\"checkbox\" value=\"'+g+'\" checked onchange=\"filterLib()\"> '+g+' ('+cnt+')'"
+        "lbl.innerHTML='<input type=\"checkbox\" value=\"'+g+'\" checked onchange=\"libPage=0;filterLib()\"> '+g+' ('+cnt+')'"
         "+(vs?' <span style=\"color:#42a5f5;font-size:10px\">'+vs+'</span>':'');"
         "return lbl}\n"
         "if(_allGtSet.size>1){\n"
@@ -4945,14 +5243,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "el.style.display='';const panel=el.querySelector('.cb-panel');"
         "panel.innerHTML='';"
         "phGtKeys.sort().forEach(g=>{const lbl=document.createElement('label');"
-        "lbl.innerHTML='<input type=\"checkbox\" value=\"'+g+'\" checked onchange=\"filterPH()\"> '+g+' ('+phGts[g]+')';"
+        "lbl.innerHTML='<input type=\"checkbox\" value=\"'+g+'\" checked onchange=\"phPage=0;filterPH()\"> '+g+' ('+phGts[g]+')';"
         "panel.appendChild(lbl)});"
         "const phCols=phGtKeys.length>24?3:phGtKeys.length>12?2:1;"
         "if(phCols>1){panel.classList.add('cb-cols');panel.style.columnCount=phCols;panel.style.minWidth=(phCols*180)+'px'}"
         "const clr=document.createElement('div');clr.className='cb-clear';clr.textContent='Clear All';"
         "clr.onclick=function(){const boxes=panel.querySelectorAll('input');"
         "const anyChecked=[...boxes].some(c=>c.checked);boxes.forEach(c=>c.checked=!anyChecked);"
-        "clr.textContent=anyChecked?'Select All':'Clear All';filterPH();};"
+        "clr.textContent=anyChecked?'Select All':'Clear All';phPage=0;filterPH();};"
         "panel.querySelectorAll('input').forEach(c=>c.addEventListener('change',()=>{"
         "const anyOn=[...panel.querySelectorAll('input')].some(x=>x.checked);"
         "clr.textContent=anyOn?'Clear All':'Select All';}));"
@@ -5001,6 +5299,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "'Last scan: '+agoStr+' ('+(data.totalProducts||0).toLocaleString()+' products)'}\n"
         # Deserialize URL filters, then trigger initial load
         "_mktDeserializeFilters();\n"
+        "_mktFiltersReady=true;\n"
         "filterMKT();\n"
         "}).catch(function(e){console.error('[store] filters error:',e)})\n"
         "}\n"
@@ -5089,7 +5388,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));"
         "document.getElementById(id).classList.add('active');el.classList.add('active');"
         "if(typeof _loadTabData==='function')_loadTabData(id);"
-        "var _slugMap={library:'library',marketplace:'store',gamepass:'gamepass',"
+        "var _slugMap={summary:'summary',library:'library',marketplace:'store',gamepass:'gamepass',"
         "playhistory:'playhistory',history:'scanlog',gamertags:'gamertags',"
         "gfwl:'gfwl',cdnsync:'xvcdb',imports:'imports',purchases:'purchases',achievements:'achievements',admin:'admin'};"
         "var slug=_slugMap[id]||id;"
@@ -5223,12 +5522,19 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "el.innerHTML=h;\n"
         "}\n"
 
-        "function setGPFilter(f,el){gpF=f;document.querySelectorAll('#gamepass .pill').forEach(p=>p.classList.remove('active'));"
+        "function setGPFilter(f,el){gpF=f;gpPage=0;document.querySelectorAll('#gamepass .pill').forEach(p=>p.classList.remove('active'));"
         "el.classList.add('active');filterGP()}\n"
 
 
         ""
         "function mktGoPage(p){mktPage=p;filterMKT();document.getElementById('marketplace').scrollIntoView({behavior:'smooth'})}\n"
+        "function libGoPage(p){libPage=p;filterLib();document.getElementById('library').scrollIntoView({behavior:'smooth'})}\n"
+        "function gpGoPage(p){gpPage=p;filterGP();document.getElementById('gamepass').scrollIntoView({behavior:'smooth'})}\n"
+        "function phGoPage(p){phPage=p;filterPH();document.getElementById('playhistory').scrollIntoView({behavior:'smooth'})}\n"
+        "function histGoPage(p){histPage=p;renderHistory();document.getElementById('history').scrollIntoView({behavior:'smooth'})}\n"
+        "function gfwlGoPage(p){gfwlPage=p;renderGFWL();document.getElementById('gfwl').scrollIntoView({behavior:'smooth'})}\n"
+        "function purchGoPage(p){purchPage=p;filterPurchases();document.getElementById('purchases').scrollIntoView({behavior:'smooth'})}\n"
+        "function cdnGoPage(p){_cdnPage=p;renderCDNSync();document.getElementById('cdnsync').scrollIntoView({behavior:'smooth'})}\n"
 
         "function setView(tab,mode,el){views[tab]=mode;el.parentElement.querySelectorAll('.view-btn').forEach(b=>b.classList.remove('active'));"
         "el.classList.add('active');"
@@ -5270,10 +5576,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const el=document.getElementById('gp-search');if(!el||!GP.length)return;\n"
         "const q=el.value.toLowerCase();\n"
         "const g=document.getElementById('gp-grid');const l=document.getElementById('gp-list');\n"
-        "g.innerHTML='';let c=0;"
-        "let gh='',lh='<div class=\"lv-head\"><div></div><div>Title</div><div>Publisher</div>"
-        "<div>Release</div><div style=\"text-align:right\">USD</div>"
-        "<div style=\"text-align:center\">Status</div></div>';\n"
+        "let filtered=[];\n"
         'GP.forEach((item,i)=>{\n'
         "const t=(item.title||'').toLowerCase(),p=(item.publisher||'').toLowerCase();\n"
         "if(q&&!t.includes(q)&&!p.includes(q)&&!(item.productId||'').toLowerCase().includes(q))return;\n"
@@ -5281,7 +5584,15 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(gpF==='owned'&&!item.owned)return;\n"
         "if(gpF==='recent'&&!(item.collections||[]).includes('Recently Added'))return;\n"
         "if(gpF==='popular'&&!(item.collections||[]).includes('Most Popular'))return;\n"
-        'c++;if(c>500)return;\n'
+        "filtered.push({item:item,idx:i})});\n"
+        "const totalPages=Math.ceil(filtered.length/PAGE_SIZE)||1;\n"
+        "if(gpPage>=totalPages)gpPage=totalPages-1;\n"
+        "if(gpPage<0)gpPage=0;\n"
+        "const pageItems=filtered.slice(gpPage*PAGE_SIZE,(gpPage+1)*PAGE_SIZE);\n"
+        "let gh='',lh='<div class=\"lv-head\"><div></div><div>Title</div><div>Publisher</div>"
+        "<div>Release</div><div style=\"text-align:right\">USD</div>"
+        "<div style=\"text-align:center\">Status</div></div>';\n"
+        'pageItems.forEach(({item,idx:i})=>{\n'
         "const owned=item.owned?'<span class=\"badge owned\">OWNED</span>':'<span class=\"badge new\">NOT OWNED</span>';\n"
         "const colls=(item.collections||[]).map(c=>'<span class=\"badge gp\">'+c+'</span>').join('');\n"
         "const img=item.heroImage||item.boxArt||'';\n"
@@ -5308,7 +5619,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="lv-status">${ownedBadge}</div></div>`;\n'
         '});\n'
         "g.innerHTML=gh;l.innerHTML=lh;\n"
-        "document.getElementById('gp-cbar').innerHTML=`<span>${c}</span> of ${GP.length} shown`;"
+        "document.getElementById('gp-cbar').innerHTML=`<span>${filtered.length}</span> of ${GP.length} shown`;"
+        "_renderPager('gp-pager',gpPage,totalPages,'gpGoPage');"
         "if(document.getElementById('gamepass').classList.contains('active'))_gpSerializeFilters()}\n"
         '\n'
 
@@ -5587,6 +5899,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "else if(achF==='notearned')filtered=filtered.filter(item=>item.hasAchievements&&item.achievementsCurrent===0);\n"
 
         "const shown=filtered.length;\n"
+        "const _libTotalPages=Math.ceil(shown/PAGE_SIZE)||1;\n"
+        "if(libPage>=_libTotalPages)libPage=_libTotalPages-1;\n"
+        "if(libPage<0)libPage=0;\n"
+        "const _libPageItems=filtered.slice(libPage*PAGE_SIZE,(libPage+1)*PAGE_SIZE);\n"
         "function colArrow(c){return libSortCol===c?(libSortDir==='asc'?' \\u25B2':' \\u25BC'):''}\n"
         "let gh='',lh='<div class=\"lv-head\"><div></div>"
         "<div data-sort onclick=\"sortByCol(\\'title\\')\">Title'+colArrow('title')+'</div>"
@@ -5651,9 +5967,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Build _filteredPids for fast lookup of which items are in filtered list
         "const _filteredPids=new Set(filtered.map(x=>x.productId));\n"
 
-        # Rendering loop with DLC nesting (list) and flat (grid)
+        # Rendering loop with DLC nesting (list) and flat (grid) — paginated
         "const _renderedDlc=new Set();\n"
-        'for(let i=0;i<shown;i++){const item=filtered[i];\n'
+        'for(let i=0;i<_libPageItems.length;i++){const item=_libPageItems[i];\n'
         'const flagged=manualFlags[item.productId];\n'
         "const sc=item.status==='Active'?'s-active':item.status==='Expired'?'s-expired':'s-revoked';\n"
         "const img=item.image?`<img src=\"${_imgResize(item.image,330,186)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'<div></div>';\n"
@@ -5700,6 +6016,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "}}\n"
         "g.innerHTML=gh;l.innerHTML=lh;\n"
         "document.getElementById('lib-cbar').innerHTML=_buildSummaryTable(_pf,filtered,_filtGTs);"
+        "_renderPager('lib-pager',libPage,_libTotalPages,'libGoPage');"
         "if(document.getElementById('library').classList.contains('active'))_libSerializeFilters()}\n"
         '\n'
 
@@ -5727,7 +6044,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "else if(so==='playDesc')filtered.sort((a,b)=>(b.lastTimePlayed||'').localeCompare(a.lastTimePlayed||''));\n"
         "else if(so==='playAsc')filtered.sort((a,b)=>{const ap=a.lastTimePlayed||'',bp=b.lastTimePlayed||'';"
         "if(!ap&&bp)return 1;if(ap&&!bp)return -1;return ap.localeCompare(bp)});\n"
-        "const shown=Math.min(filtered.length,views.ph==='list'?2000:500);\n"
+        "const _phTotal=Math.ceil(filtered.length/PAGE_SIZE)||1;\n"
+        "if(phPage>=_phTotal)phPage=_phTotal-1;\n"
+        "if(phPage<0)phPage=0;\n"
+        "const _phPageItems=filtered.slice(phPage*PAGE_SIZE,(phPage+1)*PAGE_SIZE);\n"
         "let gh='',lh='<div class=\"lv-head\">"
         "<div></div>"
         "<div>Title</div>"
@@ -5737,7 +6057,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "<div>Last Played</div>"
         "<div></div><div></div><div></div><div></div><div></div><div></div>"
         "</div>';\n"
-        'for(let i=0;i<shown;i++){const item=filtered[i];\n'
+        'for(let i=0;i<_phPageItems.length;i++){const item=_phPageItems[i];\n'
         "const img=item.image?`<img src=\"${_imgResize(item.image,80,80)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`:'<div></div>';\n"
         "const lpD=(item.lastTimePlayed||'').substring(0,10);\n"
         "const platStr=(item.platforms||[]).join(', ')||'';\n"
@@ -5753,8 +6073,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="lv-type">${lpD}</div>'
         '<div></div><div></div><div></div><div></div><div></div><div></div></div>`}\n'
         "g.innerHTML=gh;l.innerHTML=lh;\n"
-        "document.getElementById('ph-cbar').innerHTML=`<span>${filtered.length}</span>"
-        "${filtered.length>shown?' (showing '+shown+')':''} play history items`;"
+        "document.getElementById('ph-cbar').innerHTML=`<span>${filtered.length}</span> play history items`;"
+        "_renderPager('ph-pager',phPage,_phTotal,'phGoPage');"
         "if(document.getElementById('playhistory').classList.contains('active'))_phSerializeFilters()}\n"
         '\n'
 
@@ -5772,7 +6092,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(regions&&regions.length){"
         "if(regions.indexOf('US')>=0)loc='en-us';"
         "else loc=_MKT_LOCALE[regions[0]]||'en-us'}"
-        "return'https://www.xbox.com/'+loc+'/games/store/p/'+pid}\n"
+        "return'https://www.microsoft.com/'+loc+'/p/'+pid}\n"
         "function _bestReg(item){"
         "if(!item.regionalPrices||typeof RATES==='undefined')return null;"
         "let best=null;"
@@ -5797,7 +6117,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const col=isBest?'#4caf50':'#e91e63';"
         "const w=isBest?'font-weight:700':'';"
         "const loc=_RLOCALE[mkt]||'en-us';"
-        "const href=`https://www.xbox.com/${loc}/games/store/p/${item.productId}`;"
+        "const href=`https://www.microsoft.com/${loc}/p/${item.productId}`;"
         "return `<div class=\"lv-reg\"><a href=\"${href}\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:${col};${w};text-decoration:none\" title=\"${_RNAME[mkt]||mkt}\">$${usd.toFixed(2)}</a></div>`}\n"
         "function _regionTbl(item){"
         "if(!item.regionalPrices||typeof RATES==='undefined'||!Object.keys(RATES).length)return '';"
@@ -6103,19 +6423,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('mkt-cbar').textContent=(doGroup?displayItems.length:filtered.length)+' / '+MKT.length;\n"
 
         # Pagination controls
-        "let pgH='';\n"
-        "if(totalPages>1){\n"
-        "pgH+='<button style=\"padding:6px 12px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;cursor:pointer'+(mktPage===0?';opacity:.4;cursor:default':'')+`\" ${mktPage===0?'disabled':''} onclick=\"mktGoPage(${mktPage-1})\">&#9664; Prev</button>`;\n"
-        "const maxBtns=9,half=Math.floor(maxBtns/2);\n"
-        "let lo=Math.max(0,mktPage-half),hi=Math.min(totalPages-1,lo+maxBtns-1);\n"
-        "lo=Math.max(0,hi-maxBtns+1);\n"
-        "if(lo>0)pgH+='<button style=\"padding:6px 10px;background:#222;color:#aaa;border:1px solid #444;border-radius:4px;cursor:pointer\" onclick=\"mktGoPage(0)\">1</button><span style=\"color:#666\">...</span>';\n"
-        "for(let p=lo;p<=hi;p++){"
-        "const active=p===mktPage?'background:#107c10;color:#fff;font-weight:bold':'background:#222;color:#ccc';"
-        "pgH+=`<button style=\"padding:6px 10px;${active};border:1px solid #555;border-radius:4px;cursor:pointer\" onclick=\"mktGoPage(${p})\">${p+1}</button>`}\n"
-        "if(hi<totalPages-1)pgH+='<span style=\"color:#666\">...</span><button style=\"padding:6px 10px;background:#222;color:#aaa;border:1px solid #444;border-radius:4px;cursor:pointer\" onclick=\"mktGoPage('+(totalPages-1)+')\">'+totalPages+'</button>';\n"
-        "pgH+='<button style=\"padding:6px 12px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;cursor:pointer'+(mktPage>=totalPages-1?';opacity:.4;cursor:default':'')+`\" ${mktPage>=totalPages-1?'disabled':''} onclick=\"mktGoPage(${mktPage+1})\">Next &#9654;</button>`}\n"
-        "document.getElementById('mkt-pager').innerHTML=pgH;"
+        "_renderPager('mkt-pager',mktPage,totalPages,'mktGoPage');"
         "if(document.getElementById('marketplace').classList.contains('active'))_mktSerializeFilters()}\n"
 
         # -- Toggle alt editions --
@@ -6128,7 +6436,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "next=next.nextElementSibling}}\n"
 
         # -- API-backed filterMKT --
+        "var _mktFiltersReady=false;\n"
         "function _filterMKTApi(){\n"
+        "if(!_mktFiltersReady)return;\n"
         "if(_mktAbort){try{_mktAbort.abort()}catch(e){}}\n"
         "const ac=new AbortController();_mktAbort=ac;\n"
         # Show loading spinner
@@ -6237,19 +6547,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "g.innerHTML=gh;l.innerHTML=lh;\n"
         "document.getElementById('mkt-cbar').textContent=data.total+' products';\n"
         # Pagination
-        "let pgH='';\n"
-        "if(totalPages>1){\n"
-        "pgH+='<button style=\"padding:6px 12px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;cursor:pointer'+(mktPage===0?';opacity:.4;cursor:default':'')+`\" ${mktPage===0?'disabled':''} onclick=\"mktGoPage(${mktPage-1})\">&#9664; Prev</button>`;\n"
-        "const maxBtns=9,half=Math.floor(maxBtns/2);\n"
-        "let lo=Math.max(0,mktPage-half),hi=Math.min(totalPages-1,lo+maxBtns-1);\n"
-        "lo=Math.max(0,hi-maxBtns+1);\n"
-        "if(lo>0)pgH+='<button style=\"padding:6px 10px;background:#222;color:#aaa;border:1px solid #444;border-radius:4px;cursor:pointer\" onclick=\"mktGoPage(0)\">1</button><span style=\"color:#666\">...</span>';\n"
-        "for(var pi=lo;pi<=hi;pi++){"
-        "var active=pi===mktPage?'background:#107c10;color:#fff;font-weight:bold':'background:#222;color:#ccc';"
-        "pgH+='<button style=\"padding:6px 10px;'+active+';border:1px solid #555;border-radius:4px;cursor:pointer\" onclick=\"mktGoPage('+pi+')\">'+String(pi+1)+'</button>'}\n"
-        "if(hi<totalPages-1)pgH+='<span style=\"color:#666\">...</span><button style=\"padding:6px 10px;background:#222;color:#aaa;border:1px solid #444;border-radius:4px;cursor:pointer\" onclick=\"mktGoPage('+(totalPages-1)+')\">'+totalPages+'</button>';\n"
-        "pgH+='<button style=\"padding:6px 12px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;cursor:pointer'+(mktPage>=totalPages-1?';opacity:.4;cursor:default':'')+`\" ${mktPage>=totalPages-1?'disabled':''} onclick=\"mktGoPage(${mktPage+1})\">Next &#9654;</button>`}\n"
-        "document.getElementById('mkt-pager').innerHTML=pgH;\n"
+        "_renderPager('mkt-pager',mktPage,totalPages,'mktGoPage');\n"
         "if(document.getElementById('marketplace').classList.contains('active'))_mktSerializeFilters();\n"
         "})"  # end .then(data)
         ".catch(function(e){if(e.name==='AbortError')return;"
@@ -6403,8 +6701,12 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         'function renderHistory(){\n'
         "const el=document.getElementById('hist-cards');if(!el||!HISTORY.length)return;\n"
         "document.getElementById('hist-sub').textContent=HISTORY.length+' scans recorded';\n"
+        "const _histTotal=Math.ceil(HISTORY.length/PAGE_SIZE)||1;\n"
+        "if(histPage>=_histTotal)histPage=_histTotal-1;\n"
+        "if(histPage<0)histPage=0;\n"
+        "const _histPage=HISTORY.slice(histPage*PAGE_SIZE,(histPage+1)*PAGE_SIZE);\n"
         "let h='';\n"
-        'HISTORY.forEach((scan,i)=>{\n'
+        '_histPage.forEach((scan,i)=>{\n'
         "const ts=(scan.timestamp||'').replace('T',' ').replace(/-/g,':');\n"
         "const cl=scan.changelog||{};\n"
         "const nNew=(cl.newItems||[]).length;\n"
@@ -6440,7 +6742,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "<div class=\"hist-badges\">${badges||'<span style=\"color:#555;font-size:11px\">First scan</span>'}</div>\n"
         "<div class=\"hist-detail\">${detail||'<div style=\"color:#555;font-size:12px\">No changes in this scan.</div>'}</div>\n"
         "</div>`});\n"
-        "el.innerHTML=h}\n"
+        "el.innerHTML=h;\n"
+        "_renderPager('hist-pager',histPage,_histTotal,'histGoPage')}\n"
         "function toggleHistDetail(card){card.querySelector('.hist-detail').classList.toggle('open')}\n"
         '\n'
 
@@ -6528,7 +6831,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
 
         # -- GFWL tab logic --
         "let _gfwlQ='';\n"
-        "function filterGFWL(){_gfwlQ=document.getElementById('gfwl-search').value.toLowerCase().trim();renderGFWL();}\n"
+        "function filterGFWL(){_gfwlQ=document.getElementById('gfwl-search').value.toLowerCase().trim();gfwlPage=0;renderGFWL();}\n"
         "function renderGFWL(){\n"
         "  const el=document.getElementById('gfwl-list');\n"
         "  if(!el||typeof GFWL==='undefined'||!GFWL.length)return;\n"
@@ -6536,16 +6839,21 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "  const filtered=GFWL.filter(g=>!_gfwlQ||g.name.toLowerCase().includes(_gfwlQ)||g.tid.toLowerCase().includes(_gfwlQ));\n"
         "  document.getElementById('tab-gfwl-cnt').textContent=filtered.length;\n"
         "  document.getElementById('gfwl-sub').textContent=GFWL.length+' achievement games · '+filtered.length+' shown';\n"
+        "  const _gfwlTotal=Math.ceil(filtered.length/PAGE_SIZE)||1;\n"
+        "  if(gfwlPage>=_gfwlTotal)gfwlPage=_gfwlTotal-1;\n"
+        "  if(gfwlPage<0)gfwlPage=0;\n"
+        "  const _gfwlPageItems=filtered.slice(gfwlPage*PAGE_SIZE,(gfwlPage+1)*PAGE_SIZE);\n"
         "  function fmtSz(b){if(!b)return '-';if(b>=1e9)return(b/1e9).toFixed(1)+' GB';if(b>=1e6)return(b/1e6).toFixed(0)+' MB';return(b/1024).toFixed(0)+' KB';}\n"
         "  function offerLabel(s){if(s==='e0000001')return '<span class=\"gfwl-base\">Base</span>';if(s.startsWith('e000'))return '<span class=\"gfwl-dlc\">DLC</span>';return '<span class=\"gfwl-dlc\">Pack</span>';}\n"
         "  let h='<table class=\"gtbl gfwl-table\" style=\"width:100%\"><thead><tr><th>Game</th><th>Title ID</th><th class=\"num\">Pkgs</th><th class=\"num\">Size</th><th>Manifest Links</th></tr></thead><tbody>';\n"
-        "  filtered.forEach(g=>{\n"
+        "  _gfwlPageItems.forEach(g=>{\n"
         "    const hasPkgs=g.packages&&g.packages.length>0;\n"
         "    const pkgHtml=hasPkgs?g.packages.slice(0,8).map(p=>`<a class=\"gfwl-mlink\" href=\"${p.manifest_url.replace('download.xbox.com','download-ssl.xbox.com')}\" target=\"_blank\" title=\"${p.content_id}\\n${fmtSz(p.package_size)}\">${offerLabel(p.offer_suffix)}</a>`).join('')+(g.packages.length>8?` <span style=\"color:#888\">+${g.packages.length-8} more</span>`:''):'<span style=\"color:#888\">—</span>';\n"
         "    h+=`<tr class=\"${hasPkgs?'':'gfwl-nopkg'}\"><td>${g.name}</td><td class=\"gt-mono\" style=\"font-size:11px\">${g.tid}${g.short_id?' <span style=\"color:#888\">(${g.short_id})</span>':''}</td><td class=\"num\">${hasPkgs?g.packages.length:'—'}</td><td class=\"num\">${fmtSz(g.total_size)}</td><td class=\"gfwl-links\">${pkgHtml}</td></tr>`;\n"
         "  });\n"
         "  h+='</tbody></table>';\n"
         "  el.innerHTML=h;\n"
+        "  _renderPager('gfwl-pager',gfwlPage,_gfwlTotal,'gfwlGoPage');\n"
         "}\n"
 
         # -- CDN Sync tab logic (entry browser + leaderboard) --
@@ -6703,11 +7011,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "    sh+='</tbody></table>';\n"
         "    sumEl.innerHTML=sh;\n"
         "  }\n"
-        "  const PAGE=500;\n"
-        "  const pages=Math.ceil(items.length/PAGE)||1;\n"
+        "  const pages=Math.ceil(items.length/PAGE_SIZE)||1;\n"
         "  if(_cdnPage>=pages)_cdnPage=pages-1;\n"
         "  if(_cdnPage<0)_cdnPage=0;\n"
-        "  const display=items.slice(_cdnPage*PAGE,(_cdnPage+1)*PAGE);\n"
+        "  const display=items.slice(_cdnPage*PAGE_SIZE,(_cdnPage+1)*PAGE_SIZE);\n"
         "  function _sa(c,l){return '<th class=\"sortable'+(_cdnSortCol===c?(_cdnSortDir==='asc'?' sort-asc':' sort-desc'):'')+'\" onclick=\"_cdnSortBy(\\''+c+'\\')\"'+'>'+l+'</th>'}\n"
         "  let h='<table class=\"gtbl\" style=\"width:100%;font-size:12px\"><thead><tr>'\n"
         "    +_sa('name','Game')+_sa('sid','Store ID')+_sa('bv','Build Version')+_sa('plat','Platform')\n"
@@ -6747,12 +7054,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "    }else{h+=_cdnRow(e,'',0)}\n"
         "  });\n"
         "  h+='</tbody></table>';\n"
-        "  if(pages>1){\n"
-        "    h+='<div style=\"display:flex;justify-content:center;gap:6px;margin:12px 0;flex-wrap:wrap\">';\n"
-        "    for(let i=0;i<pages;i++){h+=`<button style=\"padding:4px 10px;background:${i===_cdnPage?'#107c10':'#333'};color:#eee;border:1px solid #555;border-radius:4px;cursor:pointer\" onclick=\"_cdnPage=${i};renderCDNSync()\">${i+1}</button>`}\n"
-        "    h+='</div>';\n"
-        "  }\n"
         "  el.innerHTML=h;\n"
+        "  _renderPager('cdn-pager',_cdnPage,pages,'cdnGoPage');\n"
         "}\n"
         "function renderCDNLeaderboard(){\n"
         "  const el=document.getElementById('cdnlb-list');\n"
@@ -6870,7 +7173,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
     html += (
         '_loadImports().catch(()=>{}).then(()=>{\n'
         'try{initDropdowns();_mktInitSaved();\n'
-        "var _revSlug={library:'library',store:'marketplace',marketplace:'marketplace',gamepass:'gamepass',"
+        "var _revSlug={summary:'summary',library:'library',store:'marketplace',marketplace:'marketplace',gamepass:'gamepass',"
         "playhistory:'playhistory',scanlog:'history',gamertags:'gamertags',"
         "gfwl:'gfwl',xvcdb:'cdnsync',imports:'imports',purchases:'purchases'};\n"
         "function _deserializeTab(t,qs){"
@@ -6893,7 +7196,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(el){switchTab(t,el);if(qs)_deserializeTab(t,qs)}}\n"
         '_hashNav();filterLib();filterPH();filterGP();if(!window._xctHosted)filterMKT();renderHistory();renderImports();}catch(e){console.error("init error",e)}\n'
         'renderGFWL();\n'
-        '_cdnSyncBuildFlat();renderCDNSync();renderCDNLeaderboard();renderCDNSyncLog();\n'
+        'if(!window._xctHosted){_cdnSyncBuildFlat();renderCDNSync();renderCDNLeaderboard();renderCDNSyncLog()}\n'
         "window.addEventListener('hashchange',_hashNav);\n"
         "if(window._xctHosted)window.addEventListener('popstate',_hashNav);\n"
         "if(!window._xctHosted||!localStorage.getItem('xct_api_key'))document.getElementById('loading-overlay').style.display='none';\n"
@@ -7097,6 +7400,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
 
         # -- Purchases tab JS --
         "var purchPage=0,purchPerPage=100;\n"
+        "var _purchSortCol='date',_purchSortDir='desc';\n"
+        "function _purchArrow(c){return _purchSortCol===c?(_purchSortDir==='asc'?' \\u25B2':' \\u25BC'):''}\n"
+        "var _purchColClick=false;\n"
+        "function _purchSort(col){if(_purchSortCol===col){_purchSortDir=_purchSortDir==='asc'?'desc':'asc'}else{_purchSortCol=col;_purchSortDir='asc'}_purchColClick=true;purchPage=0;filterPurchases()}\n"
 
         # Build collection-only items: items in LIB but not in PURCHASES
         "var _purchCollPids=null;\n"
@@ -7244,13 +7551,30 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "&&!(item.description||'').toLowerCase().includes(q))return false;\n"
         "return true});\n"
         # Sort
-        "if(so==='dateDesc')filtered.sort((a,b)=>(b.orderDate||'').localeCompare(a.orderDate||''));\n"
-        "else if(so==='dateAsc')filtered.sort((a,b)=>(a.orderDate||'').localeCompare(b.orderDate||''));\n"
-        "else if(so==='name')filtered.sort((a,b)=>(a.title||'').localeCompare(b.title||''));\n"
-        "else if(so==='priceDesc')filtered.sort((a,b)=>(b.amountPaid||0)-(a.amountPaid||0));\n"
-        "else if(so==='priceAsc')filtered.sort((a,b)=>{const ap=a.amountPaid||0,bp=b.amountPaid||0;"
-        "if(!ap&&bp)return 1;if(ap&&!bp)return -1;return ap-bp});\n"
-        "else if(so==='pub')filtered.sort((a,b)=>(a.publisher||'').localeCompare(b.publisher||'')||(a.title||'').localeCompare(b.title||''));\n"
+        # Dropdown sort presets (skip if sort was triggered by column click)
+        "if(!_purchColClick){"
+        "if(so==='dateDesc'){_purchSortCol='date';_purchSortDir='desc'}"
+        "else if(so==='dateAsc'){_purchSortCol='date';_purchSortDir='asc'}"
+        "else if(so==='name'){_purchSortCol='title';_purchSortDir='asc'}"
+        "else if(so==='priceDesc'){_purchSortCol='paid';_purchSortDir='desc'}"
+        "else if(so==='priceAsc'){_purchSortCol='paid';_purchSortDir='asc'}"
+        "else if(so==='pub'){_purchSortCol='publisher';_purchSortDir='asc'}}"
+        "_purchColClick=false;\n"
+        # Column sort
+        "const sc=_purchSortCol,sd=_purchSortDir,m=sd==='asc'?1:-1;\n"
+        "filtered.sort((a,b)=>{\n"
+        "if(sc==='title')return m*(a.title||'').localeCompare(b.title||'');\n"
+        "if(sc==='gamertag')return m*(a.gamertag||'').localeCompare(b.gamertag||'');\n"
+        "if(sc==='publisher')return m*((a.publisher||'').localeCompare(b.publisher||'')||(a.title||'').localeCompare(b.title||''));\n"
+        "if(sc==='type')return m*(a.type||'').localeCompare(b.type||'');\n"
+        "if(sc==='date')return m*(a.orderDate||'').localeCompare(b.orderDate||'');\n"
+        "if(sc==='market')return m*(a.market||'').localeCompare(b.market||'');\n"
+        "if(sc==='currency')return m*(a.currency||'').localeCompare(b.currency||'');\n"
+        "if(sc==='platform'){const pa=Array.isArray(a.platforms)?a.platforms.join(','):(a.platforms||'');"
+        "const pb=Array.isArray(b.platforms)?b.platforms.join(','):(b.platforms||'');return m*pa.localeCompare(pb)}\n"
+        "if(sc==='paid'){const ap=a.amountPaid||0,bp=b.amountPaid||0;if(!ap&&bp)return m;if(ap&&!bp)return -m;return m*(ap-bp)}\n"
+        "if(sc==='status')return m*(a.status||'').localeCompare(b.status||'');\n"
+        "return 0});\n"
         # Update dropdown counts
         "_updCounts('purch-gt',baseItems,x=>x.gamertag||'');\n"
         "_updCounts('purch-type',baseItems,x=>x.type||'');\n"
@@ -7272,23 +7596,31 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Render grid + list
         "const g=document.getElementById('purch-grid');\n"
         "const l=document.getElementById('purch-list');\n"
-        "let gh='',lh='<div class=\"lv-head\"><div></div><div>Title</div><div>Publisher</div>"
-        "<div>Date</div><div style=\"text-align:right\">Paid</div>"
-        "<div style=\"text-align:center\">Status</div></div>';\n"
+        "let gh='',lh='<div class=\"lv-head\"><div></div>"
+        "<div data-sort onclick=\"_purchSort(\\'title\\')\" style=\"cursor:pointer\">Title'+_purchArrow('title')+'</div>"
+        "<div data-sort onclick=\"_purchSort(\\'gamertag\\')\" style=\"cursor:pointer\">Gamertag'+_purchArrow('gamertag')+'</div>"
+        "<div data-sort onclick=\"_purchSort(\\'publisher\\')\" style=\"cursor:pointer\">Publisher'+_purchArrow('publisher')+'</div>"
+        "<div data-sort onclick=\"_purchSort(\\'type\\')\" style=\"cursor:pointer\">Type'+_purchArrow('type')+'</div>"
+        "<div data-sort onclick=\"_purchSort(\\'date\\')\" style=\"cursor:pointer\">Date'+_purchArrow('date')+'</div>"
+        "<div data-sort onclick=\"_purchSort(\\'market\\')\" style=\"cursor:pointer\">Mkt'+_purchArrow('market')+'</div>"
+        "<div data-sort onclick=\"_purchSort(\\'currency\\')\" style=\"cursor:pointer\">Cur'+_purchArrow('currency')+'</div>"
+        "<div data-sort onclick=\"_purchSort(\\'platform\\')\" style=\"cursor:pointer\">Platform'+_purchArrow('platform')+'</div>"
+        "<div data-sort onclick=\"_purchSort(\\'paid\\')\" style=\"cursor:pointer;text-align:right\">Paid'+_purchArrow('paid')+'</div>"
+        "<div data-sort onclick=\"_purchSort(\\'status\\')\" style=\"cursor:pointer;text-align:center\">Status'+_purchArrow('status')+'</div></div>';\n"
         # CSV = Commerce Stored Value (gift cards / currency credit)
-        "const _csvIcon='<svg viewBox=\"0 0 24 24\" width=\"100%\" height=\"100%\" fill=\"none\" stroke=\"#4caf50\" stroke-width=\"1.5\"><rect x=\"2\" y=\"5\" width=\"20\" height=\"14\" rx=\"2\"/><path d=\"M2 10h20\"/><circle cx=\"12\" cy=\"16\" r=\"1.5\"/><path d=\"M10.5 14.5L12 12.5l1.5 2\"/></svg>';\n"
-        "const _noImgIcon='<svg viewBox=\"0 0 24 24\" width=\"100%\" height=\"100%\" fill=\"none\" stroke=\"#444\" stroke-width=\"1.5\"><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\"/><circle cx=\"8.5\" cy=\"8.5\" r=\"1.5\"/><path d=\"M21 15l-5-5L5 21\"/></svg>';\n"
+        "const _csvIcon='<svg viewBox=\"0 0 24 24\" width=\"32\" height=\"32\" fill=\"none\" stroke=\"#4caf50\" stroke-width=\"1.5\"><rect x=\"2\" y=\"5\" width=\"20\" height=\"14\" rx=\"2\"/><path d=\"M2 10h20\"/><circle cx=\"12\" cy=\"16\" r=\"1.5\"/><path d=\"M10.5 14.5L12 12.5l1.5 2\"/></svg>';\n"
+        "const _noImgIcon='<svg viewBox=\"0 0 24 24\" width=\"32\" height=\"32\" fill=\"none\" stroke=\"#444\" stroke-width=\"1.5\"><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\"/><circle cx=\"8.5\" cy=\"8.5\" r=\"1.5\"/><path d=\"M21 15l-5-5L5 21\"/></svg>';\n"
         "function _purchThumb(item){\n"
         "const img=item.image||item.boxArt||'';\n"
-        "if(img)return `<img src=\"${_imgResize(img,80,80)}\" loading=\"lazy\" onerror=\"this.parentElement.innerHTML=_noImgIcon\">`;\n"
+        "if(img)return `<img src=\"${_imgResize(img,80,80)}\" style=\"width:36px;height:36px;object-fit:cover;border-radius:3px;background:#222\" loading=\"lazy\" onerror=\"this.outerHTML=_noImgIcon\">`;\n"
         "const isCSV=(item.title||'').startsWith('CSV');\n"
-        "return '<div style=\"width:36px;height:36px;display:flex;align-items:center;justify-content:center\">'+(isCSV?_csvIcon:_noImgIcon)+'</div>'}\n"
+        "return isCSV?_csvIcon:_noImgIcon}\n"
         "function _purchCardImg(item){\n"
         "const img=item.image||item.boxArt||'';\n"
         "if(img)return `<img class=\"card-img\" src=\"${_imgResize(img,330,186)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`;\n"
         "const isCSV=(item.title||'').startsWith('CSV');\n"
-        "return '<div class=\"card-img\" style=\"display:flex;align-items:center;justify-content:center;background:#1a1a1a\">'+"
-        "'<div style=\"width:64px;height:64px\">'+(isCSV?_csvIcon:_noImgIcon)+'</div></div>'}\n"
+        "const ic=isCSV?_csvIcon.replace('width=\"32\"','width=\"64\"').replace('height=\"32\"','height=\"64\"'):_noImgIcon.replace('width=\"32\"','width=\"64\"').replace('height=\"32\"','height=\"64\"');\n"
+        "return '<div class=\"card-img\" style=\"display:flex;align-items:center;justify-content:center;background:#1a1a1a\">'+ic+'</div>'}\n"
 
         "page.forEach(item=>{\n"
         "const dateStr=item.orderDate?new Date(item.orderDate).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'';\n"
@@ -7305,22 +7637,21 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "<div class=\"card-badges\">${giftBadge}${overlapBadge}</div></div></div>`;\n"
         # List row — always wrap thumb in a div so grid column count is consistent
         "const statusBadge=`<span style=\"color:${statusCol};font-size:11px\">${_esc(item.status||'')}</span>`;\n"
+        "const platStr=Array.isArray(item.platforms)?item.platforms.join(', '):(item.platforms||'');\n"
         "lh+=`<div class=\"lv-row\"><div>${_purchThumb(item)}</div>"
         "<div class=\"lv-title\" title=\"${_esc(item.title)}\">${_esc(item.title)} ${giftBadge}${overlapBadge}</div>"
+        "<div class=\"lv-pub\" style=\"font-size:11px\">${_esc(item.gamertag||'')}</div>"
         "<div class=\"lv-pub\">${_esc(item.publisher||'')}</div>"
+        "<div class=\"lv-type\">${_esc(item.type||'')}</div>"
         "<div class=\"lv-type\">${_esc(dateStr)}</div>"
+        "<div class=\"lv-type\" style=\"font-size:10px\">${_esc(item.market||'')}</div>"
+        "<div class=\"lv-type\" style=\"font-size:10px\">${_esc(item.currency||'')}</div>"
+        "<div class=\"lv-type\" style=\"font-size:10px\" title=\"${_esc(platStr)}\">${_esc(platStr)}</div>"
         "<div class=\"lv-usd\">${_esc(priceStr)}</div>"
         "<div class=\"lv-status\">${statusBadge}</div></div>`});\n"
         "g.innerHTML=gh;l.innerHTML=lh;\n"
         # Pager
-        "const pager=document.getElementById('purch-pager');\n"
-        "if(totalPages<=1){pager.innerHTML='';return}\n"
-        "let ph='<button class=\"page-btn\" '+(purchPage<=0?'disabled':'')+' onclick=\"purchPage=0;filterPurchases()\">&laquo;</button>';\n"
-        "ph+='<button class=\"page-btn\" '+(purchPage<=0?'disabled':'')+' onclick=\"purchPage--;filterPurchases()\">&lsaquo;</button>';\n"
-        "ph+='<span style=\"color:#aaa;font-size:12px\">Page '+(purchPage+1)+' / '+totalPages+'</span>';\n"
-        "ph+='<button class=\"page-btn\" '+(purchPage>=totalPages-1?'disabled':'')+' onclick=\"purchPage++;filterPurchases()\">&rsaquo;</button>';\n"
-        "ph+='<button class=\"page-btn\" '+(purchPage>=totalPages-1?'disabled':'')+' onclick=\"purchPage='+String(totalPages-1)+';filterPurchases()\">&raquo;</button>';\n"
-        "pager.innerHTML=ph}\n"
+        "_renderPager('purch-pager',purchPage,totalPages,'purchGoPage')}\n"
 
         "function clearPurchFilters(){\n"
         "document.getElementById('purch-search').value='';\n"
@@ -7337,13 +7668,46 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('tab-purch-cnt').textContent=PURCHASES.length;\n"
         "filterPurchases()}\n"
 
-        "function _loadTabData(id){if(id==='admin'){_adminLoadScans();_cdnMonRefreshStatus();_cdnMonLoadScans();_cdnMonLoadPurged()}}\n"
+        "var _cdnLoaded=false;\n"
+        "function _loadTabData(id){\n"
+        "if(id==='summary')renderSummary();\n"
+        "if(id==='admin'){_adminLoadScans();_cdnMonRefreshStatus();_cdnMonLoadScans();_cdnMonLoadPurged()}\n"
+        "if(id==='cdnsync'&&!_cdnLoaded&&window._xctHosted){\n"
+        "  _cdnLoaded=true;\n"
+        "  var st=document.getElementById('cdnsync-status');\n"
+        "  if(st)st.innerHTML='<span style=\"color:#888\">Loading xct.live</span>';\n"
+        "  Promise.all([\n"
+        "    fetch('/api/v1/shared/cdn').then(r=>r.json()),\n"
+        "    fetch('/api/v1/shared/cdn_meta').then(r=>r.json()),\n"
+        "    fetch('/api/v1/shared/cdn_lb').then(r=>r.json())\n"
+        "  ]).then(function(res){\n"
+        "    CDN_DB=res[0]||{};\n"
+        "    var meta=res[1]||{};\n"
+        "    Object.keys(meta).forEach(function(k){CDN_SYNC_META[k]=meta[k]});\n"
+        "    var lb=res[2]||{};\n"
+        "    CDN_LEADERBOARD=lb.leaderboard||[];\n"
+        "    CDN_LB_STATS={total_contributors:lb.total_contributors||0,total_entries:lb.total_entries||0,total_games:lb.total_games||0};\n"
+        "    if(st)st.innerHTML='';\n"
+        "    _cdnSyncBuildFlat();renderCDNSync();renderCDNLeaderboard();renderCDNSyncLog();\n"
+        "  }).catch(function(e){console.error('CDN load error:',e);if(st)st.innerHTML='<span style=\"color:#f44\">Failed to load XVC data</span>';_cdnLoaded=false})\n"
+        "}}\n"
 
         '</script>\n'
     )
 
     if extra_js:
         html += f'<script>{extra_js}</script>\n'
+
+    # -- Footer (only visible on hosted/xct.live) --
+    html += (
+        '<div id="xct-footer" style="display:none;text-align:center;padding:18px 0 14px;'
+        'font-size:11px;color:#555;border-top:1px solid #222;margin-top:24px">'
+        '<a href="/terms" style="color:#666;text-decoration:none;margin:0 10px">Terms of Service</a>'
+        '<span style="color:#333">|</span>'
+        '<a href="/privacy" style="color:#666;text-decoration:none;margin:0 10px">Privacy Policy</a>'
+        '</div>\n'
+        '<script>if(window._xctHosted){var _f=document.getElementById("xct-footer");if(_f)_f.style.display=""}</script>\n'
+    )
 
     html += '</body></html>'
 
