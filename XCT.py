@@ -3691,16 +3691,16 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '.filters select{padding:7px 10px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:6px;font-size:12px}\n'
         '.filter-group{display:flex;flex-direction:column;gap:1px}\n'
         '.filter-label{font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.3px;padding-left:2px}\n'
-        '.mkt-layout{display:flex;gap:16px}\n'
-        '.mkt-sidebar{min-width:200px;max-width:200px;flex-shrink:0;border-right:1px solid #222;padding-right:16px}\n'
+        '.mkt-layout{display:flex;gap:12px}\n'
+        '.mkt-sidebar{min-width:170px;max-width:170px;flex-shrink:0;border-right:1px solid #222;padding-right:12px}\n'
         '.mkt-content{flex:1;min-width:0}\n'
-        '.mkt-sf{margin-bottom:10px}\n'
-        '.mkt-sf-label{font-size:11px;color:#888;margin-bottom:3px;font-weight:500}\n'
-        '.mkt-sf select{width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px}\n'
+        '.mkt-sf{margin-bottom:6px}\n'
+        '.mkt-sf-label{font-size:10px;color:#888;margin-bottom:1px;font-weight:500}\n'
+        '.mkt-sf select{width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px}\n'
         '.mkt-cb-full{display:block}\n'
-        '.mkt-tick{display:flex;align-items:center;gap:6px;font-size:12px;color:#ccc;cursor:pointer;padding:3px 0;accent-color:#107c10}\n'
-        '.mkt-cb-full .cb-btn{display:block;width:100%;box-sizing:border-box;text-align:left}\n'
-        '@media(max-width:768px){.mkt-layout{flex-direction:column}.mkt-sidebar{max-width:100%;min-width:0;border-right:none;border-bottom:1px solid #222;padding-right:0;padding-bottom:12px;display:flex;flex-wrap:wrap;gap:8px}.mkt-sf{margin-bottom:4px;min-width:140px;flex:1}}\n'
+        '.mkt-tick{display:flex;align-items:center;gap:5px;font-size:11px;color:#ccc;cursor:pointer;padding:2px 0;accent-color:#107c10}\n'
+        '.mkt-cb-full .cb-btn{display:block;width:100%;box-sizing:border-box;text-align:left;padding:4px 8px;font-size:11px}\n'
+        '@media(max-width:768px){.mkt-layout{flex-direction:column}.mkt-sidebar{max-width:100%;min-width:0;border-right:none;border-bottom:1px solid #222;padding-right:0;padding-bottom:12px;display:flex;flex-wrap:wrap;gap:8px}.mkt-sf{margin-bottom:4px;min-width:130px;flex:1}}\n'
         '.pill{padding:5px 12px;border:1px solid #333;background:#1a1a1a;color:#aaa;border-radius:16px;cursor:pointer;font-size:11px}\n'
         '.pill.active{background:#107c10;border-color:#107c10;color:#fff}\n'
         '.pill:hover{background:#222}\n'
@@ -4051,11 +4051,11 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # -- Left sidebar filters --
         '<div class="mkt-sidebar">\n'
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
-        '<span style="font-weight:600;font-size:14px;color:#ccc">Filters</span>'
+        '<span style="font-weight:600;font-size:12px;color:#ccc">Filters</span>'
         '<span class="pill" onclick="clearAllFilters()" style="font-size:11px;padding:3px 8px;margin:0" title="Reset all filters">Clear All</span>'
         '</div>\n'
         # Search
-        '<div class="mkt-sf"><input type="text" id="lib-search" placeholder="Search..." oninput="libPage=0;filterLib()" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px;box-sizing:border-box"></div>\n'
+        '<div class="mkt-sf"><input type="text" id="lib-search" placeholder="Search..." oninput="libPage=0;filterLib()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px;box-sizing:border-box"></div>\n'
         # Sort
         '<div class="mkt-sf"><div class="mkt-sf-label">Sort By</div>'
         '<select id="lib-sort" onchange="libSortCol=null;libPage=0;filterLib()"><option value="name">Name</option>'
@@ -4250,13 +4250,13 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # -- Left sidebar filters --
         '<div class="mkt-sidebar">\n'
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
-        '<span style="font-weight:600;font-size:14px;color:#ccc">Filters</span>'
+        '<span style="font-weight:600;font-size:12px;color:#ccc">Filters</span>'
         '<span class="pill" onclick="clearMktFilters()" style="font-size:11px;padding:3px 8px;margin:0" title="Reset all filters">Clear All</span>'
         '</div>\n'
         # Saved Filters
-        '<div class="mkt-sf"><select id="mkt-saved" onchange="_mktLoadSaved(this.value)" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px"><option value="">Saved Filters</option><option value="__save__">Save Current Filter...</option></select></div>\n'
+        '<div class="mkt-sf"><select id="mkt-saved" onchange="_mktLoadSaved(this.value)" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px"><option value="">Saved Filters</option><option value="__save__">Save Current Filter...</option></select></div>\n'
         # Search (compact, in sidebar)
-        '<div class="mkt-sf"><input type="text" id="mkt-search" placeholder="Search..." oninput="mktPage=0;if(window._xctHosted){clearTimeout(_mktDebounce);_mktDebounce=setTimeout(filterMKT,300)}else{filterMKT()}" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px;box-sizing:border-box"></div>\n'
+        '<div class="mkt-sf"><input type="text" id="mkt-search" placeholder="Search..." oninput="mktPage=0;if(window._xctHosted){clearTimeout(_mktDebounce);_mktDebounce=setTimeout(filterMKT,300)}else{filterMKT()}" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px;box-sizing:border-box"></div>\n'
         # Sort
         '<div class="mkt-sf"><div class="mkt-sf-label">Sort By</div>'
         '<select id="mkt-sort" onchange="mktPage=0;filterMKT()">'
@@ -4278,7 +4278,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '</select></div>\n'
         # Channel (single-select)
         '<div class="mkt-sf"><div class="mkt-sf-label">Channel</div>'
-        '<select id="mkt-channel" onchange="mktPage=0;filterMKT()" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px">'
+        '<select id="mkt-channel" onchange="mktPage=0;filterMKT()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px">'
         '<option value="">All Products</option></select></div>\n'
         # Type
         '<div class="mkt-sf"><div class="mkt-sf-label">Type</div>'
@@ -4318,7 +4318,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="cb-drop mkt-cb-full" id="mkt-phys"><div class="cb-btn" onclick="toggleCB(this)">All Physical &#9662;</div><div class="cb-panel"></div></div></div>\n'
         # Region Availability (select dropdown)
         '<div class="mkt-sf"><div class="mkt-sf-label">Region Availability</div>'
-        '<select id="mkt-region-sel" onchange="mktPage=0;filterMKT()" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px">'
+        '<select id="mkt-region-sel" onchange="mktPage=0;filterMKT()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px">'
         '<option value="">All</option>'
         '<option value="myregions">My Regions Only</option>'
         '<option value="notmy">Other Region Exclusives</option>'
@@ -4363,9 +4363,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div id="subs-summary" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px"></div>\n'
         '<div style="margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
         '<input type="text" id="subs-search" placeholder="Search titles..." oninput="_subsPage=0;_subsRender()" style="padding:6px 10px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px;width:220px;box-sizing:border-box">'
-        '<select id="subs-tier" onchange="_subsPage=0;_subsRender()" style="padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px"><option value="">All Services</option></select>'
-        '<select id="subs-owned" onchange="_subsPage=0;_subsRender()" style="padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px"><option value="">All</option><option value="owned">Owned</option><option value="notowned">Not Owned</option></select>'
-        '<select id="subs-sort" onchange="_subsPage=0;_subsRender()" style="padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px">'
+        '<select id="subs-tier" onchange="_subsPage=0;_subsRender()" style="padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px"><option value="">All Services</option></select>'
+        '<select id="subs-owned" onchange="_subsPage=0;_subsRender()" style="padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px"><option value="">All</option><option value="owned">Owned</option><option value="notowned">Not Owned</option></select>'
+        '<select id="subs-sort" onchange="_subsPage=0;_subsRender()" style="padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px">'
         '<option value="name">Name</option><option value="priceDesc">Price (High-Low)</option><option value="priceAsc">Price (Low-High)</option><option value="relDesc" selected>Release (Newest)</option><option value="relAsc">Release (Oldest)</option></select>'
         '</div>\n'
         '<div class="list-view gp-list" id="subs-list"></div>\n'
@@ -4404,11 +4404,11 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # -- Left sidebar filters --
         '<div class="mkt-sidebar">\n'
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
-        '<span style="font-weight:600;font-size:14px;color:#ccc">Filters</span>'
+        '<span style="font-weight:600;font-size:12px;color:#ccc">Filters</span>'
         '<span class="pill" onclick="clearPurchFilters()" style="font-size:11px;padding:3px 8px;margin:0" title="Reset all filters">Clear All</span>'
         '</div>\n'
         # Search
-        '<div class="mkt-sf"><input type="text" id="purch-search" placeholder="Search..." oninput="purchPage=0;filterPurchases()" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px;box-sizing:border-box"></div>\n'
+        '<div class="mkt-sf"><input type="text" id="purch-search" placeholder="Search..." oninput="purchPage=0;filterPurchases()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px;box-sizing:border-box"></div>\n'
         # Sort
         '<div class="mkt-sf"><div class="mkt-sf-label">Sort By</div>'
         '<select id="purch-sort" onchange="purchPage=0;filterPurchases()">'
@@ -4448,15 +4448,15 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="cb-drop mkt-cb-full" id="purch-plat"><div class="cb-btn" onclick="toggleCB(this)">All Platforms &#9662;</div><div class="cb-panel"></div></div></div>\n'
         # Price filter
         '<div class="mkt-sf"><div class="mkt-sf-label">Price</div>'
-        '<select id="purch-price" onchange="purchPage=0;filterPurchases()" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px">'
+        '<select id="purch-price" onchange="purchPage=0;filterPurchases()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px">'
         '<option value="">All</option><option value="paid">Paid Only</option><option value="free">Free Only</option></select></div>\n'
         # Gift filter
         '<div class="mkt-sf"><div class="mkt-sf-label">Gift</div>'
-        '<select id="purch-gift" onchange="purchPage=0;filterPurchases()" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px">'
+        '<select id="purch-gift" onchange="purchPage=0;filterPurchases()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px">'
         '<option value="">All</option><option value="gift">Gifts Only</option><option value="nogift">Non-Gifts Only</option></select></div>\n'
         # Collection Overlap
         '<div class="mkt-sf"><div class="mkt-sf-label">Collection Overlap</div>'
-        '<select id="purch-overlap" onchange="purchPage=0;filterPurchases()" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px">'
+        '<select id="purch-overlap" onchange="purchPage=0;filterPurchases()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px">'
         '<option value="">All Items</option>'
         '<option value="both">In Both (Purchased + In Collection)</option>'
         '<option value="purchonly">Purchase Only (Not in Collection)</option>'
