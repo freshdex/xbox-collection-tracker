@@ -3961,6 +3961,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="tab" id="tab-imp" onclick="switchTab(\'imports\',this)" style="display:none">Imports <span class="cnt" id="tab-imp-cnt"></span></div>\n'
         '<div class="tab" id="tab-admin" onclick="switchTab(\'admin\',this)" style="display:none">Admin</div>\n'
         '<div class="tab" id="tab-settings" onclick="switchTab(\'settings\',this)" style="display:none">Settings</div>\n'
+        '<div class="tab" id="tab-mission" onclick="switchTab(\'mission\',this)">Our Mission</div>\n'
         '<select id="lib-cur" class="tab-cur" onchange="_onCur()">'
         '<option value="USD" selected>USD $</option>'
         '<option value="EUR">EUR €</option>'
@@ -4631,6 +4632,38 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '</div>\n'
         '</div>\n'
 
+        # -- Our Mission --
+        '<div class="section" id="mission">\n'
+        '<div style="max-width:900px;margin:0 auto;padding:24px 0">\n'
+        '<img src="/xctbanner.jpg" alt="Xbox Collection Tracker" onerror="this.style.display=\'none\'" style="width:100%;border-radius:12px;margin-bottom:32px;box-shadow:0 4px 24px rgba(16,124,16,0.3)">\n'
+        '<h2 style="text-align:center;margin:0 0 8px;font-size:28px;color:#fff;letter-spacing:1px">Xbox Collection Tracker</h2>\n'
+        '<p style="text-align:center;color:#107c10;font-size:15px;margin:0 0 32px;font-weight:600">Your Xbox library, your way</p>\n'
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:32px">\n'
+        '<div style="background:#1a1a1a;border:1px solid #333;border-radius:10px;padding:20px">\n'
+        '<h3 style="margin:0 0 10px;color:#107c10;font-size:16px">Manage Your Collection</h3>\n'
+        '<p style="color:#aaa;font-size:13px;line-height:1.6;margin:0">Keep track of every game you own across Xbox One, Xbox Series X|S, Xbox 360, and PC. '
+        'See your full entitlements, purchase history, and play history in one place. Never lose track of a game again.</p>\n'
+        '</div>\n'
+        '<div style="background:#1a1a1a;border:1px solid #333;border-radius:10px;padding:20px">\n'
+        '<h3 style="margin:0 0 10px;color:#107c10;font-size:16px">Discover New Games</h3>\n'
+        '<p style="color:#aaa;font-size:13px;line-height:1.6;margin:0">Browse the complete Xbox store catalogue with everything the official store has and more. '
+        'Filter by platform, price, region, subscription status, release date, and dozens of other criteria. Save your favourite filter combinations for quick access.</p>\n'
+        '</div>\n'
+        '<div style="background:#1a1a1a;border:1px solid #333;border-radius:10px;padding:20px">\n'
+        '<h3 style="margin:0 0 10px;color:#107c10;font-size:16px">Deep Integration</h3>\n'
+        '<p style="color:#aaa;font-size:13px;line-height:1.6;margin:0">We integrate your entitlements, purchase history, play history, and achievements directly into the store database. '
+        'Easily filter out games you already own, highlight games you\'ve played, and find the titles that matter most to you.</p>\n'
+        '</div>\n'
+        '<div style="background:#1a1a1a;border:1px solid #333;border-radius:10px;padding:20px">\n'
+        '<h3 style="margin:0 0 10px;color:#107c10;font-size:16px">Powerful Filters &amp; Tools</h3>\n'
+        '<p style="color:#aaa;font-size:13px;line-height:1.6;margin:0">Compare prices across 10+ regions, track Game Pass additions and removals, scan for delisted titles, '
+        'monitor your achievement progress, and export your data. Save custom filters to quickly find exactly what you\'re looking for.</p>\n'
+        '</div>\n'
+        '</div>\n'
+        '<p style="text-align:center;color:#555;font-size:13px;margin:32px 0 0">Made with Love by Freshdex</p>\n'
+        '</div>\n'
+        '</div>\n'
+
         # -- Context menu + Modal --
         '<div id="ctx-menu"></div>\n'
         '<div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">\n'
@@ -5139,15 +5172,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "boxes.forEach(c=>c.checked=!anyChecked);"
         "clr.textContent=anyChecked?'Select All':'Clear All';libPage=0;filterLib()}\n"
         "function clearAllFilters(){"
-        "console.log('[clearAllFilters] START');"
         "var _cbs=document.querySelectorAll('#library .cb-panel input[type=checkbox]');"
-        "console.log('[clearAllFilters] found',_cbs.length,'checkboxes in #library');"
-        "_cbs.forEach(c=>{if(!c.checked)console.log('[clearAllFilters] checking:',c.value,'in',c.closest('.cb-drop')?.id);c.checked=true});"
+        "_cbs.forEach(c=>c.checked=true);"
         "document.querySelectorAll('#library .cb-clear').forEach(c=>c.textContent='Clear All');"
-        "var _drops=document.querySelectorAll('#library .cb-drop');"
-        "console.log('[clearAllFilters] found',_drops.length,'cb-drops to refresh');"
-        "_drops.forEach(el=>{console.log('[clearAllFilters] getCBVals:',el.id);getCBVals(el.id)});"
-        "console.log('[clearAllFilters] resetting selects');"
+        "document.querySelectorAll('#library .cb-drop').forEach(el=>getCBVals(el.id));"
         "document.getElementById('lib-gp').value='owned';"
         "document.getElementById('lib-dlc').value='all';"
         "document.getElementById('lib-cdn').value='all';"
@@ -5156,14 +5184,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('lib-sort').value='name';libSortCol=null;"
         "document.getElementById('lib-search').value='';"
         "_libActiveSaved='';_libInitSaved();"
-        "console.log('[clearAllFilters] calling filterLib');"
-        "libPage=0;filterLib();"
-        "console.log('[clearAllFilters] DONE')}\n"
+        "libPage=0;filterLib()}\n"
         "function clearMktFilters(){"
-        "console.log('[clearMktFilters] START');"
         "var _cbs=document.querySelectorAll('#marketplace .cb-panel input[type=checkbox]');"
-        "console.log('[clearMktFilters] found',_cbs.length,'checkboxes in #marketplace');"
-        "_cbs.forEach(c=>{if(!c.checked)console.log('[clearMktFilters] checking:',c.value,'in',c.closest('.cb-drop')?.id);c.checked=true});"
+        "_cbs.forEach(c=>c.checked=true);"
         "document.querySelectorAll('#marketplace .cb-clear').forEach(c=>c.textContent='Clear All');"
         # Reset Release Status to all checked
         "document.querySelectorAll('#mkt-preorder .cb-panel input').forEach(c=>{c.checked=true});"
@@ -5182,15 +5206,11 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('mkt-channel').value='';"
         "document.getElementById('mkt-search').value='';"
         # Refresh all cb-drop button labels AFTER all resets
-        "var _drops=document.querySelectorAll('#marketplace .cb-drop');"
-        "console.log('[clearMktFilters] refreshing',_drops.length,'cb-drops');"
-        "_drops.forEach(el=>{var r=getCBVals(el.id);console.log('[clearMktFilters] getCBVals',el.id,'=>',r)});"
+        "document.querySelectorAll('#marketplace .cb-drop').forEach(el=>getCBVals(el.id));"
         "_mktActiveSaved='';_mktInitSaved();"
         "mktSortCol=null;mktPage=0;"
-        "console.log('[clearMktFilters] calling filterMKT');"
         "location.hash='marketplace';"
-        "filterMKT();"
-        "console.log('[clearMktFilters] DONE')}\n"
+        "filterMKT()}\n"
 
         # -- URL slug persistence --
         "function _mktGetCBChecked(id){"
@@ -5515,17 +5535,16 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.addEventListener('click',function(e){"
         "if(!e.target.closest('.cb-drop'))document.querySelectorAll('.cb-panel.open').forEach(p=>p.classList.remove('open'))});\n"
         "function getCBVals(id){const el=document.getElementById(id);"
-        "if(!el||el.style.display==='none'){console.log('[getCBVals]',id,'=> hidden/missing, return null');return null}"
+        "if(!el||el.style.display==='none')return null;"
         "const checked=[...el.querySelectorAll('input[type=checkbox]:checked')].map(c=>c.value);"
         "const total=el.querySelectorAll('input[type=checkbox]').length;"
         "const btn=el.querySelector('.cb-btn');"
-        "if(!btn){console.log('[getCBVals]',id,'=> no .cb-btn found');return null}"
+        "if(!btn)return null;"
         "const base=btn.dataset.label||btn.textContent.replace(/\\s*[\\u25BE\\u2713].*/,'');"
         "if(!btn.dataset.label)btn.dataset.label=base;"
         "if(checked.length===0||checked.length===total){"
         "btn.textContent=base+' \\u25BE';btn.classList.remove('has-sel')}"
         "else{btn.textContent=base+' ('+checked.length+') \\u25BE';btn.classList.add('has-sel')}"
-        "console.log('[getCBVals]',id,checked.length+'/'+total,'btn:',btn.textContent,'result:',(checked.length===total||checked.length===0)?'null':checked);"
         "return(checked.length===total||checked.length===0)?null:checked}\n"
         '\n'
 
