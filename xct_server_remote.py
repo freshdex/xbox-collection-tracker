@@ -4390,10 +4390,16 @@ def profile_put(conn=None, cur=None, contributor=None, api_key=None):
                         entry["region"] = info["region"]
                     if "email" in info and isinstance(info["email"], str):
                         entry["email"] = info["email"][:320]
-                    if "col1" in info and isinstance(info["col1"], (bool, str)):
-                        entry["col1"] = bool(info["col1"])
-                    if "col2" in info and isinstance(info["col2"], (bool, str)):
-                        entry["col2"] = bool(info["col2"])
+                    if "col1" in info:
+                        if isinstance(info["col1"], bool):
+                            entry["col1"] = info["col1"]
+                        elif isinstance(info["col1"], str):
+                            entry["col1"] = info["col1"][:128]
+                    if "col2" in info:
+                        if isinstance(info["col2"], bool):
+                            entry["col2"] = info["col2"]
+                        elif isinstance(info["col2"], str):
+                            entry["col2"] = info["col2"][:128]
                     if entry:
                         clean[gt[:64]] = entry
                 if clean:
