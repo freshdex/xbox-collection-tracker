@@ -2,6 +2,32 @@
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
 
+## What's New in v2.2
+
+### Purchase History (New Tab)
+- **Microsoft Order History scanning** — Fetches your complete purchase history from the Microsoft Order History API across all linked gamertags. Every order is broken down into individual line items, enriched with catalog metadata (publisher, developer, images, category, platforms, pricing), and displayed in a new **Purchases** tab in the HTML output.
+- **Incremental scanning** — After the first full scan, subsequent scans only fetch new orders since the last scan by detecting already-known order IDs. The API returns newest-first, so scanning stops as soon as a known order is encountered. Full re-fetch is also available when needed.
+- **Collection cross-referencing** — Each purchase item is tagged as "In Both" (purchased and in collection), "Purchase Only" (purchased but not in collection), or "Collection Only" (in collection but no purchase record, e.g. Game Pass, gifts from others, promotions). Filter by overlap status to find gaps.
+- **Rich filter sidebar** — 9 checkbox dropdown filters (Gamertag, Type, Status, Market, Currency, Purchase Year, Publisher, Category, Platform) plus Price, Gift, and Collection Overlap select filters. Same multi-select checkbox dropdown pattern as the Store and Collection tabs.
+- **Summary dashboard** — Shows total items, unique orders, paid vs. free breakdown, gift count, collection overlap stats, spend by currency, and type breakdown (Game, Durable, Application, Consumable, PASS, etc.).
+- **CSV item icons** — Commerce Stored Value items (gift cards / currency credit top-ups) display a green gift card SVG icon instead of a blank placeholder.
+- **XCT Live sync** — Purchase history uploads to xct.live alongside your collection. The Purchases tab appears on the hosted version after login.
+
+### Unified Scan Menu
+- **Consolidated scan workflow** — The gamertag section has been reorganized into two sub-menus: **Scan** `[a]` and **Manage Gamertags** `[b]`. The old separate options for Collections API, TitleHub, Content Access, and Order History are merged into a single scan flow.
+- **Pick target + endpoint** — Choose "All gamertags" or a single gamertag, then choose which endpoint to scan: All endpoints (Collection + TitleHub + Content Access + Order History), or any individual endpoint. Order History offers both incremental and full re-fetch modes.
+- **All endpoints in one go** — Select "All endpoints" to run the complete pipeline (collection scan, TitleHub enrichment, Content Access for Xbox 360 titles, and order history) across all selected gamertags in a single operation.
+- **Manage sub-menu** — Show gamertag list, add new, refresh token (single/all), delete, and update gamertag (rescan name) are grouped under `[b] Manage gamertags`.
+- **Streamlined main menu** — Reduced from 28+ top-level options to 19 options plus 2 sub-menus. All key bindings shifted accordingly (`[e]` Build, `[f]-[i]` CDN tools, `[j]-[m]` CDN Installers, etc.).
+
+### Game Pass Tier Rebrand
+- **Core renamed to Essential** — Game Pass Core tier is now displayed as "Essential" throughout the UI (badges, filters, admin panel).
+- **Standard renamed to Premium** — Game Pass Standard tier is now displayed as "Premium" throughout.
+
+### XCT Live Improvements
+- **Loading spinner on login** — After logging in on xct.live, a full-screen loading spinner with "Loading collection..." appears immediately. All tabs remain hidden until data is fully loaded and rendered, eliminating the previous delay where empty tabs were briefly visible.
+- **Purchases tab on xct.live** — The Purchases tab appears on the hosted version after logging in, with the same filters, summary, and grid/list views as the local version.
+
 ## What's New in v2.1.2
 
 ### Catalog Enrichment Fix

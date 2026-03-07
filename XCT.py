@@ -61,7 +61,7 @@ if sys.platform == "win32":
 # Debug logging — writes all output + extra diagnostics to debug.log
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "2.1.2"
+VERSION = "2.2"
 DEBUG_LOG_FILE = os.path.join(SCRIPT_DIR, "debug.log")
 
 import datetime as _dt
@@ -709,6 +709,9 @@ def device_code_auth():
     print(f"  Enter:   {user_code}" + ("  (copied to clipboard)" if _clip_ok else ""))
     print("=" * 56)
     print()
+    input("[*] Press Enter to open the link in your browser...")
+    import webbrowser
+    webbrowser.open(verification_uri)
     print("[*] Waiting for you to sign in...")
 
     poll_params = urllib.parse.urlencode({
@@ -987,7 +990,14 @@ def sisu_auth_for_account(existing_gamertag=None):
         xbl3_xl, xbl3_mp, xuid, gamertag_resolved, refresh_token = \
             get_xbl_tokens_simple_from_msa(msa_token, refresh_token)
 
-    gamertag = existing_gamertag or gamertag_resolved
+    # Detect gamertag rename
+    if existing_gamertag and gamertag_resolved and existing_gamertag != gamertag_resolved:
+        print(f"\n[!] Gamertag changed: {existing_gamertag} → {gamertag_resolved}")
+        rename_account(existing_gamertag, gamertag_resolved)
+        gamertag = gamertag_resolved
+        print(f"[+] Account renamed successfully.")
+    else:
+        gamertag = existing_gamertag or gamertag_resolved
 
     if not gamertag:
         gamertag = input("  Enter gamertag label: ").strip()
@@ -1618,6 +1628,41 @@ def cmd_add():
         print()
 
 
+def rename_account(old_gamertag, new_gamertag):
+    """Rename an account: move directory, update accounts.json and batch_lists.json."""
+    import shutil
+    old_dir = account_dir(old_gamertag)
+    new_dir = account_dir(new_gamertag)
+    # Rename account directory
+    if os.path.isdir(old_dir):
+        if os.path.exists(new_dir):
+            # Merge: move files from old into new (shouldn't normally happen)
+            for f in os.listdir(old_dir):
+                shutil.move(os.path.join(old_dir, f), os.path.join(new_dir, f))
+            shutil.rmtree(old_dir)
+        else:
+            os.rename(old_dir, new_dir)
+    # Update accounts.json
+    accounts = load_accounts()
+    if old_gamertag in accounts:
+        meta = accounts.pop(old_gamertag)
+        meta["gamertag"] = new_gamertag
+        accounts[new_gamertag] = meta
+        save_accounts(accounts)
+    # Update batch_lists.json
+    try:
+        lists = _load_batch_lists()
+        changed = False
+        for name, gts in lists.items():
+            if old_gamertag in gts:
+                gts[gts.index(old_gamertag)] = new_gamertag
+                changed = True
+        if changed:
+            _save_batch_lists(lists)
+    except Exception:
+        pass
+
+
 def delete_account(gamertag):
     """Delete an account and all its data."""
     import shutil
@@ -1640,7 +1685,8 @@ def delete_account(gamertag):
 
 
 def refresh_account_token(gamertag):
-    """Refresh an account's XBL3.0 token. Returns True on success.
+    """Refresh an account's XBL3.0 token.
+    Returns the (possibly renamed) gamertag on success, or None on failure.
     For HAR-only accounts (no refresh token), triggers device code auth."""
     debug(f"refresh_account_token: gamertag={gamertag}")
     state_file = account_path(gamertag, "xbox_auth_state.json")
@@ -1659,15 +1705,15 @@ def refresh_account_token(gamertag):
         debug(f"  user answer: '{answer}'")
         if answer in ("n", "no"):
             print(f"    Skipping {gamertag}")
-            return True
+            return gamertag
     try:
-        sisu_auth_for_account(existing_gamertag=gamertag)
-        debug(f"  refresh succeeded for {gamertag}")
-        return True
+        new_gt = sisu_auth_for_account(existing_gamertag=gamertag)
+        debug(f"  refresh succeeded for {gamertag} -> {new_gt}")
+        return new_gt or gamertag
     except Exception as e:
         debug(f"  refresh FAILED for {gamertag}: {e}")
         print(f"[!] Token refresh failed for {gamertag}: {e}")
-        return False
+        return None
 
 
 # ===========================================================================
@@ -1925,7 +1971,7 @@ def print_header():
     print()
 
 
-def _op_summary(label, success=True, detail="", elapsed=0):
+def _op_summary(label, success=True, detail="", elapsed=0, pause=True):
     """Print a post-operation summary banner."""
     mark = "+" if success else "!"
     m, s = divmod(int(elapsed), 60)
@@ -1934,8 +1980,9 @@ def _op_summary(label, success=True, detail="", elapsed=0):
     print(f"  [{mark}] {label}  [{time_str}]")
     if detail:
         print(f"      {detail}")
-    print()
-    input("  Press Enter to continue...")
+    if pause:
+        print()
+        input("  Press Enter to continue...")
 
 
 def banner(gamertag=None):
@@ -2772,6 +2819,11 @@ def merge_library(entitlements, catalog, gamertag=""):
             "isDemo":          cat.get("isDemo", False),
             "hasTrialSku":     cat.get("hasTrialSku", False),
             "hasAchievements": any(c.get("id") == "XblAchievements" for c in cat.get("capabilities", []) if isinstance(c, dict)),
+            # Achievement progress (from TitleHub)
+            "achievementsCurrent": th.get("achievement", {}).get("currentAchievements", 0) or 0,
+            "gamerscoreCurrent":   th.get("achievement", {}).get("currentGamerscore", 0) or 0,
+            "gamescoreTotal":      th.get("achievement", {}).get("totalGamerscore", 0) or 0,
+            "achievementPct":      th.get("achievement", {}).get("progressPercentage", 0) or 0,
             # Prices (USD)
             "priceUSD":        cat.get("priceUSD", 0),
             "currentPriceUSD": cat.get("currentPriceUSD", 0),
@@ -3861,6 +3913,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         'alt="XCT" style="height:24px;margin:0 4px 0 6px;vertical-align:middle">\n'
         '<div class="tab" id="tab-mkt" onclick="switchTab(\'marketplace\',this)" style="display:none">Store <span class="cnt" id="tab-mkt-cnt"></span></div>\n'
         '<div class="tab active" onclick="switchTab(\'library\',this)">Collection <span class="cnt" id="tab-lib-cnt"></span></div>\n'
+        '<div class="tab" id="tab-purch" onclick="switchTab(\'purchases\',this)" style="display:none">Purchases <span class="cnt" id="tab-purch-cnt"></span></div>\n'
         '<div class="tab" id="tab-gp" onclick="switchTab(\'gamepass\',this)" style="display:none">Game Pass <span class="cnt" id="tab-gp-cnt"></span></div>\n'
         '<div class="tab" id="tab-ph" onclick="switchTab(\'playhistory\',this)" style="display:none">Play History <span class="cnt" id="tab-ph-cnt"></span></div>\n'
         '<div class="tab" id="tab-hist" onclick="switchTab(\'history\',this)" style="display:none">Scan Log <span class="cnt" id="tab-hist-cnt"></span></div>\n'
@@ -4010,6 +4063,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<option value="all">All</option>'
         '<option value="has">Has Achievements</option>'
         '<option value="no">No Achievements</option>'
+        '<option value="earned">Achievements Earned</option>'
+        '<option value="notearned">No Achievements Earned</option>'
         '</select></div>\n'
         '<div class="filter-group"><div class="filter-label">Sort</div>'
         '<select id="lib-sort" onchange="libSortCol=null;filterLib()"><option value="name">Name</option>'
@@ -4023,6 +4078,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<option value="acqAsc">Purchased (Oldest)</option>'
         '<option value="playDesc">Last Played (Recent)</option>'
         '<option value="playAsc">Last Played (Oldest)</option>'
+        '<option value="achDesc">Achievement % (Highest)</option>'
+        '<option value="achAsc">Achievement % (Lowest)</option>'
+        '<option value="gsDesc">Gamerscore (Most)</option>'
+        '<option value="gsAsc">Gamerscore (Least)</option>'
         '<option value="platAsc">Platform A-Z</option></select></div>\n'
         '<div class="view-toggle"><button class="view-btn" onclick="setView(\'lib\',\'grid\',this)" title="Grid">&#9638;</button>'
         '<button class="view-btn active" onclick="setView(\'lib\',\'list\',this)" title="List">&#9776;</button></div>\n'
@@ -4080,9 +4139,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<option value="ratingCntDesc">Most Rated</option>'
         '<option value="platCntDesc">Most Platforms</option>'
         '</select></div>\n'
-        # Channel
+        # Channel (single-select)
         '<div class="mkt-sf"><div class="mkt-sf-label">Channel</div>'
-        '<div class="cb-drop mkt-cb-full" id="mkt-channel"><div class="cb-btn" onclick="toggleCB(this)">All Channels &#9662;</div><div class="cb-panel"></div></div></div>\n'
+        '<select id="mkt-channel" onchange="mktPage=0;filterMKT()" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px">'
+        '<option value="">All Products</option></select></div>\n'
         # Type
         '<div class="mkt-sf"><div class="mkt-sf-label">Type</div>'
         '<div class="cb-drop mkt-cb-full" id="mkt-type"><div class="cb-btn" onclick="toggleCB(this)">All Types &#9662;</div><div class="cb-panel"></div></div></div>\n'
@@ -4125,6 +4185,12 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<label class="mkt-tick"><input type="checkbox" id="mkt-ach" checked onchange="mktPage=0;filterMKT()"> Has Achievements</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-group" onchange="mktPage=0;filterMKT()"> Group editions</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-hideowned-ed" onchange="mktPage=0;filterMKT()"> Hide owned editions</label>\n'
+        '<div style="border-top:1px solid #333;margin:8px 0;padding-top:8px">'
+        '<div style="font-size:11px;color:#888;margin-bottom:4px">Exclusions</div>'
+        '<label class="mkt-tick"><input type="checkbox" id="mkt-nosub" onchange="mktPage=0;filterMKT()"> Hide subscription games</label>\n'
+        '<label class="mkt-tick"><input type="checkbox" id="mkt-nodemo" onchange="mktPage=0;filterMKT()"> Hide demos</label>\n'
+        '<label class="mkt-tick"><input type="checkbox" id="mkt-noplayed" onchange="mktPage=0;filterMKT()"> Hide played games</label>\n'
+        '</div>\n'
         # Last scan info (moved from top)
         '<div id="mkt-scan-banner" style="font-size:11px;color:#666;margin-top:14px;padding-top:10px;border-top:1px solid #222"></div>\n'
         '</div>\n'
@@ -4168,6 +4234,85 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<input type="file" id="imp-file2" accept=".json" style="display:none" onchange="xctImport(this)">'
         '</div>\n'
         '<div id="imp-list"></div>\n'
+        '</div>\n'
+
+        # -- Purchases section --
+        '<div class="section" id="purchases">\n'
+        '<div class="mkt-layout">\n'
+        # -- Left sidebar filters --
+        '<div class="mkt-sidebar">\n'
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
+        '<span style="font-weight:600;font-size:14px;color:#ccc">Filters</span>'
+        '<span class="pill" onclick="clearPurchFilters()" style="font-size:11px;padding:3px 8px;margin:0" title="Reset all filters">Clear All</span>'
+        '</div>\n'
+        # Search
+        '<div class="mkt-sf"><input type="text" id="purch-search" placeholder="Search..." oninput="purchPage=0;filterPurchases()" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px;box-sizing:border-box"></div>\n'
+        # Sort
+        '<div class="mkt-sf"><div class="mkt-sf-label">Sort By</div>'
+        '<select id="purch-sort" onchange="purchPage=0;filterPurchases()">'
+        '<option value="dateDesc" selected>Purchase Date (Newest)</option>'
+        '<option value="dateAsc">Purchase Date (Oldest)</option>'
+        '<option value="name">Name</option>'
+        '<option value="priceDesc">Price Paid (High-Low)</option>'
+        '<option value="priceAsc">Price Paid (Low-High)</option>'
+        '<option value="pub">Publisher</option>'
+        '</select></div>\n'
+        # Gamertag
+        '<div class="mkt-sf"><div class="mkt-sf-label">Gamertag</div>'
+        '<div class="cb-drop mkt-cb-full" id="purch-gt"><div class="cb-btn" onclick="toggleCB(this)">All Gamertags &#9662;</div><div class="cb-panel"></div></div></div>\n'
+        # Type (Game, Durable, Fee, Application, PASS, Consumable, etc.)
+        '<div class="mkt-sf"><div class="mkt-sf-label">Type</div>'
+        '<div class="cb-drop mkt-cb-full" id="purch-type"><div class="cb-btn" onclick="toggleCB(this)">All Types &#9662;</div><div class="cb-panel"></div></div></div>\n'
+        # Status (Fulfilled, None, Revoked, Canceled)
+        '<div class="mkt-sf"><div class="mkt-sf-label">Status</div>'
+        '<div class="cb-drop mkt-cb-full" id="purch-status"><div class="cb-btn" onclick="toggleCB(this)">All Statuses &#9662;</div><div class="cb-panel"></div></div></div>\n'
+        # Market
+        '<div class="mkt-sf"><div class="mkt-sf-label">Market</div>'
+        '<div class="cb-drop mkt-cb-full" id="purch-market"><div class="cb-btn" onclick="toggleCB(this)">All Markets &#9662;</div><div class="cb-panel"></div></div></div>\n'
+        # Currency
+        '<div class="mkt-sf"><div class="mkt-sf-label">Currency</div>'
+        '<div class="cb-drop mkt-cb-full" id="purch-currency"><div class="cb-btn" onclick="toggleCB(this)">All Currencies &#9662;</div><div class="cb-panel"></div></div></div>\n'
+        # Purchase Year
+        '<div class="mkt-sf"><div class="mkt-sf-label">Purchase Year</div>'
+        '<div class="cb-drop mkt-cb-full" id="purch-year"><div class="cb-btn" onclick="toggleCB(this)">All Years &#9662;</div><div class="cb-panel"></div></div></div>\n'
+        # Publisher
+        '<div class="mkt-sf"><div class="mkt-sf-label">Publisher</div>'
+        '<div class="cb-drop mkt-cb-full" id="purch-pub"><div class="cb-btn" onclick="toggleCB(this)">All Publishers &#9662;</div><div class="cb-panel"></div></div></div>\n'
+        # Category
+        '<div class="mkt-sf"><div class="mkt-sf-label">Category</div>'
+        '<div class="cb-drop mkt-cb-full" id="purch-cat"><div class="cb-btn" onclick="toggleCB(this)">All Categories &#9662;</div><div class="cb-panel"></div></div></div>\n'
+        # Platform
+        '<div class="mkt-sf"><div class="mkt-sf-label">Platform</div>'
+        '<div class="cb-drop mkt-cb-full" id="purch-plat"><div class="cb-btn" onclick="toggleCB(this)">All Platforms &#9662;</div><div class="cb-panel"></div></div></div>\n'
+        # Price filter
+        '<div class="mkt-sf"><div class="mkt-sf-label">Price</div>'
+        '<select id="purch-price" onchange="purchPage=0;filterPurchases()" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px">'
+        '<option value="">All</option><option value="paid">Paid Only</option><option value="free">Free Only</option></select></div>\n'
+        # Gift filter
+        '<div class="mkt-sf"><div class="mkt-sf-label">Gift</div>'
+        '<select id="purch-gift" onchange="purchPage=0;filterPurchases()" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px">'
+        '<option value="">All</option><option value="gift">Gifts Only</option><option value="nogift">Non-Gifts Only</option></select></div>\n'
+        # Collection Overlap
+        '<div class="mkt-sf"><div class="mkt-sf-label">Collection Overlap</div>'
+        '<select id="purch-overlap" onchange="purchPage=0;filterPurchases()" style="width:100%;padding:6px 8px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:5px;font-size:12px">'
+        '<option value="">All Items</option>'
+        '<option value="both">In Both (Purchased + In Collection)</option>'
+        '<option value="purchonly">Purchase Only (Not in Collection)</option>'
+        '<option value="collonly">Collection Only (Not Purchased)</option>'
+        '</select></div>\n'
+        '</div>\n'
+        # -- Right content area --
+        '<div class="mkt-content">\n'
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
+        '<div class="cbar" id="purch-cbar" style="margin:0;font-size:12px"></div>'
+        '<div style="margin-left:auto" class="view-toggle"><button class="view-btn" onclick="setView(\'purch\',\'grid\',this)" title="Grid">&#9638;</button>'
+        '<button class="view-btn active" onclick="setView(\'purch\',\'list\',this)" title="List">&#9776;</button></div>'
+        '</div>\n'
+        '<div class="grid" id="purch-grid" style="display:none"></div>\n'
+        '<div class="list-view gp-list" id="purch-list"></div>\n'
+        '<div class="pagination" id="purch-pager" style="display:flex;justify-content:center;align-items:center;gap:8px;padding:16px 0;flex-wrap:wrap"></div>\n'
+        '</div>\n'
+        '</div>\n'
         '</div>\n'
 
         # -- GFWL section --
@@ -4217,7 +4362,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # -- Admin section (hosted mode only, shown for admin users) --
         '<div class="section" id="admin">\n'
         '<h2>Admin Panel</h2>\n'
-        '<p class="sub" style="color:#888">Marketplace scan controls and subscription management</p>\n'
+        '<p class="sub" style="color:#888">Marketplace scans, subscription management, and CDN version monitoring</p>\n'
         '<div style="display:flex;flex-wrap:wrap;gap:12px;margin:16px 0">\n'
         '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:16px;flex:1;min-width:280px">\n'
         '<h3 style="margin:0 0 12px;font-size:14px;color:#ccc">Marketplace Scans</h3>\n'
@@ -4254,6 +4399,28 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<h3 style="margin:0 0 12px;font-size:14px;color:#ccc">Recent Scans</h3>\n'
         '<div id="admin-scans-list" style="font-size:12px;color:#aaa"></div>\n'
         '</div>\n'
+
+        # -- CDN Version Monitor card --
+        '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px">\n'
+        '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:16px;flex:1;min-width:280px">\n'
+        '<h3 style="margin:0 0 12px;font-size:14px;color:#ccc">CDN Version Monitor</h3>\n'
+        '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">\n'
+        '<button class="xct-iobtn" onclick="_cdnMonScan(\'full\')">Full Scan</button>\n'
+        '<button class="xct-iobtn" onclick="_cdnMonScan(\'quick\')">Quick Scan</button>\n'
+        '<button class="xct-iobtn" onclick="_cdnMonStop()" style="background:#633">Stop</button>\n'
+        '</div>\n'
+        '<div id="cdn-mon-status" style="font-size:12px;color:#888"></div>\n'
+        '</div>\n'
+        '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:16px;flex:1;min-width:280px">\n'
+        '<h3 style="margin:0 0 12px;font-size:14px;color:#ccc">Purged Versions <span id="cdn-mon-purged-count" style="color:#f44;font-size:12px"></span></h3>\n'
+        '<div id="cdn-mon-purged" style="font-size:12px;color:#aaa;max-height:300px;overflow:auto"></div>\n'
+        '</div>\n'
+        '</div>\n'
+        '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:16px;margin-top:8px">\n'
+        '<h3 style="margin:0 0 12px;font-size:14px;color:#ccc">CDN Monitor Scans</h3>\n'
+        '<div id="cdn-mon-scans-list" style="font-size:12px;color:#aaa"></div>\n'
+        '</div>\n'
+
         '</div>\n'
 
         # -- Context menu + Modal --
@@ -4275,7 +4442,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(typeof LIB==='undefined'){var LIB=[],GP=[],PH=[],MKT=[],HISTORY=[],"
         "DEFAULT_FLAGS={},ACCOUNTS=[],RATES={},GC_FACTOR=0.81,"
         "CDN_DB=[],GFWL=[],CDN_LEADERBOARD=[],CDN_LB_STATS={},"
-        "CDN_SYNC_META={},CDN_SYNC_USER='',CDN_SYNC_LOG=[]}"
+        "CDN_SYNC_META={},CDN_SYNC_USER='',CDN_SYNC_LOG=[],PURCHASES=[]}"
         '</script>\n'
     )
 
@@ -4317,10 +4484,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "function _rowData(items){"
         "return _kinds.map(k=>{const a=items.filter(x=>x.productKind===k);"
         "let v=0;a.forEach(x=>{v+=(x.priceUSD||0)});return{cnt:a.length,val:v}})}\n"
-        "function _buildSummaryTable(base,filtered){"
+        "function _buildSummaryTable(base,filtered,preDeduGTs){"
         "const _ownedRaw=base.filter(x=>x.owned);const _oSeen={};const ownedDD=_ownedRaw.filter(x=>{if(_oSeen[x.productId])return false;_oSeen[x.productId]=1;return true});"
         "const ownedGTs=new Set(_ownedRaw.map(x=>x.gamertag||'')).size||(_ownedRaw.length?1:0);"
-        "const fGTs=new Set(filtered.map(x=>x.gamertag||'')).size||(filtered.length?1:0);"
+        "const fGTs=preDeduGTs||new Set(filtered.map(x=>x.gamertag||'')).size||(filtered.length?1:0);"
         "const _gpRaw=base.filter(x=>x.onGamePass&&!x.owned);const _gpSeen={};const gpDD=_gpRaw.filter(x=>{if(_gpSeen[x.productId])return false;_gpSeen[x.productId]=1;return true});"
         "const libD=_rowData(ownedDD),filD=_rowData(filtered),gpD=_rowData(gpDD);"
         "let h='<table class=\"stbl\"><thead><tr><th></th>"
@@ -4377,6 +4544,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.querySelectorAll('#marketplace .cb-panel input[type=checkbox]').forEach(c=>c.checked=true);"
         "document.querySelectorAll('#marketplace .cb-clear').forEach(c=>c.textContent='Clear All');"
         "document.getElementById('mkt-sort').value='relDesc';"
+        "document.getElementById('mkt-channel').value='';"
         # Reset Release Status to only 'released' checked
         "document.querySelectorAll('#mkt-preorder .cb-panel input').forEach(c=>{c.checked=c.value==='released'});"
         # Reset binary checkboxes
@@ -4385,6 +4553,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('mkt-ach').checked=true;"
         "document.getElementById('mkt-group').checked=false;"
         "document.getElementById('mkt-hideowned-ed').checked=false;"
+        "if(document.getElementById('mkt-nosub'))document.getElementById('mkt-nosub').checked=false;"
+        "if(document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=false;"
+        "if(document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=false;"
         "document.getElementById('mkt-search').value='';"
         "document.getElementById('mkt-saved').value='';"
         "mktSortCol=null;mktPage=0;"
@@ -4419,17 +4590,21 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const so=document.getElementById('mkt-sort').value;"
         "if(so&&so!=='relDesc')p.set('sort',so);"
         # cb-drops
-        "const cbMap=[['mkt-channel','ch'],['mkt-type','type'],['mkt-plat','plat'],"
+        "var chV=document.getElementById('mkt-channel').value;if(chV)p.set('ch',chV);"
+        "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
         "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-region','region']];"
-        "cbMap.forEach(([id,key])=>{const v=_mktGetCBChecked(id);if(v)p.set(key,v.join(','))});"
+        "cbMap.forEach(([id,key])=>{const v=_mktGetCBChecked(id);if(v&&v.length)p.set(key,v.join(','))});"
         # binary checkboxes
         "if(document.getElementById('mkt-xcloud').checked)p.set('xcloud','1');"
         "if(document.getElementById('mkt-trial').checked)p.set('trial','1');"
         "if(document.getElementById('mkt-ach').checked)p.set('ach','1');"
         "if(document.getElementById('mkt-group').checked)p.set('group','1');"
         "if(document.getElementById('mkt-hideowned-ed').checked)p.set('hoe','1');"
+        "if(document.getElementById('mkt-nosub')&&document.getElementById('mkt-nosub').checked)p.set('nosub','1');"
+        "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');"
+        "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');"
         "_setRoute('store',p.toString())}\n"
 
         "function _mktDeserializeFilters(qsArg){"
@@ -4441,7 +4616,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const p=new URLSearchParams(qs);"
         "if(p.has('q'))document.getElementById('mkt-search').value=p.get('q');"
         "if(p.has('sort'))document.getElementById('mkt-sort').value=p.get('sort');"
-        "const cbMap=[['mkt-channel','ch'],['mkt-type','type'],['mkt-plat','plat'],"
+        "if(p.has('ch'))document.getElementById('mkt-channel').value=p.get('ch');"
+        "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
         "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-region','region']];"
@@ -4451,6 +4627,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('ach')==='1')document.getElementById('mkt-ach').checked=true;"
         "if(p.get('group')==='1')document.getElementById('mkt-group').checked=true;"
         "if(p.get('hoe')==='1')document.getElementById('mkt-hideowned-ed').checked=true;"
+        "if(p.get('nosub')==='1'&&document.getElementById('mkt-nosub'))document.getElementById('mkt-nosub').checked=true;"
+        "if(p.get('nodemo')==='1'&&document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=true;"
+        "if(p.get('noplayed')==='1'&&document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=true;"
         "return true}\n"
 
         # -- Library filter serialization --
@@ -4544,16 +4723,20 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(q)p.set('q',q);"
         "const so=document.getElementById('mkt-sort').value;"
         "if(so&&so!=='relDesc')p.set('sort',so);"
-        "const cbMap=[['mkt-channel','ch'],['mkt-type','type'],['mkt-plat','plat'],"
+        "var chV=document.getElementById('mkt-channel').value;if(chV)p.set('ch',chV);"
+        "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
         "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-region','region']];"
-        "cbMap.forEach(([id,key])=>{const v=_mktGetCBChecked(id);if(v)p.set(key,v.join(','))});"
+        "cbMap.forEach(([id,key])=>{const v=_mktGetCBChecked(id);if(v&&v.length)p.set(key,v.join(','))});"
         "if(document.getElementById('mkt-xcloud').checked)p.set('xcloud','1');"
         "if(document.getElementById('mkt-trial').checked)p.set('trial','1');"
         "if(document.getElementById('mkt-ach').checked)p.set('ach','1');"
         "if(document.getElementById('mkt-group').checked)p.set('group','1');"
         "if(document.getElementById('mkt-hideowned-ed').checked)p.set('hoe','1');"
+        "if(document.getElementById('mkt-nosub')&&document.getElementById('mkt-nosub').checked)p.set('nosub','1');"
+        "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');"
+        "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');"
         "_mktSavedFilters.push({name:name,params:p.toString()});"
         "localStorage.setItem('xct_mkt_saved',JSON.stringify(_mktSavedFilters));"
         "_mktInitSaved();sel.value='';return}"
@@ -4564,18 +4747,23 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.querySelectorAll('#marketplace .cb-panel input[type=checkbox]').forEach(c=>c.checked=true);"
         "document.querySelectorAll('#marketplace .cb-clear').forEach(c=>c.textContent='Clear All');"
         "document.getElementById('mkt-sort').value='relDesc';"
+        "document.getElementById('mkt-channel').value='';"
         "document.querySelectorAll('#mkt-preorder .cb-panel input').forEach(c=>{c.checked=c.value==='released'});"
         "document.getElementById('mkt-xcloud').checked=false;"
         "document.getElementById('mkt-trial').checked=false;"
         "document.getElementById('mkt-ach').checked=true;"
         "document.getElementById('mkt-group').checked=false;"
         "document.getElementById('mkt-hideowned-ed').checked=false;"
+        "if(document.getElementById('mkt-nosub'))document.getElementById('mkt-nosub').checked=false;"
+        "if(document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=false;"
+        "if(document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=false;"
         "document.getElementById('mkt-search').value='';"
         # Apply saved params
         "const p=new URLSearchParams(found.params);"
         "if(p.has('q'))document.getElementById('mkt-search').value=p.get('q');"
         "if(p.has('sort'))document.getElementById('mkt-sort').value=p.get('sort');"
-        "const cbMap=[['mkt-channel','ch'],['mkt-type','type'],['mkt-plat','plat'],"
+        "if(p.has('ch'))document.getElementById('mkt-channel').value=p.get('ch');"
+        "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
         "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-region','region']];"
@@ -4585,6 +4773,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('ach')==='1')document.getElementById('mkt-ach').checked=true;"
         "if(p.get('group')==='1')document.getElementById('mkt-group').checked=true;"
         "if(p.get('hoe')==='1')document.getElementById('mkt-hideowned-ed').checked=true;"
+        "if(p.get('nosub')==='1'&&document.getElementById('mkt-nosub'))document.getElementById('mkt-nosub').checked=true;"
+        "if(p.get('nodemo')==='1'&&document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=true;"
+        "if(p.get('noplayed')==='1'&&document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=true;"
         "mktPage=0;filterMKT();sel.value=''}\n"
 
         "function _mktDeleteSaved(name){"
@@ -4791,7 +4982,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "fillStatic('mkt-region',[['myregions','In My Regions'],['notmy','Not in My Regions']],'filterMKT');\n"
         # Fetch dynamic dropdowns from API
         "fetch('/api/v1/store/filters').then(function(r){return r.json()}).then(function(data){\n"
-        "fill('mkt-channel',data.channels.map(function(c){return[c.value,c.value+' ('+c.count+')']}),'filterMKT');\n"
+        "var chSel=document.getElementById('mkt-channel');data.channels.forEach(function(c){var o=document.createElement('option');o.value=c.value;o.textContent=c.value+' ('+c.count+')';chSel.appendChild(o)});\n"
         "fill('mkt-type',data.types.map(function(t){return[t.value,t.value+' ('+t.count+')']}),'filterMKT');\n"
         "document.querySelectorAll('#mkt-type .cb-panel input').forEach(c=>{c.checked=c.value==='Game'});\n"
         "fill('mkt-plat',data.platforms.map(function(p){return[p.value,p.value+' ('+p.count+')']}),'filterMKT');\n"
@@ -4865,7 +5056,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('mkt-scan-banner').textContent="
         "'Last scan: '+agoStr+' ('+(_MKT_LAST_SCAN.productsTotal||0).toLocaleString()+' products)'}\n"
         # Fill dropdowns from pre-built counts
-        "fill('mkt-channel',Object.entries(mChs).sort((a,b)=>b[1]-a[1]).map(([c,n])=>[c,c+' ('+n+')']),\'filterMKT\');\n"
+        "var chSel=document.getElementById('mkt-channel');Object.entries(mChs).sort((a,b)=>b[1]-a[1]).forEach(([c,n])=>{var o=document.createElement('option');o.value=c;o.textContent=c+' ('+n+')';chSel.appendChild(o)});\n"
         "fill('mkt-type',Object.entries(mTypes).sort((a,b)=>b[1]-a[1]).map(([t,n])=>[t,t+' ('+n+')']),\'filterMKT\');\n"
         "document.querySelectorAll('#mkt-type .cb-panel input').forEach(c=>{c.checked=c.value==='Game'});\n"
         "fill('mkt-plat',Object.entries(mPlats).sort((a,b)=>b[1]-a[1]).map(([p,n])=>[p,p+' ('+n+')']),\'filterMKT\');\n"
@@ -4900,7 +5091,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(typeof _loadTabData==='function')_loadTabData(id);"
         "var _slugMap={library:'library',marketplace:'store',gamepass:'gamepass',"
         "playhistory:'playhistory',history:'scanlog',gamertags:'gamertags',"
-        "gfwl:'gfwl',cdnsync:'xvcdb',imports:'imports',achievements:'achievements',admin:'admin'};"
+        "gfwl:'gfwl',cdnsync:'xvcdb',imports:'imports',purchases:'purchases',achievements:'achievements',admin:'admin'};"
         "var slug=_slugMap[id]||id;"
         "_setRoute(slug,'')}\n"
 
@@ -5160,6 +5351,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(item.isTrial)badges+='<span class=\"badge trial\">TRIAL</span> ';\n"
         "if(item.hasTrialSku&&!item.isTrial)badges+='<span class=\"badge\" style=\"background:#1a2a1a;color:#4caf50\">FREE TRIAL</span> ';\n"
         "if(!item.hasAchievements)badges+='<span class=\"badge\" style=\"background:#2a1a1a;color:#af4c4c\">NO ACHIEVEMENTS</span> ';\n"
+        "else if(item.achievementsCurrent>0)badges+=`<span class=\"badge\" style=\"background:#1a2a1a;color:#4caf50\">${item.gamerscoreCurrent}/${item.gamescoreTotal}G (${item.achievementPct}%)</span> `;\n"
         "if(item.isDemo)badges+='<span class=\"badge demo\">DEMO</span> ';\n"
         "if(flagged==='beta')badges+='<span class=\"badge flagged\">BETA/DEMO</span> ';\n"
         "if(flagged==='delisted')badges+='<span class=\"badge\" style=\"background:#3a2a1a;color:#ff9800\">DELISTED</span> ';\n"
@@ -5335,6 +5527,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "||(a.title||'').localeCompare(b.title||''));\n"
         "else if(so==='playAsc')filtered.sort((a,b)=>{const ap=a.lastTimePlayed||'',bp=b.lastTimePlayed||'';"
         "if(!ap&&bp)return 1;if(ap&&!bp)return -1;return ap.localeCompare(bp)||(a.title||'').localeCompare(b.title||'')});\n"
+        "else if(so==='achDesc')filtered.sort((a,b)=>(b.achievementPct||0)-(a.achievementPct||0)"
+        "||(a.title||'').localeCompare(b.title||''));\n"
+        "else if(so==='achAsc')filtered.sort((a,b)=>{const aa=a.achievementPct||0,ba=b.achievementPct||0;"
+        "if(!aa&&ba)return 1;if(aa&&!ba)return -1;return aa-ba||(a.title||'').localeCompare(b.title||'')});\n"
+        "else if(so==='gsDesc')filtered.sort((a,b)=>(b.gamerscoreCurrent||0)-(a.gamerscoreCurrent||0)"
+        "||(a.title||'').localeCompare(b.title||''));\n"
+        "else if(so==='gsAsc')filtered.sort((a,b)=>{const ag=a.gamerscoreCurrent||0,bg=b.gamerscoreCurrent||0;"
+        "if(!ag&&bg)return 1;if(ag&&!bg)return -1;return ag-bg||(a.title||'').localeCompare(b.title||'')});\n"
         "else if(so==='platAsc')filtered.sort((a,b)=>((a.platforms||[])[0]||'zzz').localeCompare((b.platforms||[])[0]||'zzz')"
         "||(a.title||'').localeCompare(b.title||''));\n"
         "if(libSortCol){const d=libSortDir==='asc'?1:-1;"
@@ -5351,6 +5551,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "usd:(a,b)=>((a.priceUSD||0)-(b.priceUSD||0))*d||(a.title||'').localeCompare(b.title||'')};"
         "if(g[libSortCol])filtered.sort(g[libSortCol])}\n"
         '\n'
+        # Capture filtered GT count before dedup
+        "const _filtGTs=new Set(filtered.map(x=>x.gamertag||'')).size||(filtered.length?1:0);\n"
         # Deduplicate by productId across gamertags
         "const _pidMap={};"
         "filtered.forEach(item=>{const pid=item.productId;"
@@ -5380,7 +5582,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(trialF==='has')filtered=filtered.filter(item=>item.hasTrialSku);"
         "else if(trialF==='no')filtered=filtered.filter(item=>!item.hasTrialSku);\n"
         "if(achF==='has')filtered=filtered.filter(item=>item.hasAchievements);"
-        "else if(achF==='no')filtered=filtered.filter(item=>!item.hasAchievements);\n"
+        "else if(achF==='no')filtered=filtered.filter(item=>!item.hasAchievements);"
+        "else if(achF==='earned')filtered=filtered.filter(item=>item.achievementsCurrent>0);"
+        "else if(achF==='notearned')filtered=filtered.filter(item=>item.hasAchievements&&item.achievementsCurrent===0);\n"
 
         "const shown=filtered.length;\n"
         "function colArrow(c){return libSortCol===c?(libSortDir==='asc'?' \\u25B2':' \\u25BC'):''}\n"
@@ -5495,7 +5699,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "lh+=_renderRow(item,'',0)\n"
         "}}\n"
         "g.innerHTML=gh;l.innerHTML=lh;\n"
-        "document.getElementById('lib-cbar').innerHTML=_buildSummaryTable(_pf,filtered);"
+        "document.getElementById('lib-cbar').innerHTML=_buildSummaryTable(_pf,filtered,_filtGTs);"
         "if(document.getElementById('library').classList.contains('active'))_libSerializeFilters()}\n"
         '\n'
 
@@ -5679,7 +5883,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         'function _filterMKTLocal(){\n'
         "if(typeof MKT==='undefined'||!MKT.length)return;\n"
         "const q=document.getElementById('mkt-search').value.toLowerCase();\n"
-        "const chVals=getCBVals('mkt-channel');\n"
+        "const chVal=document.getElementById('mkt-channel').value;\n"
         "const tVals=getCBVals('mkt-type');\n"
         "const platVals=getCBVals('mkt-plat');\n"
         "const pubVals=getCBVals('mkt-pub');\n"
@@ -5698,13 +5902,16 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const so=document.getElementById('mkt-sort').value;\n"
         "const doGroup=document.getElementById('mkt-group')&&document.getElementById('mkt-group').checked;\n"
         "const hideOwnedEd=document.getElementById('mkt-hideowned-ed')&&document.getElementById('mkt-hideowned-ed').checked;\n"
+        "const nosubF=document.getElementById('mkt-nosub')&&document.getElementById('mkt-nosub').checked;\n"
+        "const nodemoF=document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked;\n"
+        "const noplayedF=document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked;\n"
 
         "const g=document.getElementById('mkt-grid');const l=document.getElementById('mkt-list');\n"
         'let filtered=MKT.filter(item=>{\n'
         "if(q&&!(item.title||'').toLowerCase().includes(q)&&!(item.publisher||'').toLowerCase().includes(q)"
         "&&!(item.developer||'').toLowerCase().includes(q)"
         "&&!(item.productId||'').toLowerCase().includes(q))return false;\n"
-        "if(chVals&&!(item.channels||[]).some(c=>chVals.includes(c)))return false;\n"
+        "if(chVal&&!(item.channels||[]).includes(chVal))return false;\n"
         "if(tVals){const tk=item.productKind==='Durable'?'DLC':item.productKind;if(!tVals.includes(tk))return false}\n"
         "if(platVals&&!(item.platforms||[]).some(p=>platVals.includes(p)))return false;\n"
         "if(pubVals&&!pubVals.includes(item.publisher||''))return false;\n"
@@ -5750,6 +5957,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(xcloudF&&!item.xCloudStreamable)return false;\n"
         "if(trialF&&!item.hasTrialSku)return false;\n"
         "if(achF&&!item.hasAchievements)return false;\n"
+        # Exclusion filters
+        "if(nosubF&&(item.subscriptions||[]).length)return false;\n"
+        "if(nodemoF&&/\\bDemo$/i.test(item.title||''))return false;\n"
+        "if(noplayedF&&PH.some(ph=>ph.productId===item.productId&&ph.lastTimePlayed))return false;\n"
         # Release Status cb-drop
         "if(preorderVals){let rp=false;"
         "if(preorderVals.includes('released')&&!item.isPreOrder)rp=true;"
@@ -5931,18 +6142,24 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(so)p.set('sort',so);\n"
         "p.set('page',mktPage);\n"
         "p.set('per_page',MKT_PAGE_SIZE);\n"
+        # Channel (single select)
+        "var chV=document.getElementById('mkt-channel').value;if(chV)p.set('ch',chV);\n"
         # cb-drops
-        "const cbMap=[['mkt-channel','ch'],['mkt-type','type'],['mkt-plat','plat'],"
+        "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
         "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-region','regions']];\n"
-        "cbMap.forEach(function(pair){var v=_mktGetCBChecked(pair[0]);if(v)p.set(pair[1],v.join(','))});\n"
+        "cbMap.forEach(function(pair){var v=_mktGetCBChecked(pair[0]);if(v&&v.length)p.set(pair[1],v.join(','))});\n"
         # binary checkboxes
         "if(document.getElementById('mkt-xcloud').checked)p.set('xcloud','1');\n"
         "if(document.getElementById('mkt-trial').checked)p.set('trial','1');\n"
         "if(document.getElementById('mkt-ach').checked)p.set('ach','1');\n"
         "if(document.getElementById('mkt-group')&&document.getElementById('mkt-group').checked)p.set('group','1');\n"
         "if(document.getElementById('mkt-hideowned-ed')&&document.getElementById('mkt-hideowned-ed').checked)p.set('hoe','1');\n"
+        # Exclusion checkboxes
+        "if(document.getElementById('mkt-nosub')&&document.getElementById('mkt-nosub').checked)p.set('nosub','1');\n"
+        "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');\n"
+        "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');\n"
         # Fetch
         "var h={};if(window._xctApiKey)h['Authorization']='Bearer '+window._xctApiKey;\n"
         "fetch('/api/v1/store/products?'+p.toString(),{headers:h,signal:ac.signal})"
@@ -6655,7 +6872,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         'try{initDropdowns();_mktInitSaved();\n'
         "var _revSlug={library:'library',store:'marketplace',marketplace:'marketplace',gamepass:'gamepass',"
         "playhistory:'playhistory',scanlog:'history',gamertags:'gamertags',"
-        "gfwl:'gfwl',xvcdb:'cdnsync',imports:'imports'};\n"
+        "gfwl:'gfwl',xvcdb:'cdnsync',imports:'imports',purchases:'purchases'};\n"
         "function _deserializeTab(t,qs){"
         "if(t==='marketplace'){_mktDeserializeFilters(qs);filterMKT()}"
         "else if(t==='library'){_libDeserializeFilters(qs);filterLib()}"
@@ -6679,7 +6896,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '_cdnSyncBuildFlat();renderCDNSync();renderCDNLeaderboard();renderCDNSyncLog();\n'
         "window.addEventListener('hashchange',_hashNav);\n"
         "if(window._xctHosted)window.addEventListener('popstate',_hashNav);\n"
-        "document.getElementById('loading-overlay').style.display='none';\n"
+        "if(!window._xctHosted||!localStorage.getItem('xct_api_key'))document.getElementById('loading-overlay').style.display='none';\n"
         '});\n'
 
         # -- Admin panel JS --
@@ -6787,7 +7004,340 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "el.innerHTML=h\n"
         "}).catch(function(e){document.getElementById('admin-cl-body').textContent='Error: '+e.message})}\n"
 
-        "function _loadTabData(id){if(id==='admin')_adminLoadScans()}\n"
+        # -- CDN Version Monitor JS --
+        "function _cdnMonScan(type){\n"
+        "var s=document.getElementById('cdn-mon-status');\n"
+        "s.textContent='Starting '+type+' CDN scan...';\n"
+        "s.style.color='#ff0';\n"
+        "fetch('/api/v1/admin/cdn-monitor/scan',{method:'POST',headers:{'Authorization':'Bearer '+window._xctApiKey,'Content-Type':'application/json'},body:JSON.stringify({scan_type:type})})"
+        ".then(function(r){return r.json()}).then(function(d){\n"
+        "if(d.ok){s.textContent=d.message||'Scan started';s.style.color='#4caf50';_cdnMonPollStatus()}"
+        "else{s.textContent='Error: '+(d.error||'unknown');s.style.color='#f44'}\n"
+        "}).catch(function(e){s.textContent='Error: '+e.message;s.style.color='#f44'})}\n"
+
+        "function _cdnMonStop(){\n"
+        "fetch('/api/v1/admin/cdn-monitor/stop',{method:'POST',headers:{'Authorization':'Bearer '+window._xctApiKey}})"
+        ".then(function(r){return r.json()}).then(function(d){\n"
+        "var s=document.getElementById('cdn-mon-status');\n"
+        "s.textContent=d.message||'Stopped';s.style.color='#ff9800';\n"
+        "}).catch(function(e){document.getElementById('cdn-mon-status').textContent='Error: '+e.message})}\n"
+
+        "var _cdnMonPollTimer=null;\n"
+        "function _cdnMonPollStatus(){\n"
+        "clearInterval(_cdnMonPollTimer);\n"
+        "_cdnMonPollTimer=setInterval(function(){\n"
+        "fetch('/api/v1/admin/cdn-monitor/status',{headers:{'Authorization':'Bearer '+window._xctApiKey}})"
+        ".then(function(r){return r.json()}).then(function(d){\n"
+        "var s=document.getElementById('cdn-mon-status');\n"
+        "if(!d.active){clearInterval(_cdnMonPollTimer);_cdnMonPollTimer=null;\n"
+        "s.textContent='Idle'+(d.last_log?' — Last: '+d.last_log:'');s.style.color='#888';\n"
+        "_cdnMonLoadScans();_cdnMonLoadPurged();return}\n"
+        "var txt='Scanning: '+d.current;\n"
+        "if(d.progress)txt+=' ('+d.progress+')';\n"
+        "if(d.last_log)txt+=' — '+d.last_log;\n"
+        "s.textContent=txt;s.style.color='#ff0';\n"
+        "}).catch(function(){})},3000)}\n"
+
+        "function _cdnMonRefreshStatus(){\n"
+        "fetch('/api/v1/admin/cdn-monitor/status',{headers:{'Authorization':'Bearer '+window._xctApiKey}})"
+        ".then(function(r){return r.json()}).then(function(d){\n"
+        "var s=document.getElementById('cdn-mon-status');\n"
+        "if(d.active){s.textContent='Scan in progress: '+d.current;s.style.color='#ff0';_cdnMonPollStatus()}\n"
+        "else{s.textContent='Idle'+(d.last_log?' — Last: '+d.last_log:'');s.style.color='#888'}\n"
+        "}).catch(function(){})}\n"
+
+        "function _cdnMonLoadScans(){\n"
+        "fetch('/api/v1/admin/cdn-monitor/scans',{headers:{'Authorization':'Bearer '+window._xctApiKey}})"
+        ".then(function(r){return r.json()}).then(function(d){\n"
+        "var el=document.getElementById('cdn-mon-scans-list');\n"
+        "if(!d.scans||!d.scans.length){el.textContent='No CDN monitor scans yet';return}\n"
+        "var h='<table style=\"width:100%;border-collapse:collapse\">';\n"
+        "h+='<tr style=\"border-bottom:1px solid #444;color:#888\"><th style=\"text-align:left;padding:6px 8px\">Time</th><th style=\"padding:6px 4px\">Type</th><th style=\"padding:6px 4px\">Status</th>"
+        "<th style=\"padding:6px 4px\">Checked</th><th style=\"padding:6px 4px\">Versions</th>"
+        "<th style=\"padding:6px 4px\">New</th><th style=\"padding:6px 4px\">Purged</th>"
+        "<th style=\"padding:6px 4px\">Errors</th><th style=\"padding:6px 4px\">Duration</th></tr>';\n"
+        "d.scans.forEach(function(s){\n"
+        "var ago=Math.round((Date.now()-new Date(s.completed_at||s.started_at).getTime())/60000);\n"
+        "var agoStr=ago<60?ago+'m ago':ago<1440?Math.round(ago/60)+'h ago':Math.round(ago/1440)+'d ago';\n"
+        "var col=s.status==='completed'?'#4caf50':s.status==='running'?'#ff0':'#f44';\n"
+        "h+='<tr style=\"border-bottom:1px solid #222\">';\n"
+        "h+='<td style=\"padding:5px 8px;white-space:nowrap\">'+agoStr+'</td>';\n"
+        "h+='<td style=\"text-align:center;padding:5px 4px\"><span style=\"background:#2196f3;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px\">'+s.scan_type+'</span></td>';\n"
+        "h+='<td style=\"text-align:center;padding:5px 4px;color:'+col+'\">'+s.status+'</td>';\n"
+        "h+='<td style=\"text-align:center;padding:5px 4px\">'+(s.content_ids_checked||0)+'/'+(s.content_ids_total||0)+'</td>';\n"
+        "h+='<td style=\"text-align:center;padding:5px 4px\">'+(s.versions_found||0)+'</td>';\n"
+        "h+='<td style=\"text-align:center;padding:5px 4px;color:#4caf50\">'+(s.new_versions||0)+'</td>';\n"
+        "h+='<td style=\"text-align:center;padding:5px 4px;color:'+(s.purged_detected?'#f44':'#888')+'\">'+(s.purged_detected||0)+'</td>';\n"
+        "h+='<td style=\"text-align:center;padding:5px 4px\">'+(s.errors||0)+'</td>';\n"
+        "h+='<td style=\"text-align:center;padding:5px 4px\">'+(s.duration_seconds?Math.round(s.duration_seconds)+'s':'-')+'</td>';\n"
+        "h+='</tr>'});\n"
+        "h+='</table>';el.innerHTML=h\n"
+        "}).catch(function(e){document.getElementById('cdn-mon-scans-list').textContent='Error: '+e.message})}\n"
+
+        "function _cdnMonLoadPurged(){\n"
+        "fetch('/api/v1/admin/cdn-monitor/purged',{headers:{'Authorization':'Bearer '+window._xctApiKey}})"
+        ".then(function(r){return r.json()}).then(function(d){\n"
+        "var el=document.getElementById('cdn-mon-purged');\n"
+        "var ct=document.getElementById('cdn-mon-purged-count');\n"
+        "if(!d.purged||!d.purged.length){el.textContent='No purged versions detected yet';ct.textContent='';return}\n"
+        "ct.textContent='('+d.purged.length+')';\n"
+        "var h='<table style=\"width:100%;border-collapse:collapse\">';\n"
+        "h+='<tr style=\"border-bottom:1px solid #444;color:#888\"><th style=\"text-align:left;padding:4px 6px\">Title</th><th style=\"padding:4px 6px\">Version</th><th style=\"padding:4px 6px\">Purged</th><th style=\"padding:4px 6px\">URL</th></tr>';\n"
+        "d.purged.forEach(function(p){\n"
+        "var pDate=p.purged_at?new Date(p.purged_at).toLocaleDateString('en-GB',{day:'2-digit',month:'short'}):'-';\n"
+        "var urlSnip=p.cdn_url?(p.cdn_url.length>50?'...'+p.cdn_url.slice(-45):p.cdn_url):'-';\n"
+        "h+='<tr style=\"border-bottom:1px solid #222\">';\n"
+        "h+='<td style=\"padding:3px 6px\" title=\"'+_esc(p.content_id)+'\">'+_esc(p.title||p.store_id||p.content_id)+'</td>';\n"
+        "h+='<td style=\"text-align:center;padding:3px 6px;color:#ff9800\">'+_esc(p.version||'-')+'</td>';\n"
+        "h+='<td style=\"text-align:center;padding:3px 6px;font-size:11px\">'+pDate+'</td>';\n"
+        "h+='<td style=\"padding:3px 6px;font-size:10px;color:#666;word-break:break-all\" title=\"'+_esc(p.cdn_url||'')+'\">'+_esc(urlSnip)+'</td>';\n"
+        "h+='</tr>'});\n"
+        "h+='</table>';el.innerHTML=h\n"
+        "}).catch(function(e){document.getElementById('cdn-mon-purged').textContent='Error: '+e.message})}\n"
+
+        # -- Purchases tab JS --
+        "var purchPage=0,purchPerPage=100;\n"
+
+        # Build collection-only items: items in LIB but not in PURCHASES
+        "var _purchCollPids=null;\n"
+        "function _purchBuildCollOnly(){\n"
+        "if(_purchCollPids)return;\n"
+        "const purchPids=new Set((typeof PURCHASES!=='undefined'?PURCHASES:[]).map(x=>x.productId));\n"
+        "const libPids=new Set(LIB.filter(x=>x.owned).map(x=>x.productId));\n"
+        "_purchCollPids=[];\n"
+        "LIB.filter(x=>x.owned).forEach(x=>{\n"
+        "if(!purchPids.has(x.productId)&&!_purchCollPids.some(p=>p.productId===x.productId)){\n"
+        "_purchCollPids.push({productId:x.productId,title:x.title||x.productId,type:x.productKind||'',gamertag:x.gamertag||'',"
+        "developer:x.developer||'',publisher:x.publisher||'',image:x.image||'',boxArt:x.boxArt||'',"
+        "category:x.category||'',releaseDate:x.releaseDate||'',platforms:x.platforms||[],priceUSD:x.priceUSD||0,"
+        "status:'Owned',market:'',currency:'',orderDate:'',orderTotal:0,listPrice:0,amountPaid:0,"
+        "isGift:false,isPurchased:false,isCanceled:false,isPreorder:false,isSubscription:false,"
+        "quantity:1,orderId:'',vanityOrderId:'',orderType:'',description:'',productKind:x.productKind||'',currentPriceUSD:x.currentPriceUSD||0,"
+        "_collOnly:true,_purchOnly:false,_inBoth:false})}})}\n"
+
+        "function _purchSummary(items,allItems){\n"
+        "const totalOrders=new Set(allItems.filter(x=>x.orderId).map(x=>x.orderId)).size;\n"
+        "const totalItems=allItems.length;\n"
+        "const filtItems=items.length;\n"
+        "const paid=items.filter(x=>(x.amountPaid||0)>0);\n"
+        "const free=items.filter(x=>!(x.amountPaid||0));\n"
+        "const gifts=items.filter(x=>x.isGift);\n"
+        "const currencies={};\n"
+        "paid.forEach(x=>{const c=x.currency||'???';if(!currencies[c])currencies[c]=0;currencies[c]+=x.amountPaid||0});\n"
+        "const inBoth=items.filter(x=>x._inBoth).length;\n"
+        "const purchOnly=items.filter(x=>x._purchOnly).length;\n"
+        "const collOnly=items.filter(x=>x._collOnly).length;\n"
+        "const types={};items.forEach(x=>{const t=x.type||'Unknown';types[t]=(types[t]||0)+1});\n"
+        "let h='<table class=\"stbl\"><thead><tr><th></th><th class=\"stbl-div\">#</th>"
+        "<th class=\"stbl-div\">Orders</th><th class=\"stbl-div\">Paid</th><th class=\"stbl-div\">Free</th>"
+        "<th class=\"stbl-div\">Gifts</th><th class=\"stbl-div\">In Collection</th>"
+        "<th class=\"stbl-div\">Purchase Only</th><th class=\"stbl-div\">Collection Only</th>"
+        "</tr></thead><tbody>';\n"
+        "h+='<tr><td>All</td><td class=\"stbl-div\"><span class=\"cnt\">'+totalItems.toLocaleString()+'</span></td>';\n"
+        "h+='<td class=\"stbl-div\">'+totalOrders.toLocaleString()+'</td>';\n"
+        "h+='<td class=\"stbl-div\">'+allItems.filter(x=>(x.amountPaid||0)>0).length.toLocaleString()+'</td>';\n"
+        "h+='<td class=\"stbl-div\">'+allItems.filter(x=>!(x.amountPaid||0)).length.toLocaleString()+'</td>';\n"
+        "h+='<td class=\"stbl-div\">'+allItems.filter(x=>x.isGift).length.toLocaleString()+'</td>';\n"
+        "h+='<td class=\"stbl-div\">'+allItems.filter(x=>x._inBoth).length.toLocaleString()+'</td>';\n"
+        "h+='<td class=\"stbl-div\">'+allItems.filter(x=>x._purchOnly).length.toLocaleString()+'</td>';\n"
+        "h+='<td class=\"stbl-div\">'+allItems.filter(x=>x._collOnly).length.toLocaleString()+'</td></tr>';\n"
+        "h+='<tr><td>Filtered</td><td class=\"stbl-div\"><span class=\"cnt\">'+filtItems.toLocaleString()+'</span></td>';\n"
+        "h+='<td class=\"stbl-div\">'+new Set(items.filter(x=>x.orderId).map(x=>x.orderId)).size.toLocaleString()+'</td>';\n"
+        "h+='<td class=\"stbl-div\">'+paid.length.toLocaleString()+'</td>';\n"
+        "h+='<td class=\"stbl-div\">'+free.length.toLocaleString()+'</td>';\n"
+        "h+='<td class=\"stbl-div\">'+gifts.length.toLocaleString()+'</td>';\n"
+        "h+='<td class=\"stbl-div\">'+inBoth.toLocaleString()+'</td>';\n"
+        "h+='<td class=\"stbl-div\">'+purchOnly.toLocaleString()+'</td>';\n"
+        "h+='<td class=\"stbl-div\">'+collOnly.toLocaleString()+'</td></tr>';\n"
+        "h+='</tbody></table>';\n"
+        # Spend by currency
+        "const cKeys=Object.keys(currencies).sort();\n"
+        "if(cKeys.length){\n"
+        "h+='<div style=\"margin-top:6px;font-size:11px;color:#aaa\">Spend: ';\n"
+        "cKeys.forEach((c,i)=>{\n"
+        "const sym={'USD':'$','GBP':'\\u00a3','EUR':'\\u20ac','AUD':'A$','NZD':'NZ$','JPY':'\\u00a5','BRL':'R$','CAD':'CA$','KRW':'\\u20a9','TRY':'\\u20ba','HKD':'HK$','ARS':'ARS ','ISK':'ISK ','SGD':'SG$','SEK':'kr','CLP':'CLP ','COP':'COP '};\n"
+        "const d=c==='JPY'||c==='KRW'||c==='CLP'||c==='COP'||c==='ISK'?0:2;\n"
+        "h+=(i?', ':'')+c+' '+(sym[c]||'')+currencies[c].toLocaleString('en',{minimumFractionDigits:d,maximumFractionDigits:d})});\n"
+        "h+='</div>'}\n"
+        # Type breakdown
+        "const tKeys=Object.keys(types).sort((a,b)=>types[b]-types[a]);\n"
+        "if(tKeys.length){\n"
+        "h+='<div style=\"margin-top:4px;font-size:11px;color:#888\">Types: ';\n"
+        "tKeys.forEach((t,i)=>{h+=(i?', ':'')+t+' ('+types[t]+')'});\n"
+        "h+='</div>'}\n"
+        "return h}\n"
+
+        "var _purchDropsReady=false;\n"
+        "function _initPurchDropdowns(){\n"
+        "if(_purchDropsReady)return;_purchDropsReady=true;\n"
+        "const items=PURCHASES;\n"
+        "const gts={};items.forEach(x=>{const g=x.gamertag||'';if(g)gts[g]=(gts[g]||0)+1});\n"
+        "fill('purch-gt',Object.entries(gts).sort((a,b)=>b[1]-a[1]).map(([v,c])=>[v,v+' ('+c+')']),'filterPurchases');\n"
+        "const types={};items.forEach(x=>{const t=x.type||'';if(t)types[t]=(types[t]||0)+1});\n"
+        "fill('purch-type',Object.entries(types).sort((a,b)=>b[1]-a[1]).map(([v,c])=>[v,v+' ('+c+')']),'filterPurchases');\n"
+        "const stats={};items.forEach(x=>{const s=x.status||'';if(s)stats[s]=(stats[s]||0)+1});\n"
+        "fill('purch-status',Object.entries(stats).sort((a,b)=>b[1]-a[1]).map(([v,c])=>[v,v+' ('+c+')']),'filterPurchases');\n"
+        "const mkts={};items.forEach(x=>{const m=x.market||'';if(m)mkts[m]=(mkts[m]||0)+1});\n"
+        "fill('purch-market',Object.entries(mkts).sort((a,b)=>b[1]-a[1]).map(([v,c])=>[v,v+' ('+c+')']),'filterPurchases');\n"
+        "const curs={};items.forEach(x=>{const c=x.currency||'';if(c)curs[c]=(curs[c]||0)+1});\n"
+        "fill('purch-currency',Object.entries(curs).sort((a,b)=>b[1]-a[1]).map(([v,c])=>[v,v+' ('+c+')']),'filterPurchases');\n"
+        "const yrs={};items.forEach(x=>{const y=(x.orderDate||'').slice(0,4);if(/^\\d{4}$/.test(y)){yrs[y]=(yrs[y]||0)+1}});\n"
+        "fill('purch-year',Object.entries(yrs).sort((a,b)=>b[0]-a[0]).map(([v,c])=>[v,v+' ('+c+')']),'filterPurchases');\n"
+        "const pubs={};items.forEach(x=>{const p=x.publisher||'';if(p)pubs[p]=(pubs[p]||0)+1});\n"
+        "fill('purch-pub',Object.entries(pubs).sort((a,b)=>b[1]-a[1]).map(([v,c])=>[v,v+' ('+c+')']),'filterPurchases');\n"
+        "const cats={};items.forEach(x=>{const c=x.category||'';if(c)cats[c]=(cats[c]||0)+1});\n"
+        "fill('purch-cat',Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([v,c])=>[v,v+' ('+c+')']),'filterPurchases');\n"
+        "const plts={};items.forEach(x=>(x.platforms||[]).forEach(p=>{plts[p]=(plts[p]||0)+1}));\n"
+        "fill('purch-plat',Object.entries(plts).sort((a,b)=>b[1]-a[1]).map(([v,c])=>[v,v+' ('+c+')']),'filterPurchases');\n"
+        "}\n"
+
+        "function filterPurchases(){\n"
+        "if(typeof PURCHASES==='undefined'||!PURCHASES.length)return;\n"
+        "_initPurchDropdowns();\n"
+        "_purchBuildCollOnly();\n"
+        "const q=document.getElementById('purch-search').value.toLowerCase();\n"
+        "const so=document.getElementById('purch-sort').value;\n"
+        "const gtVals=getCBVals('purch-gt');\n"
+        "const typeVals=getCBVals('purch-type');\n"
+        "const statusVals=getCBVals('purch-status');\n"
+        "const marketVals=getCBVals('purch-market');\n"
+        "const currVals=getCBVals('purch-currency');\n"
+        "const yearVals=getCBVals('purch-year');\n"
+        "const pubVals=getCBVals('purch-pub');\n"
+        "const catVals=getCBVals('purch-cat');\n"
+        "const platVals=getCBVals('purch-plat');\n"
+        "const priceF=document.getElementById('purch-price').value;\n"
+        "const giftF=document.getElementById('purch-gift').value;\n"
+        "const overlapF=document.getElementById('purch-overlap').value;\n"
+        # Build collection pid set for cross-ref
+        "const libPids=new Set(LIB.filter(x=>x.owned).map(x=>x.productId));\n"
+        # Tag each purchase item
+        "let allItems=PURCHASES.map(x=>{"
+        "x._inBoth=libPids.has(x.productId);"
+        "x._purchOnly=!x._inBoth;"
+        "x._collOnly=false;"
+        "return x});\n"
+        # Add collection-only items if that filter is active or showing all
+        "let baseItems=allItems.slice();\n"
+        "if(overlapF===''||overlapF==='collonly'){\n"
+        "_purchCollPids.forEach(x=>{baseItems.push(x)})}\n"
+        # Apply filters
+        "let filtered=baseItems.filter(item=>{\n"
+        "if(overlapF==='both'&&!item._inBoth)return false;\n"
+        "if(overlapF==='purchonly'&&!item._purchOnly)return false;\n"
+        "if(overlapF==='collonly'&&!item._collOnly)return false;\n"
+        "if(gtVals&&!gtVals.includes(item.gamertag||''))return false;\n"
+        "if(typeVals&&!typeVals.includes(item.type||''))return false;\n"
+        "if(statusVals&&!statusVals.includes(item.status||''))return false;\n"
+        "if(marketVals&&!marketVals.includes(item.market||''))return false;\n"
+        "if(currVals&&!currVals.includes(item.currency||''))return false;\n"
+        "if(yearVals){const y=(item.orderDate||'').slice(0,4);if(!yearVals.includes(y))return false}\n"
+        "if(pubVals&&!pubVals.includes(item.publisher||''))return false;\n"
+        "if(catVals&&!catVals.includes(item.category||''))return false;\n"
+        "if(platVals&&!(item.platforms||[]).some(p=>platVals.includes(p)))return false;\n"
+        "if(priceF==='paid'&&!(item.amountPaid>0))return false;\n"
+        "if(priceF==='free'&&(item.amountPaid>0))return false;\n"
+        "if(giftF==='gift'&&!item.isGift)return false;\n"
+        "if(giftF==='nogift'&&item.isGift)return false;\n"
+        "if(q&&!(item.title||'').toLowerCase().includes(q)&&!(item.publisher||'').toLowerCase().includes(q)"
+        "&&!(item.productId||'').toLowerCase().includes(q)&&!(item.orderId||'').toLowerCase().includes(q)"
+        "&&!(item.description||'').toLowerCase().includes(q))return false;\n"
+        "return true});\n"
+        # Sort
+        "if(so==='dateDesc')filtered.sort((a,b)=>(b.orderDate||'').localeCompare(a.orderDate||''));\n"
+        "else if(so==='dateAsc')filtered.sort((a,b)=>(a.orderDate||'').localeCompare(b.orderDate||''));\n"
+        "else if(so==='name')filtered.sort((a,b)=>(a.title||'').localeCompare(b.title||''));\n"
+        "else if(so==='priceDesc')filtered.sort((a,b)=>(b.amountPaid||0)-(a.amountPaid||0));\n"
+        "else if(so==='priceAsc')filtered.sort((a,b)=>{const ap=a.amountPaid||0,bp=b.amountPaid||0;"
+        "if(!ap&&bp)return 1;if(ap&&!bp)return -1;return ap-bp});\n"
+        "else if(so==='pub')filtered.sort((a,b)=>(a.publisher||'').localeCompare(b.publisher||'')||(a.title||'').localeCompare(b.title||''));\n"
+        # Update dropdown counts
+        "_updCounts('purch-gt',baseItems,x=>x.gamertag||'');\n"
+        "_updCounts('purch-type',baseItems,x=>x.type||'');\n"
+        "_updCounts('purch-status',baseItems,x=>x.status||'');\n"
+        "_updCounts('purch-market',baseItems,x=>x.market||'');\n"
+        "_updCounts('purch-currency',baseItems,x=>x.currency||'');\n"
+        "_updCounts('purch-year',baseItems,x=>{const y=(x.orderDate||'').slice(0,4);return /^\\d{4}$/.test(y)?y:''});\n"
+        "_updCounts('purch-pub',baseItems,x=>x.publisher||'');\n"
+        "_updCounts('purch-cat',baseItems,x=>x.category||'');\n"
+        "_updCounts('purch-plat',baseItems,x=>x.platforms||[]);\n"
+        # Summary
+        "document.getElementById('purch-cbar').innerHTML=_purchSummary(filtered,allItems.concat(_purchCollPids||[]));\n"
+        # Pagination
+        "const totalPages=Math.ceil(filtered.length/purchPerPage)||1;\n"
+        "if(purchPage>=totalPages)purchPage=totalPages-1;\n"
+        "if(purchPage<0)purchPage=0;\n"
+        "const start=purchPage*purchPerPage;\n"
+        "const page=filtered.slice(start,start+purchPerPage);\n"
+        # Render grid + list
+        "const g=document.getElementById('purch-grid');\n"
+        "const l=document.getElementById('purch-list');\n"
+        "let gh='',lh='<div class=\"lv-head\"><div></div><div>Title</div><div>Publisher</div>"
+        "<div>Date</div><div style=\"text-align:right\">Paid</div>"
+        "<div style=\"text-align:center\">Status</div></div>';\n"
+        # CSV = Commerce Stored Value (gift cards / currency credit)
+        "const _csvIcon='<svg viewBox=\"0 0 24 24\" width=\"100%\" height=\"100%\" fill=\"none\" stroke=\"#4caf50\" stroke-width=\"1.5\"><rect x=\"2\" y=\"5\" width=\"20\" height=\"14\" rx=\"2\"/><path d=\"M2 10h20\"/><circle cx=\"12\" cy=\"16\" r=\"1.5\"/><path d=\"M10.5 14.5L12 12.5l1.5 2\"/></svg>';\n"
+        "const _noImgIcon='<svg viewBox=\"0 0 24 24\" width=\"100%\" height=\"100%\" fill=\"none\" stroke=\"#444\" stroke-width=\"1.5\"><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\"/><circle cx=\"8.5\" cy=\"8.5\" r=\"1.5\"/><path d=\"M21 15l-5-5L5 21\"/></svg>';\n"
+        "function _purchThumb(item){\n"
+        "const img=item.image||item.boxArt||'';\n"
+        "if(img)return `<img src=\"${_imgResize(img,80,80)}\" loading=\"lazy\" onerror=\"this.parentElement.innerHTML=_noImgIcon\">`;\n"
+        "const isCSV=(item.title||'').startsWith('CSV');\n"
+        "return '<div style=\"width:36px;height:36px;display:flex;align-items:center;justify-content:center\">'+(isCSV?_csvIcon:_noImgIcon)+'</div>'}\n"
+        "function _purchCardImg(item){\n"
+        "const img=item.image||item.boxArt||'';\n"
+        "if(img)return `<img class=\"card-img\" src=\"${_imgResize(img,330,186)}\" loading=\"lazy\" onerror=\"this.style.display='none'\">`;\n"
+        "const isCSV=(item.title||'').startsWith('CSV');\n"
+        "return '<div class=\"card-img\" style=\"display:flex;align-items:center;justify-content:center;background:#1a1a1a\">'+"
+        "'<div style=\"width:64px;height:64px\">'+(isCSV?_csvIcon:_noImgIcon)+'</div></div>'}\n"
+
+        "page.forEach(item=>{\n"
+        "const dateStr=item.orderDate?new Date(item.orderDate).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'';\n"
+        "const priceStr=(item.amountPaid>0)?((item.currency||'')+' '+item.amountPaid.toFixed(2)):'Free';\n"
+        "const overlapBadge=item._collOnly?'<span class=\"badge badge-info\" title=\"In collection but no purchase record\">Collection Only</span>':"
+        "item._purchOnly?'<span class=\"badge badge-warn\" title=\"Purchased but not in collection\">Purchase Only</span>':'';\n"
+        "const giftBadge=item.isGift?'<span class=\"badge gp\" style=\"font-size:9px\">Gift</span>':'';\n"
+        "const statusCol=item.status==='Fulfilled'?'#4caf50':item.status==='Revoked'?'#f44':item.status==='Canceled'?'#f44':'#888';\n"
+        # Grid card
+        "gh+=`<div class=\"card\" title=\"${_esc(item.title)}\\n${_esc(item.productId)}\">"
+        "${_purchCardImg(item)}<div class=\"card-body\"><div class=\"card-name\">${_esc(item.title)}</div>"
+        "<div class=\"card-meta\">${_esc(item.publisher||'')} | ${_esc(dateStr)}</div>"
+        "<div style=\"margin:4px 0\">${item.amountPaid>0?'<span style=\"color:#42a5f5;font-weight:600\">'+_esc(priceStr)+'</span>':'<span style=\"color:#555;font-size:11px\">Free</span>'}</div>"
+        "<div class=\"card-badges\">${giftBadge}${overlapBadge}</div></div></div>`;\n"
+        # List row — always wrap thumb in a div so grid column count is consistent
+        "const statusBadge=`<span style=\"color:${statusCol};font-size:11px\">${_esc(item.status||'')}</span>`;\n"
+        "lh+=`<div class=\"lv-row\"><div>${_purchThumb(item)}</div>"
+        "<div class=\"lv-title\" title=\"${_esc(item.title)}\">${_esc(item.title)} ${giftBadge}${overlapBadge}</div>"
+        "<div class=\"lv-pub\">${_esc(item.publisher||'')}</div>"
+        "<div class=\"lv-type\">${_esc(dateStr)}</div>"
+        "<div class=\"lv-usd\">${_esc(priceStr)}</div>"
+        "<div class=\"lv-status\">${statusBadge}</div></div>`});\n"
+        "g.innerHTML=gh;l.innerHTML=lh;\n"
+        # Pager
+        "const pager=document.getElementById('purch-pager');\n"
+        "if(totalPages<=1){pager.innerHTML='';return}\n"
+        "let ph='<button class=\"page-btn\" '+(purchPage<=0?'disabled':'')+' onclick=\"purchPage=0;filterPurchases()\">&laquo;</button>';\n"
+        "ph+='<button class=\"page-btn\" '+(purchPage<=0?'disabled':'')+' onclick=\"purchPage--;filterPurchases()\">&lsaquo;</button>';\n"
+        "ph+='<span style=\"color:#aaa;font-size:12px\">Page '+(purchPage+1)+' / '+totalPages+'</span>';\n"
+        "ph+='<button class=\"page-btn\" '+(purchPage>=totalPages-1?'disabled':'')+' onclick=\"purchPage++;filterPurchases()\">&rsaquo;</button>';\n"
+        "ph+='<button class=\"page-btn\" '+(purchPage>=totalPages-1?'disabled':'')+' onclick=\"purchPage='+String(totalPages-1)+';filterPurchases()\">&raquo;</button>';\n"
+        "pager.innerHTML=ph}\n"
+
+        "function clearPurchFilters(){\n"
+        "document.getElementById('purch-search').value='';\n"
+        "document.getElementById('purch-sort').value='dateDesc';\n"
+        "document.getElementById('purch-price').value='';\n"
+        "document.getElementById('purch-gift').value='';\n"
+        "document.getElementById('purch-overlap').value='';\n"
+        "_purchDropsReady=false;_purchCollPids=null;\n"
+        "purchPage=0;filterPurchases()}\n"
+
+        # Init purchases tab
+        "if(typeof PURCHASES!=='undefined'&&PURCHASES.length){\n"
+        "document.getElementById('tab-purch').style.display='';\n"
+        "document.getElementById('tab-purch-cnt').textContent=PURCHASES.length;\n"
+        "filterPurchases()}\n"
+
+        "function _loadTabData(id){if(id==='admin'){_adminLoadScans();_cdnMonRefreshStatus();_cdnMonLoadScans();_cdnMonLoadPurged()}}\n"
 
         '</script>\n'
     )
@@ -6801,7 +7351,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
 
 
 def write_data_js(library, gp_items, scan_history, data_js_path, play_history=None,
-                  marketplace=None, accounts_meta=None):
+                  marketplace=None, accounts_meta=None, purchases=None):
     """Write the data.js file that the static HTML template loads.
 
     Contains const LIB, GP, PH, MKT, HISTORY, and ACCOUNTS arrays.
@@ -6816,6 +7366,8 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
         marketplace = []
     if accounts_meta is None:
         accounts_meta = []
+    if purchases is None:
+        purchases = []
 
     # Load exchange rates from global cache (if available)
     rates = {}
@@ -6948,6 +7500,7 @@ def write_data_js(library, gp_items, scan_history, data_js_path, play_history=No
         "var CDN_SYNC_META=" + json.dumps(cdn_sync_meta, ensure_ascii=False) + ";\n"
         "var CDN_SYNC_USER=" + json.dumps(cdn_sync_user, ensure_ascii=False) + ";\n"
         "var CDN_SYNC_LOG=" + json.dumps(cdn_sync_log, ensure_ascii=False) + ";\n"
+        "var PURCHASES=" + json.dumps(purchases, ensure_ascii=False) + ";\n"
     )
     with open(data_js_path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -7248,12 +7801,13 @@ def prompt_data_source(gamertag):
 # Process a single account
 # ===========================================================================
 
-def process_account(gamertag, method=None, prompt_upload=True):
+def process_account(gamertag, method=None, prompt_upload=True, open_browser=True):
     """Run the full pipeline for a single account.
 
     method: "both" (Collections+TitleHub merged), "collection", "titlehub",
             or None (prompt user, default=both).
     prompt_upload: if True, offer to upload collection to XCT Live after processing.
+    open_browser: if True, open HTML in browser when done.
     """
     debug(f"process_account: gamertag={gamertag} method={method}")
     set_account_paths(gamertag)
@@ -7609,13 +8163,22 @@ def process_account(gamertag, method=None, prompt_upload=True):
     # -- Load scan history for HTML --
     scan_history = load_all_scans(gamertag)
 
+    # -- Load order history and enrich with catalog --
+    oh_file = account_path(gamertag, ORDER_HISTORY_FILE)
+    acct_purchases = []
+    if os.path.isfile(oh_file):
+        raw_orders = load_json(oh_file) or []
+        acct_purchases = _oh_flatten_for_html(raw_orders, catalog_us, gamertag=gamertag)
+        if acct_purchases:
+            print(f"  Purchases: {len(acct_purchases)} items from {len(raw_orders)} orders")
+
     # -- Step 5: Write per-account data.js --
     acct_meta = collect_account_metadata()
     acct = account_dir(gamertag)
     data_js_path = os.path.join(acct, "data.js")
     mkt_items = load_json(MARKETPLACE_FILE) if os.path.isfile(MARKETPLACE_FILE) else []
     write_data_js(library, gp_items, scan_history, data_js_path, play_history,
-                  marketplace=mkt_items, accounts_meta=acct_meta)
+                  marketplace=mkt_items, accounts_meta=acct_meta, purchases=acct_purchases)
 
     html = build_html_template(gamertag=gamertag)
     with open(OUTPUT_HTML_FILE, "w", encoding="utf-8") as f:
@@ -7627,6 +8190,7 @@ def process_account(gamertag, method=None, prompt_upload=True):
     combined_ph = list(play_history)
     combined_history = list(scan_history)
     combined_mkt = list(mkt_items)
+    combined_purchases = list(acct_purchases)
     accounts = load_accounts()
     for other_gt in accounts:
         if other_gt == gamertag:
@@ -7647,6 +8211,14 @@ def process_account(gamertag, method=None, prompt_upload=True):
                     other_mkt_file = account_path(other_gt, "marketplace.json")
                     if os.path.isfile(other_mkt_file):
                         combined_mkt = load_json(other_mkt_file) or []
+                # Load other account's order history
+                other_oh_file = account_path(other_gt, ORDER_HISTORY_FILE)
+                if os.path.isfile(other_oh_file):
+                    other_oh = load_json(other_oh_file) or []
+                    if other_oh:
+                        other_cat_file = account_path(other_gt, "catalog_v3_us.json")
+                        other_cat = load_json(other_cat_file) if os.path.isfile(other_cat_file) else {}
+                        combined_purchases.extend(_oh_flatten_for_html(other_oh, other_cat, gamertag=other_gt))
     # Restore paths for current account
     set_account_paths(gamertag)
 
@@ -7654,7 +8226,7 @@ def process_account(gamertag, method=None, prompt_upload=True):
         combined_history.sort(key=lambda s: s.get("timestamp", ""), reverse=True)
         combined_data_js = os.path.join(ACCOUNTS_DIR, "data.js")
         write_data_js(combined_library, gp_items, combined_history[:100], combined_data_js, combined_ph,
-                      marketplace=combined_mkt, accounts_meta=acct_meta)
+                      marketplace=combined_mkt, accounts_meta=acct_meta, purchases=combined_purchases)
         combined_html = os.path.join(ACCOUNTS_DIR, "XCT.html")
         html = build_html_template(gamertag="All Accounts")
         with open(combined_html, "w", encoding="utf-8") as f:
@@ -7671,6 +8243,7 @@ def process_account(gamertag, method=None, prompt_upload=True):
     print()
 
     # Offer to upload collection to XCT Live
+    _uploaded = False
     if prompt_upload:
         try:
             upload_ans = input("  Upload collection to XCT Live? [Y/n] ").strip().lower()
@@ -7681,8 +8254,18 @@ def process_account(gamertag, method=None, prompt_upload=True):
                     scan_history=combined_history,
                     accounts_meta=acct_meta,
                 )
+                _uploaded = True
         except (EOFError, KeyboardInterrupt):
             pass
+
+    # Open xct.live if uploaded, otherwise open local HTML
+    if open_browser:
+        if _uploaded:
+            webbrowser.open("https://xct.live")
+        elif OUTPUT_HTML_COMBINED:
+            file_url = "file:///" + OUTPUT_HTML_COMBINED.replace("\\", "/").replace(" ", "%20")
+            print(f"[*] Opening in browser: {file_url}")
+            webbrowser.open(file_url)
     print()
 
     return OUTPUT_HTML_COMBINED, library
@@ -7724,6 +8307,7 @@ def build_index():
     combined_ph = []
     combined_history = []
     combined_mkt = []
+    combined_purchases = []
 
     for gt in gamertags:
         set_account_paths(gt)
@@ -7759,11 +8343,19 @@ def build_index():
         # Load scan history
         scan_history = load_all_scans(gt)
 
+        # Load order history and enrich with catalog
+        oh_file = os.path.join(acct, ORDER_HISTORY_FILE)
+        acct_purchases = []
+        if os.path.isfile(oh_file):
+            raw_orders = load_json(oh_file) or []
+            acct_purchases = _oh_flatten_for_html(raw_orders, catalog, gamertag=gt)
+            print(f"  [{gt}] {len(acct_purchases)} purchase items from {len(raw_orders)} orders")
+
         # Write per-account data.js
         mkt_file = os.path.join(acct, "marketplace.json")
         acct_mkt = load_json(mkt_file) if os.path.isfile(mkt_file) else []
         write_data_js(library, gp_items, scan_history, os.path.join(acct, "data.js"), play_hist,
-                      marketplace=acct_mkt, accounts_meta=acct_meta)
+                      marketplace=acct_mkt, accounts_meta=acct_meta, purchases=acct_purchases)
 
         # Force-rebuild per-account HTML
         html_path = os.path.join(acct, "XCT.html")
@@ -7774,6 +8366,7 @@ def build_index():
         combined_library.extend(library)
         combined_ph.extend(play_hist)
         combined_history.extend(scan_history)
+        combined_purchases.extend(acct_purchases)
         if acct_mkt and not combined_mkt:
             combined_mkt = acct_mkt
 
@@ -7801,13 +8394,15 @@ def build_index():
     combined_history.sort(key=lambda s: s.get("timestamp", ""), reverse=True)
     combined_data_js = os.path.join(ACCOUNTS_DIR, "data.js")
     write_data_js(combined_library, gp_items, combined_history[:100], combined_data_js, combined_ph,
-                  marketplace=combined_mkt, accounts_meta=acct_meta)
+                  marketplace=combined_mkt, accounts_meta=acct_meta, purchases=combined_purchases)
 
     combined_html = os.path.join(ACCOUNTS_DIR, "XCT.html")
     html = build_html_template(gamertag="All Accounts")
     with open(combined_html, "w", encoding="utf-8") as f:
         f.write(html)
 
+    if combined_purchases:
+        print(f"  Purchases: {len(combined_purchases)} items loaded")
     print(f"\n[+] Index rebuilt: {len(combined_library)} items across {len(gamertags)} gamertags")
     return combined_html
 
@@ -7935,14 +8530,14 @@ def _is_token_expired(gamertag):
 def _auto_refresh_token(gamertag):
     """Attempt to silently refresh an account's token. Returns True on success."""
     print(f"[*] Auto-refreshing token for {gamertag}...")
-    success = refresh_account_token(gamertag)
-    if success:
+    refreshed_gt = refresh_account_token(gamertag)
+    if refreshed_gt:
         # Re-set paths so globals point to fresh token files
-        set_account_paths(gamertag)
-        print(f"[+] Token refreshed for {gamertag}")
+        set_account_paths(refreshed_gt)
+        print(f"[+] Token refreshed for {refreshed_gt}")
     else:
         print(f"[!] Token refresh failed for {gamertag}")
-    return success
+    return bool(refreshed_gt)
 
 
 def process_marketplace(gamertag, channels=None):
@@ -9291,17 +9886,20 @@ def process_all_accounts():
         print(f"  Processing: {gt}  ({idx}/{total})")
         print("=" * 64)
 
-        # Refresh token
+        # Refresh token (may return a new gamertag if account was renamed)
         print(f"\n[*] Refreshing token for {gt}...")
-        ok = refresh_account_token(gt)
-        if not ok:
+        refreshed_gt = refresh_account_token(gt)
+        if not refreshed_gt:
             print(f"[!] Token refresh failed for {gt} — skipping")
             results.append((gt, False, "Token refresh failed"))
             continue
+        if refreshed_gt != gt:
+            print(f"[*] Using renamed gamertag: {refreshed_gt}")
+            gt = refreshed_gt
 
         # Process account with chosen method
         try:
-            html_file, lib = process_account(gt, method=method, prompt_upload=False)
+            html_file, lib = process_account(gt, method=method, prompt_upload=False, open_browser=False)
             results.append((gt, True, html_file))
             all_libraries.extend(lib)
         except Exception as e:
@@ -9347,11 +9945,8 @@ def process_all_accounts():
 
         print(f"[+] Combined: {combined_path} ({len(all_libraries)} items)")
 
-        file_url = "file:///" + combined_path.replace("\\", "/").replace(" ", "%20")
-        print(f"[*] Opening in browser: {file_url}")
-        webbrowser.open(file_url)
-
     # Offer to upload collection to XCT Live (once after all accounts)
+    _uploaded = False
     if all_libraries:
         try:
             # Collect combined play history for upload
@@ -9370,8 +9965,337 @@ def process_all_accounts():
                     scan_history=all_scan_history,
                     accounts_meta=acct_meta,
                 )
+                _uploaded = True
         except (EOFError, KeyboardInterrupt):
             pass
+
+    # Open xct.live if uploaded, otherwise open local HTML
+    if _uploaded:
+        webbrowser.open("https://xct.live")
+    elif all_libraries:
+        file_url = "file:///" + combined_path.replace("\\", "/").replace(" ", "%20")
+        print(f"[*] Opening in browser: {file_url}")
+        webbrowser.open(file_url)
+
+
+BATCH_LISTS_FILE = os.path.join(SCRIPT_DIR, "batch_lists.json")
+
+
+def _load_batch_lists():
+    """Load named batch lists from batch_lists.json."""
+    if os.path.isfile(BATCH_LISTS_FILE):
+        try:
+            return load_json(BATCH_LISTS_FILE) or {}
+        except Exception:
+            pass
+    return {}
+
+
+def _save_batch_lists(lists):
+    """Save named batch lists to batch_lists.json."""
+    save_json(BATCH_LISTS_FILE, lists)
+
+
+def _run_batch(name, batch_gamertags):
+    """Process a named batch of gamertags — same logic as process_all_accounts."""
+    print()
+    print("  Data source for all gamertags:")
+    print("    [Enter] Both (recommended)  - full collection + game metadata")
+    print("    [1] Collections API only    - all entitlements (~5000)")
+    print("    [2] TitleHub only           - games with metadata (~1000)")
+    print("    [0] Back")
+    print()
+    pick = input("  Pick [Enter=Both / 1/2 / 0=back]: ").strip()
+    if pick == "0":
+        return
+    elif pick == "1":
+        method = "collection"
+    elif pick == "2":
+        method = "titlehub"
+    else:
+        method = "both"
+
+    results = []
+    all_libraries = []
+    total = len(batch_gamertags)
+
+    for idx, gt in enumerate(batch_gamertags, 1):
+        print()
+        print("=" * 64)
+        print(f"  Processing: {gt}  ({idx}/{total})")
+        print("=" * 64)
+
+        print(f"\n[*] Refreshing token for {gt}...")
+        refreshed_gt = refresh_account_token(gt)
+        if not refreshed_gt:
+            print(f"[!] Token refresh failed for {gt} — skipping")
+            results.append((gt, False, "Token refresh failed"))
+            continue
+        if refreshed_gt != gt:
+            print(f"[*] Using renamed gamertag: {refreshed_gt}")
+            gt = refreshed_gt
+
+        try:
+            html_file, lib = process_account(gt, method=method, prompt_upload=False, open_browser=False)
+            results.append((gt, True, html_file))
+            all_libraries.extend(lib)
+        except Exception as e:
+            print(f"[!] Failed to process {gt}: {e}")
+            results.append((gt, False, str(e)))
+
+    # Summary
+    print()
+    print("=" * 64)
+    print(f"  Batch \"{name}\" — Summary")
+    print("=" * 64)
+    for gt, ok, info in results:
+        status = "OK" if ok else "FAILED"
+        print(f"  {gt}: {status}" + (f" — {info}" if not ok else ""))
+
+    # Rebuild full combined index (all accounts, not just batch)
+    _uploaded = False
+    combined_html_file = None
+    if all_libraries:
+        print("\n[*] Rebuilding combined index (all accounts)...")
+        combined_html_file = build_index()
+
+    # Upload prompt — send full combined data
+    if all_libraries:
+        try:
+            upload_ans = input("\n  Upload collection to XCT Live? [Y/n] ").strip().lower()
+            if upload_ans not in ("n", "no"):
+                # Gather ALL accounts' data for upload
+                all_accounts = load_accounts()
+                full_library = []
+                full_ph = []
+                full_history = []
+                for gt in all_accounts:
+                    lib_file = account_path(gt, "library.json")
+                    ph_file = account_path(gt, "play_history.json")
+                    if os.path.isfile(lib_file):
+                        full_library.extend(load_json(lib_file) or [])
+                    if os.path.isfile(ph_file):
+                        full_ph.extend(load_json(ph_file) or [])
+                    full_history.extend(load_all_scans(gt, max_scans=50))
+                full_history.sort(key=lambda s: s.get("timestamp", ""), reverse=True)
+                acct_meta = collect_account_metadata()
+                upload_collection_live(
+                    library=full_library,
+                    play_history=full_ph,
+                    scan_history=full_history[:100],
+                    accounts_meta=acct_meta,
+                )
+                _uploaded = True
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+    # Open xct.live if uploaded, otherwise open local HTML
+    if _uploaded:
+        webbrowser.open("https://xct.live")
+    elif combined_html_file:
+        file_url = "file:///" + combined_html_file.replace("\\", "/").replace(" ", "%20")
+        print(f"[*] Opening in browser: {file_url}")
+        webbrowser.open(file_url)
+
+
+def process_batch_menu():
+    """Batch process menu — create, manage, and run named gamertag batches."""
+    accounts = load_accounts()
+    if not accounts:
+        print("[!] No gamertags configured. Use [c] to add one first.")
+        return
+
+    all_gamertags = list(accounts.keys())
+
+    while True:
+        lists = _load_batch_lists()
+
+        print()
+        print("=" * 64)
+        print("  Batch Process")
+        print("=" * 64)
+
+        if lists:
+            print()
+            sorted_names = sorted(lists.keys())
+            for i, name in enumerate(sorted_names, 1):
+                gts = lists[name]
+                print(f"    [{i}] {name} ({len(gts)} gamertag{'s' if len(gts) != 1 else ''})")
+            print()
+            print(f"    [c] Create new batch")
+            print(f"    [e] Edit a batch")
+            print(f"    [d] Delete a batch")
+            print(f"    [0] Back")
+            print()
+            pick = input("  Pick: ").strip()
+
+            if pick == "0":
+                return False
+            elif pick.lower() == "c":
+                _batch_create(all_gamertags, lists)
+                continue
+            elif pick.lower() == "e":
+                _batch_edit(all_gamertags, lists, sorted_names)
+                continue
+            elif pick.lower() == "d":
+                _batch_delete(lists, sorted_names)
+                continue
+            else:
+                # Run a batch by number
+                try:
+                    idx = int(pick) - 1
+                    if 0 <= idx < len(sorted_names):
+                        name = sorted_names[idx]
+                        gts = lists[name]
+                        # Validate gamertags still exist
+                        valid = [g for g in gts if g in accounts]
+                        missing = [g for g in gts if g not in accounts]
+                        if missing:
+                            print(f"  [!] Removed from accounts: {', '.join(missing)}")
+                        if not valid:
+                            print("  [!] No valid gamertags in this batch.")
+                            continue
+                        print(f"\n  Running batch \"{name}\" — {len(valid)} gamertag(s):")
+                        for g in valid:
+                            print(f"    - {g} (token: {token_age_str(g)})")
+                        _run_batch(name, valid)
+                    else:
+                        print("  Invalid selection.")
+                except ValueError:
+                    print("  Invalid selection.")
+                continue
+        else:
+            print("\n  No batches configured yet.\n")
+            print(f"    [c] Create new batch")
+            print(f"    [0] Back")
+            print()
+            pick = input("  Pick: ").strip()
+            if pick.lower() == "c":
+                _batch_create(all_gamertags, lists)
+            else:
+                return False
+
+
+def _batch_create(all_gamertags, lists):
+    """Create a new named batch from available gamertags."""
+    print()
+    name = input("  Batch name: ").strip()
+    if not name:
+        print("  Cancelled.")
+        return
+    if name in lists:
+        print(f"  [!] Batch \"{name}\" already exists. Use edit instead.")
+        return
+
+    selected = _batch_pick_gamertags(all_gamertags)
+    if not selected:
+        print("  Cancelled — no gamertags selected.")
+        return
+
+    lists[name] = selected
+    _save_batch_lists(lists)
+    print(f"\n  [+] Created batch \"{name}\" with {len(selected)} gamertag(s)")
+
+
+def _batch_edit(all_gamertags, lists, sorted_names):
+    """Edit an existing batch."""
+    if not sorted_names:
+        print("  No batches to edit.")
+        return
+    print()
+    for i, name in enumerate(sorted_names, 1):
+        print(f"    [{i}] {name}")
+    print()
+    pick = input("  Edit which batch? ").strip()
+    try:
+        idx = int(pick) - 1
+        if 0 <= idx < len(sorted_names):
+            name = sorted_names[idx]
+            current = lists[name]
+            print(f"\n  Current gamertags in \"{name}\":")
+            for g in current:
+                print(f"    - {g}")
+            print()
+            print("  Select new gamertag list (current ones are pre-selected):")
+            selected = _batch_pick_gamertags(all_gamertags, preselected=current)
+            if selected is None:
+                print("  Cancelled.")
+                return
+            lists[name] = selected
+            _save_batch_lists(lists)
+            print(f"\n  [+] Updated batch \"{name}\" — {len(selected)} gamertag(s)")
+        else:
+            print("  Invalid selection.")
+    except ValueError:
+        print("  Invalid selection.")
+
+
+def _batch_delete(lists, sorted_names):
+    """Delete a batch."""
+    if not sorted_names:
+        print("  No batches to delete.")
+        return
+    print()
+    for i, name in enumerate(sorted_names, 1):
+        print(f"    [{i}] {name}")
+    print()
+    pick = input("  Delete which batch? ").strip()
+    try:
+        idx = int(pick) - 1
+        if 0 <= idx < len(sorted_names):
+            name = sorted_names[idx]
+            confirm = input(f"  Delete \"{name}\"? [y/N]: ").strip().lower()
+            if confirm in ("y", "yes"):
+                del lists[name]
+                _save_batch_lists(lists)
+                print(f"  [+] Deleted batch \"{name}\"")
+            else:
+                print("  Cancelled.")
+        else:
+            print("  Invalid selection.")
+    except ValueError:
+        print("  Invalid selection.")
+
+
+def _batch_pick_gamertags(all_gamertags, preselected=None):
+    """Interactive multi-select of gamertags. Returns list or None if cancelled."""
+    pre = set(preselected or [])
+    selected = [g for g in all_gamertags if g in pre]
+    unselected = [g for g in all_gamertags if g not in pre]
+    # Show numbered list with checkboxes
+    while True:
+        print()
+        for i, g in enumerate(all_gamertags, 1):
+            mark = "x" if g in selected else " "
+            print(f"    [{i}] [{mark}] {g}")
+        print()
+        print(f"  Toggle by number, 'all' to select all, 'none' to clear,")
+        pick = input(f"  'done' to confirm, '0' to cancel: ").strip().lower()
+
+        if pick == "0":
+            return None
+        elif pick == "done":
+            return selected if selected else None
+        elif pick == "all":
+            selected = list(all_gamertags)
+        elif pick == "none":
+            selected = []
+        else:
+            # Toggle individual numbers (support comma-separated)
+            for part in pick.replace(" ", ",").split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                try:
+                    idx = int(part) - 1
+                    if 0 <= idx < len(all_gamertags):
+                        g = all_gamertags[idx]
+                        if g in selected:
+                            selected.remove(g)
+                        else:
+                            selected.append(g)
+                except ValueError:
+                    pass
 
 
 def process_contentaccess_only(gamertag):
@@ -16078,6 +17002,7 @@ def upload_collection_live(library=None, play_history=None, scan_history=None, a
         library = []
         play_history = []
         scan_history = []
+        purchases = []
         for gt in accounts:
             lib_file = account_path(gt, "library.json")
             if os.path.isfile(lib_file):
@@ -16089,9 +17014,18 @@ def upload_collection_live(library=None, play_history=None, scan_history=None, a
                 ph = load_json(ph_file)
                 if ph:
                     play_history.extend(ph)
+            oh_file = account_path(gt, ORDER_HISTORY_FILE)
+            if os.path.isfile(oh_file):
+                raw_orders = load_json(oh_file) or []
+                if raw_orders:
+                    cat_file = account_path(gt, "catalog_v3_us.json")
+                    cat = load_json(cat_file) if os.path.isfile(cat_file) else {}
+                    purchases.extend(_oh_flatten_for_html(raw_orders, cat, gamertag=gt))
             set_account_paths(gt)
             scan_history.extend(load_all_scans(gt, max_scans=50))
         accounts_meta = collect_account_metadata()
+    else:
+        purchases = []
 
     if not library:
         print("  [!] No library data to upload. Process a gamertag first.")
@@ -16105,11 +17039,16 @@ def upload_collection_live(library=None, play_history=None, scan_history=None, a
         payload["history"] = scan_history_trimmed
     if accounts_meta:
         payload["accounts"] = accounts_meta
+    if purchases:
+        # Strip description to save bandwidth — it's the largest field
+        payload["purchases"] = [{k: v for k, v in p.items() if k != "description"} for p in purchases]
 
     raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     print(f"  Uploading {len(library)} library items", end="")
     if play_history:
         print(f", {len(play_history)} play history", end="")
+    if purchases:
+        print(f", {len(purchases)} purchases", end="")
     print("...", flush=True)
 
     # Gzip compress
@@ -21734,561 +22673,189 @@ def process_remote_tools(gamertag):
 # ===========================================================================
 
 ORDER_HISTORY_FILE = "order_history.json"
-ORDER_HISTORY_AUTH_FILE = "order_history_auth.json"
 
-def _oh_extract_auth_from_har(har_path):
-    """Extract account.microsoft.com auth cookies and CSRF token from a HAR file.
 
-    Returns dict with 'cookies' (str) and 'csrf_token' (str), or None.
+def _oh_fetch_api(auth_token, stop_at_order_ids=None):
+    """Fetch order history via purchase.mp.microsoft.com API.
+
+    Uses the standard mp.microsoft.com XBL3.0 token — no cookies, no HAR, no browser.
+    Returns list of raw order dicts from the v7 API.
+
+    If stop_at_order_ids is provided, stops fetching when an order ID already in
+    that set is encountered (incremental scan — API returns newest first).
     """
-    print(f"[*] Reading HAR file: {har_path}")
-    with open(har_path, "r", encoding="utf-8") as f:
-        har = json.load(f)
-
-    entries = har.get("log", {}).get("entries", [])
-    cookies_str = None
-    csrf_token = None
-
-    # Look for a billing/orders/list request (has both cookies and CSRF)
-    for e in entries:
-        url = e.get("request", {}).get("url", "")
-        if "billing/orders/list" in url or "billing/orders?" in url:
-            for h in e["request"].get("headers", []):
-                if h["name"].lower() == "cookie" and not cookies_str:
-                    cookies_str = h["value"]
-                elif h["name"] == "__RequestVerificationToken" and not csrf_token:
-                    csrf_token = h["value"]
-            if cookies_str and csrf_token:
-                break
-
-    # If no billing/orders/list found, try the initial page load for cookies
-    # and extract CSRF from the HTML response body
-    if not cookies_str:
-        for e in entries:
-            url = e.get("request", {}).get("url", "")
-            if "account.microsoft.com" in url and url.count("/") <= 4:
-                for h in e["request"].get("headers", []):
-                    if h["name"].lower() == "cookie":
-                        cookies_str = h["value"]
-                        break
-                if cookies_str:
-                    break
-
-    if not csrf_token:
-        for e in entries:
-            url = e.get("request", {}).get("url", "")
-            if "account.microsoft.com/billing" in url:
-                body = e.get("response", {}).get("content", {}).get("text", "")
-                if body:
-                    m = re.search(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', body)
-                    if m:
-                        csrf_token = m.group(1)
-                        break
-
-    if not cookies_str:
-        print("[!] Could not find account.microsoft.com cookies in HAR file.")
-        return None
-    if not csrf_token:
-        print("[!] Could not find __RequestVerificationToken in HAR file.")
-        return None
-
-    # Extract key cookie names for display
-    cookie_names = [c.split("=", 1)[0] for c in cookies_str.split("; ")]
-    has_amc = any(n in cookie_names for n in ("AMCSecAuth", "AMCSecAuthJWT"))
-    print(f"[+] Extracted {len(cookie_names)} cookies (AMCSecAuth present: {has_amc})")
-    print(f"[+] CSRF token: {csrf_token[:40]}...")
-
-    return {"cookies": cookies_str, "csrf_token": csrf_token, "extracted_at": time.time()}
-
-
-def _oh_save_auth(gamertag, auth_data):
-    """Save order history auth data to the account directory."""
-    path = account_path(gamertag, ORDER_HISTORY_AUTH_FILE)
-    with open(path, "w") as f:
-        json.dump(auth_data, f, indent=2)
-    print(f"[+] Auth saved to {path}")
-
-
-def _oh_load_auth(gamertag):
-    """Load order history auth data. Returns dict or None."""
-    path = account_path(gamertag, ORDER_HISTORY_AUTH_FILE)
-    if not os.path.isfile(path):
-        return None
-    with open(path, "r") as f:
-        return json.load(f)
-
-
-def _oh_fetch_page(cookies_str, csrf_token, period="AllTime", continuation=None):
-    """Fetch one page of order history. Returns (orders, continuation_token)."""
-    params = {
-        "period": period,
-        "orderTypeFilter": "All",
-        "filterChangeCount": "0",
-        "isInD365Orders": "true",
-        "isPiDetailsRequired": "true",
-        "timeZoneOffsetMinutes": "0",
-    }
-    if continuation:
-        params["continuationToken"] = continuation
-
-    url = "https://account.microsoft.com/billing/orders/list?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url)
-    req.add_header("Cookie", cookies_str)
-    req.add_header("Accept", "application/json, text/plain, */*")
-    req.add_header("X-Requested-With", "XMLHttpRequest")
-    req.add_header("__RequestVerificationToken", csrf_token)
-    req.add_header("User-Agent",
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-    req.add_header("Referer", "https://account.microsoft.com/billing/orders?lang=en-GB")
-
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        body = resp.read().decode("utf-8", errors="replace")
-
-    # Response is base64-encoded JSON
-    try:
-        padded = body.strip()
-        missing = len(padded) % 4
-        if missing:
-            padded += "=" * (4 - missing)
-        decoded = json.loads(base64.b64decode(padded).decode("utf-8"))
-    except Exception:
-        decoded = json.loads(body)
-
-    orders = decoded.get("orders", [])
-    ct = decoded.get("continuationToken", "")
-    return orders, ct
-
-
-def _oh_flatten_order(order):
-    """Flatten an order dict into a simplified record for output."""
-    items = order.get("items", [])
-    flat_items = []
-    for item in items:
-        flat_items.append({
-            "title": item.get("localTitle", ""),
-            "productId": item.get("productId", ""),
-            "type": item.get("itemTypeName", ""),
-            "status": item.get("localStatus", item.get("itemState", "")),
-            "isSubscription": item.get("isSubscription", False),
-            "isPurchased": item.get("isPurchased", False),
-            "isCanceled": item.get("isCanceled", False),
-            "isRefundEligible": item.get("isRefundEligible", False),
-            "isPreorder": item.get("isPreorder", False),
-            "isGift": item.get("isGift", False),
-            "quantity": item.get("quantity", 1),
-            "totalListPrice": item.get("totalListPrice", ""),
-            "totalAmountWithoutTax": item.get("totalAmountWithoutTax", ""),
-            "logoLink": item.get("logoLink", ""),
-            "productLink": item.get("productOrParentLink", ""),
-            "partnerName": item.get("partnerName", ""),
-            "description": item.get("description", ""),
-            "debugData": item.get("debugData", ""),
-            "redemptionLinkText": item.get("redemptionLinkText", ""),
-            "tokenDetails": item.get("tokenDetails", []),
-            "fees": item.get("fees", []),
-        })
-
-    ledger = order.get("ledgerItems", [])
-    pi = order.get("paymentInstruments", [])
-
-    return {
-        "orderId": order.get("orderId", ""),
-        "vanityOrderId": order.get("vanityOrderId", ""),
-        "date": order.get("localSubmittedDate", ""),
-        "total": order.get("localTotal", ""),
-        "totalDecimal": order.get("localTotalInDecimal"),
-        "market": order.get("market", ""),
-        "currency": order.get("currencyInfo", {}).get("currencyCode", ""),
-        "hasDigitalItem": order.get("hasDigitalItem", False),
-        "hasPhysicalItem": order.get("hasPhysicalItem", False),
-        "hasPreorder": order.get("hasPreorder", False),
-        "hasMultipleItems": order.get("hasMultipleItems", False),
-        "controlsOrderType": order.get("controlsOrderType"),
-        "supportLinkId": order.get("supportLinkId", ""),
-        "daysFromPurchase": order.get("daysFromPurchase"),
-        "items": flat_items,
-        "ledger": ledger,
-        "paymentInstruments": [{
-            "name": p.get("name", ""),
-            "type": p.get("type", ""),
-            "lastFourDigits": p.get("lastFourDigits", ""),
-        } for p in pi],
-        "address": order.get("address", {}),
-        "taxDocumentUrls": order.get("taxDocumentUrls", []),
-        # Raw fields not shown on microsoft.com
-        "cidHex": order.get("cidHex", ""),
-        "isEUMarket": order.get("isEUMarket", False),
-        "_raw_items": items,  # Keep full raw item data
-    }
-
-
-def fetch_order_history(gamertag, auth_data, period="AllTime"):
-    """Fetch full order history using stored auth. Returns list of order dicts."""
-    cookies_str = auth_data["cookies"]
-    csrf_token = auth_data["csrf_token"]
-
     all_orders = []
-    continuation = None
+    url = "https://purchase.mp.microsoft.com/v7.0/users/me/orders"
     page = 0
-    empty_run = 0
+    stopped_early = False
+    cv = base64.b64encode(os.urandom(12)).decode().rstrip("=") + ".0"
 
-    print(f"[*] Fetching order history (period={period})...")
+    print("[*] Fetching order history via Purchase API...")
 
-    while True:
-        try:
-            orders, ct = _oh_fetch_page(cookies_str, csrf_token, period, continuation)
-        except urllib.error.HTTPError as e:
-            if e.code == 401:
-                print(f"\n[!] Session expired (HTTP 401). Please capture a new HAR file.")
-                break
-            elif e.code == 412:
-                print(f"\n[!] Invalid period '{period}'. Falling back to 'AllTime'.")
-                if period != "AllTime":
-                    period = "AllTime"
-                    continue
-                break
-            else:
-                print(f"\n[!] HTTP {e.code} on page {page + 1}")
-                break
-        except Exception as e:
-            print(f"\n[!] Error on page {page + 1}: {e}")
-            break
-
+    while url:
         page += 1
-        all_orders.extend(orders)
-
-        if orders:
-            if empty_run > 0:
-                print()
-                empty_run = 0
-            for o in orders:
-                date = o.get("localSubmittedDate", "?")
-                titles = [i.get("localTitle", "?") for i in o.get("items", [])]
-                total = o.get("localTotal", "")
-                title_str = " | ".join(titles)[:60]
-                print(f"    {date:>22}  {total:>12}  {title_str}")
-        else:
-            empty_run += 1
-            print(f"\r  [.] Page {page} ({len(all_orders)} orders so far, scanning...)", end="", flush=True)
-
-        if not ct:
-            if empty_run > 0:
-                print()
+        req = urllib.request.Request(url, headers={
+            "Authorization": auth_token,
+            "MS-CV": cv,
+            "Accept": "application/json",
+            "User-Agent": "okhttp/4.12.0",
+        })
+        try:
+            with urllib.request.urlopen(req, context=SSL_CTX, timeout=30) as resp:
+                data = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            err = ""
+            try:
+                err = e.read().decode("utf-8", errors="replace")[:200]
+            except Exception:
+                pass
+            if e.code == 401:
+                print(f"[!] Token expired (HTTP 401). Refresh token and retry.")
+            else:
+                print(f"[!] HTTP {e.code} on page {page}: {err}")
+            break
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            print(f"[!] Request failed on page {page}: {e}")
             break
 
-        continuation = ct
+        items = data.get("items", [])
 
-    print(f"\n[+] Fetched {len(all_orders)} orders across {page} pages")
+        for o in items:
+            oid = o.get("orderId", "")
+            if stop_at_order_ids and oid in stop_at_order_ids:
+                stopped_early = True
+                break
+            all_orders.append(o)
+            date = o.get("createdTime", "")[:19]
+            total = o.get("totalAmount", 0) or 0
+            cur = o.get("currencyCode", "")
+            titles = " | ".join(
+                li.get("title", "?")[:40]
+                for li in o.get("orderLineItems", [])[:3]
+            )
+            if total:
+                print(f"    {date}  {cur} {total:>10.2f}  {titles[:50]}")
+            else:
+                print(f"    {date}  {'free':>14}  {titles[:50]}")
+
+        if stopped_early:
+            break
+
+        next_link = data.get("@nextLink", "")
+        url = next_link if next_link else None
+
+    if stopped_early:
+        print(f"\n[+] Fetched {len(all_orders)} new orders (stopped at existing)")
+    else:
+        print(f"\n[+] Fetched {len(all_orders)} orders across {page} page(s)")
     return all_orders
 
 
-def _oh_cdp_connect():
-    """Launch Edge with CDP, navigate to billing page, return (ws_socket, cdp_send_fn) or (None, None)."""
-    import websocket as ws_mod
-    edge_exe = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-    if not os.path.isfile(edge_exe):
-        edge_exe = r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
-    if not os.path.isfile(edge_exe):
-        print("  [!] Microsoft Edge not found.")
-        return None, None
+def _oh_flatten_order_api(order):
+    """Flatten a v7 purchase API order into the same format as _oh_flatten_order."""
+    line_items = order.get("orderLineItems", [])
+    flat_items = []
+    for li in line_items:
+        flat_items.append({
+            "title": li.get("title", ""),
+            "productId": li.get("productId", ""),
+            "type": li.get("productType", ""),
+            "status": li.get("fulfillmentState", li.get("billingState", "")),
+            "isSubscription": False,
+            "isPurchased": li.get("billingState") == "Charged",
+            "isCanceled": li.get("billingState") == "Canceled",
+            "isRefundEligible": False,
+            "isPreorder": False,
+            "isGift": bool(li.get("giftee")),
+            "quantity": li.get("quantity", 1),
+            "totalListPrice": str(li.get("listPrice", "")),
+            "totalAmountWithoutTax": str(li.get("totalAmount", "")),
+            "logoLink": "",
+            "productLink": "",
+            "partnerName": "",
+            "description": li.get("description", ""),
+        })
 
-    edge_profile = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "User Data")
-    if not os.path.isdir(edge_profile):
-        print("  [!] Edge user profile not found.")
-        return None, None
+    total = order.get("totalAmount", 0) or 0
+    cur = order.get("currencyCode", "")
 
-    CDP_PORT = 9222
-    billing_url = "https://account.microsoft.com/billing/orders?period=AllTime&lang=en-GB"
+    return {
+        "orderId": order.get("orderId", ""),
+        "vanityOrderId": order.get("shortOrderId", ""),
+        "date": order.get("createdTime", ""),
+        "total": f"{cur} {total:.2f}" if total else "Free",
+        "totalDecimal": total,
+        "market": order.get("market", ""),
+        "currency": cur,
+        "hasDigitalItem": True,
+        "hasPhysicalItem": False,
+        "hasPreorder": False,
+        "hasMultipleItems": len(line_items) > 1,
+        "controlsOrderType": order.get("orderContext", {}).get("orderType", ""),
+        "supportLinkId": "",
+        "daysFromPurchase": None,
+        "items": flat_items,
+        "ledger": [],
+        "paymentInstruments": [],
+        "address": {},
+        "taxDocumentUrls": [],
+        "_source": "purchase_api",
+    }
 
-    # Kill any running Edge — CDP flags only apply on fresh launch
+
+def _oh_fetch_for_account(gamertag, full=False):
+    """Fetch order history for a single account. Returns True on success.
+
+    If full=False and a saved history exists, does an incremental scan
+    (stops when it hits an existing order ID). Merges new orders into the
+    existing file.
+    """
+    set_account_paths(gamertag)
+    token = read_auth_token()
+    if not token:
+        print(f"  [{gamertag}] No auth token — skipping")
+        return False
+
+    out_path = account_path(gamertag, ORDER_HISTORY_FILE)
+    existing_orders = []
+    existing_ids = set()
+
+    if not full and os.path.isfile(out_path):
+        existing_orders = load_json(out_path) or []
+        existing_ids = {o.get("orderId", "") for o in existing_orders if o.get("orderId")}
+        if existing_ids:
+            print(f"  [{gamertag}] Incremental scan ({len(existing_orders)} existing orders)")
+
+    stop_ids = existing_ids if existing_ids and not full else None
+    raw_orders = _oh_fetch_api(token, stop_at_order_ids=stop_ids)
+
+    if not raw_orders and not existing_orders:
+        print(f"  [{gamertag}] No orders found.")
+        return False
+
+    new_orders = [_oh_flatten_order_api(o) for o in raw_orders]
+
+    if existing_orders and not full:
+        # Prepend new orders (newest first) before existing
+        merged = new_orders + existing_orders
+        print(f"  [{gamertag}] {len(new_orders)} new + {len(existing_orders)} existing = {len(merged)} total")
+    else:
+        merged = new_orders
+        print(f"  [{gamertag}] {len(merged)} orders")
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(merged, f, indent=2, ensure_ascii=False)
+    return True
+
+
+def _oh_prompt_upload():
+    """Offer to upload collection (including purchases) to XCT Live."""
     try:
-        check = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=5)
-        if "msedge.exe" in check.stdout:
-            subprocess.run(["taskkill", "/F", "/IM", "msedge.exe"],
-                           capture_output=True, timeout=10)
-            time.sleep(2)
-    except Exception:
+        ans = input("\n  Upload to XCT Live? [Y/n] ").strip().lower()
+        if ans not in ("n", "no"):
+            upload_collection_live()
+    except (EOFError, KeyboardInterrupt):
         pass
-
-    # Prevent Edge from restoring previous tabs (it thinks it "crashed")
-    # Remove session restore files from the default profile
-    for sess_file in ("Last Session", "Last Tabs", "Current Session", "Current Tabs"):
-        p = os.path.join(edge_profile, "Default", sess_file)
-        try:
-            if os.path.isfile(p):
-                os.remove(p)
-        except OSError:
-            pass
-
-    print()
-    print("  [*] Launching Edge to Microsoft billing page...")
-    print("      If you're not already signed in, log in when the page opens.")
-    print("      Once you see your order history, come back here and press Enter.")
-    print()
-
-    proc = subprocess.Popen([
-        edge_exe,
-        f"--remote-debugging-port={CDP_PORT}",
-        "--remote-allow-origins=*",
-        f"--user-data-dir={edge_profile}",
-        "--no-first-run",
-        "--disable-session-crashed-bubble",
-        "--hide-crash-restore-bubble",
-        billing_url,
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    input("  Press Enter once the billing page has loaded... ")
-
-    # Connect to CDP
-    print("  [*] Connecting to Edge CDP...")
-    try:
-        resp = urllib.request.urlopen(f"http://127.0.0.1:{CDP_PORT}/json", timeout=5)
-        tabs = json.loads(resp.read().decode())
-    except Exception as e:
-        print(f"  [!] Cannot connect to Edge CDP: {e}")
-        return None, None
-
-    # Find the billing tab
-    ws_url = None
-    for tab in tabs:
-        tab_url = tab.get("url", "")
-        if "account.microsoft.com" in tab_url and "billing" in tab_url:
-            ws_url = tab.get("webSocketDebuggerUrl")
-            break
-    if not ws_url:
-        for tab in tabs:
-            if "account.microsoft.com" in tab.get("url", ""):
-                ws_url = tab.get("webSocketDebuggerUrl")
-                break
-    if not ws_url:
-        print("  [!] Could not find billing tab. Available tabs:")
-        for tab in tabs:
-            print(f"      - {tab.get('url', '?')}")
-        return None, None
-
-    print(f"  [*] Found billing tab, fetching orders via browser...")
-
-    try:
-        sock = ws_mod.create_connection(ws_url, timeout=30)
-    except Exception as e:
-        print(f"  [!] WebSocket connection failed: {e}")
-        return None, None
-
-    msg_id = [1]  # mutable for closure
-
-    def cdp_send(method, params=None, timeout=60):
-        msg = {"id": msg_id[0], "method": method}
-        if params:
-            msg["params"] = params
-        sock.send(json.dumps(msg))
-        cur_id = msg_id[0]
-        msg_id[0] += 1
-        sock.settimeout(timeout)
-        while True:
-            raw = sock.recv()
-            data = json.loads(raw)
-            if data.get("id") == cur_id:
-                return data
-
-    return sock, cdp_send
-
-
-def _oh_fetch_all_via_cdp(sock, cdp_send):
-    """Fetch all order history in a single JS execution inside Edge.
-
-    Runs the entire pagination loop as one async JS function in the browser,
-    so there's only one CDP round-trip instead of hundreds. The browser
-    handles all auth natively.
-
-    Returns list of raw order dicts.
-    """
-    # Debug: fetch first page and capture full response structure + continuation token
-    JS_FETCH_ALL = r"""
-    (async () => {
-        const csrf = document.querySelector('input[name=__RequestVerificationToken]')?.value
-                  || document.querySelector('meta[name=__RequestVerificationToken]')?.content
-                  || '';
-        if (!csrf) {
-            window.__xct = {error: 'no_csrf', done: true, orders: [], pages: 0, debug: []};
-            return;
-        }
-
-        window.__xct = {done: false, orders: [], pages: 0, error: null, debug: []};
-
-        async function fetchPage(continuationToken) {
-            const params = new URLSearchParams({
-                period: 'AllTime',
-                orderTypeFilter: 'All',
-                filterChangeCount: '0',
-                isInD365Orders: 'true',
-                isPiDetailsRequired: 'true',
-                timeZoneOffsetMinutes: '0',
-            });
-            if (continuationToken) params.set('continuationToken', continuationToken);
-
-            const resp = await fetch('/billing/orders/list?' + params.toString(), {
-                headers: {
-                    'Accept': 'application/json, text/plain, */*',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    '__RequestVerificationToken': csrf,
-                },
-                credentials: 'same-origin',
-            });
-
-            if (!resp.ok) return {orders: [], continuationToken: null, error: resp.status, keys: []};
-
-            const text = await resp.text();
-            let data;
-            try {
-                let padded = text.trim();
-                const missing = padded.length % 4;
-                if (missing) padded += '='.repeat(4 - missing);
-                data = JSON.parse(atob(padded));
-            } catch(e) {
-                try { data = JSON.parse(text); } catch(e2) {
-                    return {orders: [], continuationToken: null, error: 'parse_fail', keys: [], raw: text.substring(0, 200)};
-                }
-            }
-            return {
-                orders: data.orders || [],
-                continuationToken: data.continuationToken || null,
-                error: null,
-                keys: Object.keys(data),
-            };
-        }
-
-        // Fetch first 5 pages sequentially, logging everything
-        let ct = null;
-        for (let i = 0; i < 5; i++) {
-            const result = await fetchPage(ct);
-            window.__xct.pages++;
-            const dbg = {
-                page: i,
-                usedToken: ct,
-                gotToken: result.continuationToken,
-                orderCount: result.orders.length,
-                error: result.error,
-                keys: result.keys,
-            };
-            if (result.orders.length > 0) {
-                dbg.firstOrderDate = result.orders[0].localSubmittedDate;
-                dbg.lastOrderDate = result.orders[result.orders.length - 1].localSubmittedDate;
-                window.__xct.orders.push(...result.orders);
-            }
-            if (result.raw) dbg.raw = result.raw;
-            window.__xct.debug.push(dbg);
-            document.title = 'XCT debug: page ' + i + ' done';
-
-            if (!result.continuationToken) break;
-            ct = result.continuationToken;
-            await new Promise(r => setTimeout(r, 500));
-        }
-
-        window.__xct.done = true;
-        document.title = 'XCT: Debug done - ' + window.__xct.orders.length + ' orders';
-    })()
-    """
-
-    print("  [*] Fetching order history (debug mode - first 5 pages)...")
-
-    # Fire and forget
-    cdp_send("Runtime.evaluate", {
-        "expression": JS_FETCH_ALL,
-        "awaitPromise": False,
-    }, timeout=10)
-
-    # Poll for completion
-    last_count = -1
-    while True:
-        time.sleep(3)
-        try:
-            poll = cdp_send("Runtime.evaluate", {
-                "expression": "JSON.stringify({done: window.__xct?.done, count: window.__xct?.orders?.length || 0, pages: window.__xct?.pages || 0, error: window.__xct?.error})",
-                "returnByValue": True,
-            }, timeout=10)
-            val = poll.get("result", {}).get("result", {}).get("value", "{}")
-            status = json.loads(val)
-        except Exception:
-            continue
-
-        count = status.get("count", 0)
-        pages = status.get("pages", 0)
-        done = status.get("done", False)
-        error = status.get("error")
-
-        if count != last_count:
-            print(f"\r  [*] {count} orders ({pages} pages scanned)...   ", end="", flush=True)
-            last_count = count
-
-        if done:
-            print()
-            if error:
-                print(f"  [!] Error: {error}")
-                if count > 0:
-                    print(f"  [*] Recovered {count} orders before error")
-            else:
-                print(f"  [+] Complete: {count} orders across {pages} pages")
-            break
-
-    # Extract debug info
-    debug_resp = cdp_send("Runtime.evaluate", {
-        "expression": "JSON.stringify(window.__xct?.debug || [])",
-        "returnByValue": True,
-    }, timeout=10)
-    debug_json = debug_resp.get("result", {}).get("result", {}).get("value", "[]")
-    try:
-        debug_pages = json.loads(debug_json)
-        if debug_pages:
-            print(f"\n  === DEBUG: Page-by-page response ===")
-            for dp in debug_pages:
-                print(f"    Page {dp.get('page')}: orders={dp.get('orderCount')}, "
-                      f"error={dp.get('error')}, keys={dp.get('keys')}")
-                print(f"      Used token: {dp.get('usedToken')}")
-                print(f"      Got token:  {dp.get('gotToken')}")
-                if dp.get('firstOrderDate'):
-                    print(f"      Date range: {dp.get('firstOrderDate')} -> {dp.get('lastOrderDate')}")
-                if dp.get('raw'):
-                    print(f"      Raw (first 200): {dp.get('raw')}")
-            print()
-    except Exception as e:
-        print(f"  [!] Debug parse error: {e}")
-
-    # Extract the orders
-    extract_resp = cdp_send("Runtime.evaluate", {
-        "expression": "JSON.stringify(window.__xct?.orders || [])",
-        "returnByValue": True,
-    }, timeout=60)
-
-    orders_json = extract_resp.get("result", {}).get("result", {}).get("value", "[]")
-    try:
-        all_orders = json.loads(orders_json)
-    except json.JSONDecodeError:
-        print("  [!] Failed to parse orders — data may be too large for single transfer")
-        all_orders = []
-
-    # Deduplicate by order ID
-    seen = set()
-    unique_orders = []
-    for o in all_orders:
-        oid = o.get("orderId", "")
-        if oid and oid in seen:
-            continue
-        seen.add(oid)
-        unique_orders.append(o)
-
-    if len(unique_orders) < len(all_orders):
-        print(f"  [*] Deduplicated: {len(all_orders)} -> {len(unique_orders)} orders")
-
-    # Print what we got
-    for o in unique_orders:
-        date = o.get("localSubmittedDate", "?")
-        titles = [i.get("localTitle", "?") for i in o.get("items", [])]
-        total = o.get("localTotal", "")
-        title_str = " | ".join(titles)[:60]
-        print(f"    {date:>22}  {total:>12}  {title_str}")
-
-    print(f"\n[+] Fetched {len(unique_orders)} orders")
-    return unique_orders
 
 
 def process_order_history():
@@ -22299,117 +22866,84 @@ def process_order_history():
         print("  [!] No gamertags configured. Use [c] to add one first.")
         return
 
-    if len(gamertags) == 1:
-        gamertag = gamertags[0]
-    else:
-        print()
-        for i, gt in enumerate(gamertags, 1):
-            print(f"    [{i}] {gt}")
-        print()
-        pick = input(f"  Which account? [1-{len(gamertags)} / 0=back]: ").strip()
-        if pick == "0":
-            return
-        try:
-            idx = int(pick) - 1
-            if 0 <= idx < len(gamertags):
-                gamertag = gamertags[idx]
-            else:
-                print("  Invalid selection.")
-                return
-        except ValueError:
-            print("  Invalid selection.")
-            return
+    # Count how many accounts have saved order history
+    saved_count = sum(1 for gt in gamertags if os.path.isfile(account_path(gt, ORDER_HISTORY_FILE)))
 
-    set_account_paths(gamertag)
     print()
-
-    has_saved = os.path.isfile(account_path(gamertag, ORDER_HISTORY_FILE))
-
-    print(f"    [1] Fetch via Edge (opens browser, fetches directly)")
-    print(f"    [2] Fetch via saved cookies (HAR import)")
-    if has_saved:
-        print(f"    [3] View saved order history")
+    print(f"  Microsoft Order History ({len(gamertags)} gamertags, {saved_count} scanned):")
+    print()
+    print(f"    [1] Update all ({len(gamertags)} gamertags — incremental)")
+    print(f"    [2] Full scan all ({len(gamertags)} gamertags — re-fetch everything)")
+    print(f"    [3] Scan single gamertag")
+    if saved_count:
+        print(f"    [4] View saved order history")
+        print(f"    [5] Upload existing scans to XCT Live")
     print(f"    [0] Back")
     print()
     choice = input("  Pick: ").strip()
 
-    if choice == "0":
+    if choice == "0" or not choice:
         return
-    elif choice == "3" and has_saved:
-        _oh_view_history(gamertag)
+
+    elif choice in ("1", "2"):
+        # Process all gamertags
+        full = choice == "2"
+        total_accounts = 0
+        for i, gamertag in enumerate(gamertags, 1):
+            print(f"\n  === [{i}/{len(gamertags)}] {gamertag} ===")
+            if _is_token_expired(gamertag):
+                print(f"  Token is >12h old, refreshing...")
+                _auto_refresh_token(gamertag)
+            if _oh_fetch_for_account(gamertag, full=full):
+                total_accounts += 1
+        print(f"\n[+] Order history complete for {total_accounts}/{len(gamertags)} accounts")
+        _oh_prompt_upload()
         return
-    elif choice == "1":
-        # Fetch directly via Edge CDP — no cookie extraction needed
-        sock, cdp_send = _oh_cdp_connect()
-        if not sock:
+
+    elif choice == "3":
+        # Single gamertag
+        gt = _pick_account(gamertags, "Which account?", allow_all=False)
+        if gt is None:
             return
-        try:
-            raw_orders = _oh_fetch_all_via_cdp(sock, cdp_send)
-        finally:
-            try:
-                sock.close()
-            except Exception:
-                pass
-    elif choice == "2":
-        # HAR-based cookie import fallback
-        auth = _oh_load_auth(gamertag)
-        if auth:
-            age_hrs = (time.time() - auth.get("extracted_at", 0)) / 3600
-            print(f"  [i] Existing session found ({age_hrs:.1f} hours old)")
-            ans = input("  Use existing session? [Y/n]: ").strip().lower()
-            if ans in ("n", "no"):
-                auth = None
-
-        if not auth:
-            har_files = sorted(glob.glob(os.path.join(os.getcwd(), "*.har")))
-            if not har_files:
-                har_files = sorted(glob.glob(os.path.join(os.getcwd(), "**", "*.har"), recursive=True))
-            if not har_files:
-                print("\n  [!] No .har files found in current directory.")
-                har_path = input("  Enter path to HAR file: ").strip().strip('"')
-                if not har_path or not os.path.isfile(har_path):
-                    print("  [!] File not found.")
-                    return
-            elif len(har_files) == 1:
-                har_path = har_files[0]
-                print(f"\n  Found: {os.path.basename(har_path)}")
-            else:
-                print()
-                for i, hf in enumerate(har_files, 1):
-                    print(f"    [{i}] {os.path.basename(hf)}")
-                print()
-                hp = input(f"  Which HAR file? [1-{len(har_files)}]: ").strip()
-                try:
-                    har_path = har_files[int(hp) - 1]
-                except (ValueError, IndexError):
-                    print("  Invalid selection.")
-                    return
-            print()
-            auth = _oh_extract_auth_from_har(har_path)
-            if not auth:
-                return
-            _oh_save_auth(gamertag, auth)
-
+        set_account_paths(gt)
+        has_saved = os.path.isfile(account_path(gt, ORDER_HISTORY_FILE))
         print()
-        raw_orders = fetch_order_history(gamertag, auth)
+        print(f"    [1] Update (incremental)")
+        print(f"    [2] Full scan")
+        if has_saved:
+            print(f"    [3] View saved")
+        print(f"    [0] Back")
+        print()
+        sub = input("  Pick: ").strip()
+        if sub == "0" or not sub:
+            return
+        if sub == "3" and has_saved:
+            _oh_view_history(gt)
+            return
+        if sub in ("1", "2"):
+            if _is_token_expired(gt):
+                print(f"  Token is >12h old, refreshing...")
+                _auto_refresh_token(gt)
+            if _oh_fetch_for_account(gt, full=(sub == "2")):
+                orders = load_json(account_path(gt, ORDER_HISTORY_FILE)) or []
+                _oh_print_summary(orders)
+                _oh_prompt_upload()
+        return
+
+    elif choice == "4" and saved_count:
+        gt = _pick_account(gamertags, "View which account?", allow_all=False)
+        if gt:
+            _oh_view_history(gt)
+        return
+
+    elif choice == "5" and saved_count:
+        print()
+        upload_collection_live()
+        return
+
     else:
         print("  Invalid selection.")
         return
-
-    if not raw_orders:
-        print("[!] No orders found.")
-        return
-
-    # Flatten and save
-    orders = [_oh_flatten_order(o) for o in raw_orders]
-
-    out_path = account_path(gamertag, ORDER_HISTORY_FILE)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(orders, f, indent=2, ensure_ascii=False)
-    print(f"[+] Saved {len(orders)} orders to {out_path}")
-
-    # Summary
-    _oh_print_summary(orders)
 
 
 def _oh_view_history(gamertag):
@@ -22418,7 +22952,7 @@ def _oh_view_history(gamertag):
     path = account_path(gamertag, ORDER_HISTORY_FILE)
     if not os.path.isfile(path):
         print(f"\n  [!] No saved order history for {gamertag}.")
-        print(f"      Use option [2] to import a HAR file first.")
+        print(f"      Use option [1] to fetch via API first.")
         return
 
     with open(path, "r", encoding="utf-8") as f:
@@ -22426,6 +22960,79 @@ def _oh_view_history(gamertag):
 
     print(f"\n  Loaded {len(orders)} orders from {os.path.basename(path)}")
     _oh_print_summary(orders)
+
+
+def _oh_flatten_for_html(orders, catalog, gamertag=""):
+    """Flatten order history into per-item records enriched with catalog data.
+
+    Each order can have multiple line items. Returns a flat list of item dicts
+    suitable for the Purchases tab in the HTML frontend.
+    """
+    items = []
+    for o in orders:
+        order_date = o.get("date", "")
+        order_id = o.get("orderId", "")
+        vanity_id = o.get("vanityOrderId", "")
+        market = o.get("market", "")
+        currency = o.get("currency", "")
+        order_total = o.get("totalDecimal", 0) or 0
+        order_type = o.get("controlsOrderType", "")
+
+        for li in o.get("items", []):
+            pid = li.get("productId", "")
+            cat = catalog.get(pid, {}) if catalog else {}
+
+            # Parse prices from strings
+            list_price = 0
+            amount_paid = 0
+            try:
+                list_price = float(li.get("totalListPrice", 0) or 0)
+            except (ValueError, TypeError):
+                pass
+            try:
+                amount_paid = float(li.get("totalAmountWithoutTax", 0) or 0)
+            except (ValueError, TypeError):
+                pass
+
+            # Map TitleHub-style platforms if catalog has them
+            platforms = cat.get("platforms", [])
+
+            items.append({
+                "gamertag":      gamertag,
+                "orderId":       order_id,
+                "vanityOrderId": vanity_id,
+                "orderDate":     order_date,
+                "market":        market,
+                "currency":      currency,
+                "orderTotal":    order_total,
+                "orderType":     order_type,
+                # Line item fields
+                "productId":     pid,
+                "title":         li.get("title", "") or cat.get("title", "") or pid,
+                "type":          li.get("type", ""),
+                "status":        li.get("status", ""),
+                "isPurchased":   li.get("isPurchased", False),
+                "isCanceled":    li.get("isCanceled", False),
+                "isGift":        li.get("isGift", False),
+                "isPreorder":    li.get("isPreorder", False),
+                "isSubscription": li.get("isSubscription", False),
+                "quantity":      li.get("quantity", 1),
+                "listPrice":     list_price,
+                "amountPaid":    amount_paid,
+                "description":   li.get("description", ""),
+                # Enriched from catalog
+                "developer":     cat.get("developer", ""),
+                "publisher":     cat.get("publisher", ""),
+                "image":         cat.get("image", ""),
+                "boxArt":        cat.get("boxArt", ""),
+                "category":      cat.get("category", ""),
+                "releaseDate":   cat.get("releaseDate", ""),
+                "platforms":     platforms,
+                "productKind":   cat.get("productKind", ""),
+                "priceUSD":      cat.get("priceUSD", 0),
+                "currentPriceUSD": cat.get("currentPriceUSD", 0),
+            })
+    return items
 
 
 def _oh_print_summary(orders):
@@ -22496,7 +23103,7 @@ def _oh_print_summary(orders):
 def _pick_account(gamertags, prompt="Which account?", allow_all=True):
     """Prompt user to pick an account. Returns gamertag, '*', or None."""
     if not gamertags:
-        print("  [!] No gamertags configured. Use [c] to add one first.")
+        print("  [!] No gamertags configured.")
         return None
     if len(gamertags) == 1:
         return gamertags[0]
@@ -22521,6 +23128,330 @@ def _pick_account(gamertags, prompt="Which account?", allow_all=True):
     return None
 
 
+def _menu_scan(gamertags):
+    """Unified scan sub-menu — pick target gamertag(s) and endpoint(s)."""
+    if not gamertags:
+        print("  [!] No gamertags configured.")
+        return
+
+    saved_oh = sum(1 for gt in gamertags if os.path.isfile(account_path(gt, ORDER_HISTORY_FILE)))
+
+    print()
+    print("  ╔══════════════════════════════════════════════╗")
+    print("  ║                  Scan                        ║")
+    print("  ╚══════════════════════════════════════════════╝")
+    print()
+    print(f"  Target:")
+    print(f"    [1] All gamertags ({len(gamertags)})")
+    print(f"    [2] Single gamertag")
+    print(f"    [0] Back")
+    print()
+    tp = input("  Pick target: ").strip()
+    if tp == "0" or not tp:
+        return
+
+    if tp == "1":
+        target_gts = gamertags
+        target_label = f"all {len(gamertags)} gamertags"
+    elif tp == "2":
+        gt = _pick_account(gamertags, "Which gamertag?", allow_all=False)
+        if not gt:
+            return
+        target_gts = [gt]
+        target_label = gt
+    else:
+        print("  Invalid selection.")
+        return
+
+    print()
+    print(f"  Endpoint (scanning {target_label}):")
+    print(f"    [1] All endpoints (Collection + TitleHub + Content Access + Order History)")
+    print(f"    [2] Collections API")
+    print(f"    [3] TitleHub")
+    print(f"    [4] Content Access (Xbox 360)")
+    print(f"    [5] Order History (incremental)")
+    print(f"    [6] Order History (full re-fetch)")
+    if saved_oh:
+        print(f"    [7] View saved order history")
+        print(f"    [8] Upload existing scans to XCT Live")
+    print(f"    [0] Back")
+    print()
+    ep = input("  Pick endpoint: ").strip()
+    if ep == "0" or not ep:
+        return
+
+    _t0 = time.time()
+
+    if ep == "1":  # All endpoints
+        try:
+            for i, g in enumerate(target_gts, 1):
+                print(f"\n  === [{i}/{len(target_gts)}] {g} ===")
+                if _is_token_expired(g):
+                    _auto_refresh_token(g)
+                process_account(g, method="both")
+                _oh_fetch_for_account(g, full=False)
+            if len(target_gts) > 1:
+                build_index()
+            _op_summary("Scan all endpoints", detail=target_label, elapsed=time.time() - _t0, pause=False)
+            _oh_prompt_upload()
+        except Exception as _e:
+            _op_summary("Scan all endpoints", success=False, detail=str(_e), elapsed=time.time() - _t0)
+
+    elif ep == "2":  # Collections API
+        try:
+            for i, g in enumerate(target_gts, 1):
+                if len(target_gts) > 1:
+                    print(f"\n  === [{i}/{len(target_gts)}] {g} ===")
+                if _is_token_expired(g):
+                    _auto_refresh_token(g)
+                html_file, _lib = process_account(g, method="collection")
+            if len(target_gts) > 1:
+                build_index()
+                _op_summary("Collections API scan", detail=target_label, elapsed=time.time() - _t0)
+            else:
+                file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                webbrowser.open(file_url)
+                _op_summary("Collections API scan", detail=f"{target_gts[0]} — {len(_lib):,} items", elapsed=time.time() - _t0)
+        except Exception as _e:
+            _op_summary("Collections API scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
+
+    elif ep == "3":  # TitleHub
+        try:
+            for i, g in enumerate(target_gts, 1):
+                if len(target_gts) > 1:
+                    print(f"\n  === [{i}/{len(target_gts)}] {g} ===")
+                if _is_token_expired(g):
+                    _auto_refresh_token(g)
+                html_file, _lib = process_account(g, method="titlehub")
+            if len(target_gts) > 1:
+                build_index()
+                _op_summary("TitleHub scan", detail=target_label, elapsed=time.time() - _t0)
+            else:
+                file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                webbrowser.open(file_url)
+                _op_summary("TitleHub scan", detail=f"{target_gts[0]} — {len(_lib):,} items", elapsed=time.time() - _t0)
+        except Exception as _e:
+            _op_summary("TitleHub scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
+
+    elif ep == "4":  # Content Access
+        try:
+            for i, g in enumerate(target_gts, 1):
+                if len(target_gts) > 1:
+                    print(f"\n  === [{i}/{len(target_gts)}] {g} ===")
+                if _is_token_expired(g):
+                    _auto_refresh_token(g)
+                result = process_contentaccess_only(g)
+                if isinstance(result, tuple):
+                    html_file = result[0]
+                else:
+                    html_file = result
+            if len(target_gts) > 1:
+                html_file = build_index()
+            if html_file:
+                file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
+                webbrowser.open(file_url)
+            _op_summary("Content Access scan", detail=target_label, elapsed=time.time() - _t0)
+        except Exception as _e:
+            _op_summary("Content Access scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
+
+    elif ep in ("5", "6"):  # Order History
+        full = ep == "6"
+        try:
+            total = 0
+            for i, g in enumerate(target_gts, 1):
+                if len(target_gts) > 1:
+                    print(f"\n  === [{i}/{len(target_gts)}] {g} ===")
+                if _is_token_expired(g):
+                    _auto_refresh_token(g)
+                if _oh_fetch_for_account(g, full=full):
+                    total += 1
+            label = "full re-fetch" if full else "incremental"
+            _op_summary(f"Order History ({label})", detail=f"{total}/{len(target_gts)} accounts", elapsed=time.time() - _t0, pause=False)
+            _oh_prompt_upload()
+        except Exception as _e:
+            _op_summary("Order History", success=False, detail=str(_e), elapsed=time.time() - _t0)
+
+    elif ep == "7" and saved_oh:  # View saved
+        if len(target_gts) == 1:
+            _oh_view_history(target_gts[0])
+        else:
+            gt = _pick_account(gamertags, "View which account?", allow_all=False)
+            if gt:
+                _oh_view_history(gt)
+
+    elif ep == "8" and saved_oh:  # Upload existing
+        upload_collection_live()
+
+    else:
+        print("  Invalid selection.")
+
+
+def _menu_manage(gamertags):
+    """Manage gamertags sub-menu — show, add, refresh, delete, update."""
+    print()
+    print("  ╔══════════════════════════════════════════════╗")
+    print("  ║             Manage Gamertags                 ║")
+    print("  ╚══════════════════════════════════════════════╝")
+    print()
+    if gamertags:
+        print(f"    [1] Show gamertag list ({len(gamertags)})")
+    print(f"    [2] Add new gamertag")
+    if gamertags:
+        print(f"    [3] Refresh token (single)")
+        print(f"    [4] Refresh all tokens")
+        print(f"    [5] Delete a gamertag")
+        print(f"    [6] Update gamertag (rescan name)")
+    print(f"    [0] Back")
+    print()
+    mp = input("  Pick: ").strip()
+    if mp == "0" or not mp:
+        return
+
+    if mp == "1" and gamertags:
+        print()
+        for i, gt in enumerate(gamertags, 1):
+            age = token_age_str(gt)
+            print(f"    [{i:>2}] {gt}  (token: {age})")
+        print()
+        ap = input(f"  Process which gamertag? [1-{len(gamertags)} / 0=back]: ").strip()
+        if ap == "0":
+            return
+        try:
+            idx = int(ap) - 1
+            if 0 <= idx < len(gamertags):
+                gt = gamertags[idx]
+                _t0 = time.time()
+                try:
+                    print(f"\n[*] Refreshing token for {gt}...")
+                    gt = refresh_account_token(gt) or gt
+                    html_file, _lib = process_account(gt, method="both")
+                    _op_summary("Process gamertag", detail=f"{gt} — {len(_lib):,} items", elapsed=time.time() - _t0)
+                except Exception as _e:
+                    _op_summary("Process gamertag", success=False, detail=str(_e), elapsed=time.time() - _t0)
+            else:
+                print("  Invalid selection.")
+        except ValueError:
+            print("  Invalid selection.")
+
+    elif mp == "2":
+        cmd_add()
+
+    elif mp == "3" and gamertags:
+        if len(gamertags) == 1:
+            gt = gamertags[0]
+        else:
+            print()
+            for i, gt in enumerate(gamertags, 1):
+                print(f"    [{i}] {gt} (token: {token_age_str(gt)})")
+            print()
+            rp = input(f"  Refresh which gamertag? [1-{len(gamertags)} / 0=back]: ").strip()
+            if rp == "0":
+                return
+            try:
+                idx = int(rp) - 1
+                if 0 <= idx < len(gamertags):
+                    gt = gamertags[idx]
+                else:
+                    print("  Invalid selection.")
+                    return
+            except ValueError:
+                print("  Invalid selection.")
+                return
+        _t0 = time.time()
+        try:
+            print(f"\n[*] Refreshing token for {gt}...")
+            gt = refresh_account_token(gt) or gt
+            process_now = input("\n  Process collection now? [Y/n]: ").strip().lower()
+            if process_now not in ("n", "no"):
+                html_file, _lib = process_account(gt)
+            _op_summary("Refresh token", detail=f"{gt}", elapsed=time.time() - _t0)
+        except Exception as _e:
+            _op_summary("Refresh token", success=False, detail=str(_e), elapsed=time.time() - _t0)
+
+    elif mp == "4" and gamertags:
+        _t0 = time.time()
+        try:
+            print(f"\n[*] Refreshing tokens for {len(gamertags)} gamertag(s)...")
+            for gt in gamertags:
+                try:
+                    print(f"  {gt}...", end=" ", flush=True)
+                    new_gt = refresh_account_token(gt)
+                    if new_gt and new_gt != gt:
+                        print(f"OK (renamed -> {new_gt})")
+                    elif new_gt:
+                        print("OK")
+                    else:
+                        print("FAILED")
+                except Exception as _te:
+                    print(f"FAILED: {_te}")
+            _op_summary("Refresh all tokens", detail=f"{len(gamertags)} gamertags", elapsed=time.time() - _t0)
+        except Exception as _e:
+            _op_summary("Refresh all tokens", success=False, detail=str(_e), elapsed=time.time() - _t0)
+
+    elif mp == "5" and gamertags:
+        gt = None
+        if len(gamertags) == 1:
+            gt = gamertags[0]
+        else:
+            print()
+            for i, g in enumerate(gamertags, 1):
+                print(f"    [{i}] {g}")
+            print()
+            dp = input(f"  Delete which gamertag? [1-{len(gamertags)} / 0=back]: ").strip()
+            if dp == "0":
+                return
+            try:
+                idx = int(dp) - 1
+                if 0 <= idx < len(gamertags):
+                    gt = gamertags[idx]
+                else:
+                    print("  Invalid selection.")
+            except ValueError:
+                print("  Invalid selection.")
+        if gt:
+            _t0 = time.time()
+            try:
+                delete_account(gt)
+                _op_summary("Delete gamertag", detail=f"{gt}", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("Delete gamertag", success=False, detail=str(_e), elapsed=time.time() - _t0)
+
+    elif mp == "6" and gamertags:
+        gt = None
+        if len(gamertags) == 1:
+            gt = gamertags[0]
+        else:
+            print()
+            for i, g in enumerate(gamertags, 1):
+                print(f"    [{i}] {g}")
+            print()
+            up = input(f"  Update which gamertag? [1-{len(gamertags)} / 0=back]: ").strip()
+            if up == "0":
+                return
+            try:
+                idx = int(up) - 1
+                if 0 <= idx < len(gamertags):
+                    gt = gamertags[idx]
+                else:
+                    print("  Invalid selection.")
+            except ValueError:
+                print("  Invalid selection.")
+        if gt:
+            _t0 = time.time()
+            try:
+                print(f"\n[*] Re-authenticating {gt} to check for gamertag changes...")
+                new_gt = sisu_auth_for_account(existing_gamertag=gt)
+                if new_gt and new_gt != gt:
+                    _op_summary("Update gamertag", detail=f"{gt} → {new_gt}", elapsed=time.time() - _t0)
+                else:
+                    _op_summary("Update gamertag", detail=f"{gt} — no change detected", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("Update gamertag", success=False, detail=str(_e), elapsed=time.time() - _t0)
+
+    else:
+        print("  Invalid selection.")
+
+
 def interactive_menu():
     """Unified interactive menu for all operations."""
     while True:
@@ -22530,53 +23461,41 @@ def interactive_menu():
         print_header()
         if gamertags:
             print(f"  Gamertags ({len(gamertags)}):")
-            print(f"    [a] Show list")
-            print(f"    [b] Process all")
-            print(f"    [c] Add new gamertag")
-            print(f"    [d] Refresh token")
-            print(f"    [e] Refresh all tokens")
-            print(f"    [f] Delete a gamertag")
-            print(f"    [g] Clear cache + rescan all")
+            print(f"    [a] Scan")
+            print(f"    [b] Manage gamertags")
+            print(f"    [c] Clear cache + rescan all")
+            print(f"    [d] Batch process")
         else:
             print("  Gamertags:  (none)")
-            print("    [c] Add a gamertag to unlock collection features")
-        print()
-        print("  Scan endpoints:")
-        print("    [h] Collections API only")
-        print("    [i] TitleHub only")
-        print("    [j] Content Access only (Xbox 360)")
+            print("    [a] Add a gamertag to unlock collection features")
         print()
         print("  Build:")
-        print("    [k] Build/Rebuild Index")
+        print("    [e] Build/Rebuild Index")
         print()
         print("  XVC CDN Scrape and Sync:")
-        print("    [l] Scrape XVCs from Xbox One / Series X|S USB Hard Drive")
-        print("    [t] Scrape XVCs from Locally Installed Windows Games")
-        print("    [s] Sync CDN.json with Freshdex CDN Database")
-        print("    [x] Upload Collection to XCT Live")
+        print("    [f] Scrape XVCs from Xbox One / Series X|S USB Hard Drive")
+        print("    [g] Scrape XVCs from Locally Installed Windows Games")
+        print("    [h] Sync CDN.json with Freshdex CDN Database")
+        print("    [i] Upload Collection to XCT Live")
         print()
         print("  CDN Installers:")
-        print("    [u] Game Downgrader")
-        print("    [z] Game Purge Recovery (beta)")
-        print("    [n] MS Store (Win8/8.1/10) CDN Installer")
-        print("    [y] Batch Game Downgrader (all versions)")
+        print("    [j] Game Downgrader")
+        print("    [k] Game Purge Recovery (beta)")
+        print("    [l] MS Store (Win8/8.1/10) CDN Installer")
+        print("    [m] Batch Game Downgrader (all versions)")
         print()
         print("  GFWL:")
-        print("    [o] GFWL CDN Installer")
-        print("    [p] Recover GFWL Product Keys (by elusiveeagle)")
+        print("    [n] GFWL CDN Installer")
+        print("    [o] Recover GFWL Product Keys (by elusiveeagle)")
         print()
         print("  Windows/Store:")
-        print("    [q] Windows Gaming Repair Tool")
-        print("    [r] Windows Store Reset Tool")
-        print("    [w] Game Pass Free Trial Button Fixer (Chrome Extension Install)")
+        print("    [p] Windows Gaming Repair Tool")
+        print("    [q] Windows Store Reset Tool")
+        print("    [r] Game Pass Free Trial Button Fixer (Chrome Extension Install)")
         print()
         if gamertags:
             print("  Xbox Remote Tools:")
-            print("    [m] Xbox Remote Tools")
-            print()
-        if gamertags:
-            print("  Account:")
-            print("    [v] Microsoft Order History")
+            print("    [s] Xbox Remote Tools")
             print()
         print("    [0] Quit")
         print("    [?] Credits")
@@ -22642,138 +23561,16 @@ def interactive_menu():
             continue
         elif pu == "a":
             if _no_accts:
-                print("  [!] No gamertags configured. Use [c] to add one first.")
-                continue
-            print()
-            for i, gt in enumerate(gamertags, 1):
-                age = token_age_str(gt)
-                print(f"    [{i:>2}] {gt}  (token: {age})")
-            print()
-            ap = input(f"  Process which gamertag? [1-{len(gamertags)} / 0=back]: ").strip()
-            if ap == "0":
-                continue
-            try:
-                idx = int(ap) - 1
-                if 0 <= idx < len(gamertags):
-                    gt = gamertags[idx]
-                    _t0 = time.time()
-                    try:
-                        print(f"\n[*] Refreshing token for {gt}...")
-                        refresh_account_token(gt)
-                        html_file, _lib = process_account(gt, method="both")
-                        _op_summary("Process gamertag", detail=f"{gt} — {len(_lib):,} items", elapsed=time.time() - _t0)
-                        if html_file:
-                            file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                            print(f"[*] Opening in browser: {file_url}")
-                            webbrowser.open(file_url)
-                    except Exception as _e:
-                        _op_summary("Process gamertag", success=False, detail=str(_e), elapsed=time.time() - _t0)
-                else:
-                    print("  Invalid selection.")
-            except ValueError:
-                print("  Invalid selection.")
-            continue
-        elif pu == "b":
-            if _no_accts:
-                print("  [!] No gamertags configured. Use [c] to add one first.")
-                continue
-            _t0 = time.time()
-            try:
-                process_all_accounts()
-                _op_summary("Process all gamertags", detail="Done", elapsed=time.time() - _t0)
-            except Exception as _e:
-                _op_summary("Process all gamertags", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "c":
-            cmd_add()
-            continue
-        elif pu == "d":
-            if _no_accts:
-                print("  [!] No gamertags configured. Use [c] to add one first.")
-                continue
-            if len(gamertags) == 1:
-                gt = gamertags[0]
+                cmd_add()
             else:
-                print()
-                for i, gt in enumerate(gamertags, 1):
-                    print(f"    [{i}] {gt} (token: {token_age_str(gt)})")
-                print()
-                rp = input(f"  Refresh which gamertag? [1-{len(gamertags)} / 0=back]: ").strip()
-                if rp == "0":
-                    continue
-                try:
-                    idx = int(rp) - 1
-                    if 0 <= idx < len(gamertags):
-                        gt = gamertags[idx]
-                    else:
-                        print("  Invalid selection.")
-                        continue
-                except ValueError:
-                    print("  Invalid selection.")
-                    continue
-            _t0 = time.time()
-            try:
-                print(f"\n[*] Refreshing token for {gt}...")
-                refresh_account_token(gt)
-                process_now = input("\n  Process collection now? [Y/n]: ").strip().lower()
-                if process_now not in ("n", "no"):
-                    html_file, _lib = process_account(gt)
-                _op_summary("Refresh token", detail=f"{gt}", elapsed=time.time() - _t0)
-            except Exception as _e:
-                _op_summary("Refresh token", success=False, detail=str(_e), elapsed=time.time() - _t0)
+                _menu_scan(gamertags)
             continue
-        elif pu == "e":
-            if _no_accts:
-                print("  [!] No gamertags configured. Use [c] to add one first.")
-                continue
-            _t0 = time.time()
-            try:
-                print(f"\n[*] Refreshing tokens for {len(gamertags)} gamertag(s)...")
-                for gt in gamertags:
-                    try:
-                        print(f"  {gt}...", end=" ", flush=True)
-                        refresh_account_token(gt)
-                        print("OK")
-                    except Exception as _te:
-                        print(f"FAILED: {_te}")
-                _op_summary("Refresh all tokens", detail=f"{len(gamertags)} gamertags", elapsed=time.time() - _t0)
-            except Exception as _e:
-                _op_summary("Refresh all tokens", success=False, detail=str(_e), elapsed=time.time() - _t0)
+        elif pu == "b":  # Manage gamertags
+            _menu_manage(gamertags)
             continue
-        elif pu == "f":
+        elif pu == "c":  # Clear cache + rescan
             if _no_accts:
-                print("  [!] No gamertags configured. Use [c] to add one first.")
-                continue
-            gt = None
-            if len(gamertags) == 1:
-                gt = gamertags[0]
-            else:
-                print()
-                for i, g in enumerate(gamertags, 1):
-                    print(f"    [{i}] {g}")
-                print()
-                dp = input(f"  Delete which gamertag? [1-{len(gamertags)} / 0=back]: ").strip()
-                if dp == "0":
-                    continue
-                try:
-                    idx = int(dp) - 1
-                    if 0 <= idx < len(gamertags):
-                        gt = gamertags[idx]
-                    else:
-                        print("  Invalid selection.")
-                except ValueError:
-                    print("  Invalid selection.")
-            if gt:
-                _t0 = time.time()
-                try:
-                    delete_account(gt)
-                    _op_summary("Delete gamertag", detail=f"{gt}", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("Delete gamertag", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "g":
-            if _no_accts:
-                print("  [!] No gamertags configured. Use [c] to add one first.")
+                print("  [!] No gamertags configured. Use [a] to add one first.")
                 continue
             print()
             print("  This will delete all cached API data and rescan every gamertag.")
@@ -22788,98 +23585,58 @@ def interactive_menu():
                 except Exception as _e:
                     _op_summary("Clear cache + rescan", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "h":
-            gt = _pick_account(gamertags, "Collections API scan for which account?")
-            if gt == "*":
-                _t0 = time.time()
-                try:
-                    for g in gamertags:
-                        if _is_token_expired(g):
-                            _auto_refresh_token(g)
-                        process_account(g, method="collection")
-                    build_index()
-                    _op_summary("Collections API scan", detail="All gamertags", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("Collections API scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            elif gt:
-                _t0 = time.time()
-                try:
-                    if _is_token_expired(gt):
-                        _auto_refresh_token(gt)
-                    html_file, _lib = process_account(gt, method="collection")
-                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                    webbrowser.open(file_url)
-                    _op_summary("Collections API scan", detail=f"{gt} — {len(_lib):,} items", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("Collections API scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
+        elif pu == "d":  # Batch process
+            if _no_accts:
+                print("  [!] No gamertags configured. Use [a] to add one first.")
+                continue
+            _t0 = time.time()
+            try:
+                _ran = process_batch_menu()
+                if _ran is not False:
+                    _op_summary("Batch Process", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("Batch Process", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "i":
-            gt = _pick_account(gamertags, "TitleHub scan for which account?")
-            if gt == "*":
-                _t0 = time.time()
-                try:
-                    for g in gamertags:
-                        if _is_token_expired(g):
-                            _auto_refresh_token(g)
-                        process_account(g, method="titlehub")
-                    build_index()
-                    _op_summary("TitleHub scan", detail="All gamertags", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("TitleHub scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            elif gt:
-                _t0 = time.time()
-                try:
-                    if _is_token_expired(gt):
-                        _auto_refresh_token(gt)
-                    html_file, _lib = process_account(gt, method="titlehub")
-                    file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                    webbrowser.open(file_url)
-                    _op_summary("TitleHub scan", detail=f"{gt} — {len(_lib):,} items", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("TitleHub scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "j":
-            gt = _pick_account(gamertags, "Content Access scan for which account?")
-            if gt == "*":
-                _t0 = time.time()
-                try:
-                    for g in gamertags:
-                        if _is_token_expired(g):
-                            _auto_refresh_token(g)
-                        process_contentaccess_only(g)
-                    html_file = build_index()
-                    if html_file:
-                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                        webbrowser.open(file_url)
-                    _op_summary("Content Access scan", detail="All gamertags", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("Content Access scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            elif gt:
-                _t0 = time.time()
-                try:
-                    if _is_token_expired(gt):
-                        _auto_refresh_token(gt)
-                    html_file, _lib = process_contentaccess_only(gt)
-                    if html_file:
-                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                        webbrowser.open(file_url)
-                    _op_summary("Content Access scan", detail=f"{gt}", elapsed=time.time() - _t0)
-                except Exception as _e:
-                    _op_summary("Content Access scan", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "k":
+        elif pu == "e":  # Build index
             _t0 = time.time()
             try:
                 html_file = build_index()
-                if html_file:
+                _op_summary("Build index", detail="HTML rebuilt from cache", elapsed=time.time() - _t0)
+                # Offer upload
+                _uploaded = False
+                try:
+                    upload_ans = input("  Upload collection to XCT Live? [y/N] ").strip().lower()
+                    if upload_ans in ("y", "yes"):
+                        all_accounts = load_accounts()
+                        full_library, full_ph, full_history = [], [], []
+                        for _gt in all_accounts:
+                            _lf = account_path(_gt, "library.json")
+                            _pf = account_path(_gt, "play_history.json")
+                            if os.path.isfile(_lf):
+                                full_library.extend(load_json(_lf) or [])
+                            if os.path.isfile(_pf):
+                                full_ph.extend(load_json(_pf) or [])
+                            full_history.extend(load_all_scans(_gt, max_scans=50))
+                        full_history.sort(key=lambda s: s.get("timestamp", ""), reverse=True)
+                        upload_collection_live(
+                            library=full_library,
+                            play_history=full_ph,
+                            scan_history=full_history[:100],
+                            accounts_meta=collect_account_metadata(),
+                        )
+                        _uploaded = True
+                except (EOFError, KeyboardInterrupt):
+                    pass
+                if _uploaded:
+                    webbrowser.open("https://xct.live")
+                elif html_file:
                     file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
                     print(f"[*] Opening in browser: {file_url}")
                     webbrowser.open(file_url)
-                _op_summary("Build index", detail="HTML rebuilt from cache", elapsed=time.time() - _t0)
             except Exception as _e:
                 _op_summary("Build index", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "l":
+        elif pu == "f":  # Scrape USB
             _t0 = time.time()
             try:
                 process_xbox_usb_tool()
@@ -22887,15 +23644,31 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("USB Hard Drive Tool", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "n":
+        elif pu == "g":  # Scrape PC
             _t0 = time.time()
             try:
-                process_store_packages()
-                _op_summary("MS Store Installer", detail="Done", elapsed=time.time() - _t0)
+                process_pc_cdn_scrape()
+                _op_summary("PC CDN Scrape", detail="Done", elapsed=time.time() - _t0)
             except Exception as _e:
-                _op_summary("MS Store Installer", success=False, detail=str(_e), elapsed=time.time() - _t0)
+                _op_summary("PC CDN Scrape", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "u":
+        elif pu == "h":  # Sync CDN
+            _t0 = time.time()
+            try:
+                process_cdn_sync()
+                _op_summary("CDN Sync", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("CDN Sync", success=False, detail=str(_e), elapsed=time.time() - _t0)
+            continue
+        elif pu == "i":  # Upload to XCT Live
+            _t0 = time.time()
+            try:
+                upload_collection_live()
+                _op_summary("XCT Live Upload", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("XCT Live Upload", success=False, detail=str(_e), elapsed=time.time() - _t0)
+            continue
+        elif pu == "j":  # Game Downgrader
             _t0 = time.time()
             try:
                 process_game_downgrader()
@@ -22903,15 +23676,7 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("Game Downgrader", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "y":
-            _t0 = time.time()
-            try:
-                process_batch_downgrader()
-                _op_summary("Batch Downgrader", detail="Done", elapsed=time.time() - _t0)
-            except Exception as _e:
-                _op_summary("Batch Downgrader", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "z":
+        elif pu == "k":  # Game Purge Recovery
             _t0 = time.time()
             try:
                 process_purge_recovery()
@@ -22919,7 +23684,23 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("Purge Recovery", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "o":
+        elif pu == "l":  # MS Store CDN
+            _t0 = time.time()
+            try:
+                process_store_packages()
+                _op_summary("MS Store Installer", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("MS Store Installer", success=False, detail=str(_e), elapsed=time.time() - _t0)
+            continue
+        elif pu == "m":  # Batch Downgrader
+            _t0 = time.time()
+            try:
+                process_batch_downgrader()
+                _op_summary("Batch Downgrader", detail="Done", elapsed=time.time() - _t0)
+            except Exception as _e:
+                _op_summary("Batch Downgrader", success=False, detail=str(_e), elapsed=time.time() - _t0)
+            continue
+        elif pu == "n":  # GFWL CDN
             _t0 = time.time()
             try:
                 process_gfwl_download()
@@ -22927,13 +23708,13 @@ def interactive_menu():
             except Exception as _e:
                 _op_summary("GFWL CDN Installer", success=False, detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "p":
+        elif pu == "o":  # GFWL Keys
             try:
                 recover_gfwl_keys()
             except Exception as _e:
                 print(f"  [!] Error: {_e}")
             continue
-        elif pu == "q":
+        elif pu == "p":  # Windows Gaming Repair
             print("\n  [Windows Gaming Repair Tool]\n")
             print("    [1] Repair Gaming Components (re-register, reset, restart services)")
             print("    [2] Clear Windows Credential Manager (fix sign-in issues)")
@@ -22948,7 +23729,7 @@ def interactive_menu():
             except Exception as _e:
                 print(f"  [!] Error: {_e}")
             continue
-        elif pu == "r":
+        elif pu == "q":  # Windows Store Reset
             print("\n  [Windows Store Reset Tool]")
             print()
             print("  Clears the Microsoft Store cache without deleting installed")
@@ -22973,15 +23754,15 @@ def interactive_menu():
             else:
                 print("  Cancelled.")
             continue
-        elif pu == "w":
+        elif pu == "r":  # Game Pass Trial Fixer
             try:
                 install_trial_button_extension()
             except Exception as _e:
                 print(f"  [!] Error: {_e}")
             continue
-        elif pu == "m":
+        elif pu == "s":  # Xbox Remote Tools
             if _no_accts:
-                print("  [!] No gamertags configured. Use [c] to add one first.")
+                print("  [!] No gamertags configured. Use [a] to add one first.")
                 continue
             gt = _pick_account(gamertags, "Which account?", allow_all=False)
             if not gt:
@@ -22993,63 +23774,8 @@ def interactive_menu():
                 _op_summary("Xbox Remote Tools", success=False,
                             detail=str(_e), elapsed=time.time() - _t0)
             continue
-        elif pu == "s":
-            _t0 = time.time()
-            try:
-                process_cdn_sync()
-                _op_summary("CDN Sync", detail="Done", elapsed=time.time() - _t0)
-            except Exception as _e:
-                _op_summary("CDN Sync", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "x":
-            _t0 = time.time()
-            try:
-                upload_collection_live()
-                _op_summary("XCT Live Upload", detail="Done", elapsed=time.time() - _t0)
-            except Exception as _e:
-                _op_summary("XCT Live Upload", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "t":
-            _t0 = time.time()
-            try:
-                process_pc_cdn_scrape()
-                _op_summary("PC CDN Scrape", detail="Done", elapsed=time.time() - _t0)
-            except Exception as _e:
-                _op_summary("PC CDN Scrape", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
-        elif pu == "v":
-            if _no_accts:
-                print("  [!] No gamertags configured. Use [c] to add one first.")
-                continue
-            _t0 = time.time()
-            try:
-                process_order_history()
-                _op_summary("Order History", detail="Done", elapsed=time.time() - _t0)
-            except Exception as _e:
-                _op_summary("Order History", success=False, detail=str(_e), elapsed=time.time() - _t0)
-            continue
         else:
-            try:
-                idx = int(pick) - 1
-                if 0 <= idx < len(gamertags):
-                    gt = gamertags[idx]
-                    _t0 = time.time()
-                    try:
-                        # Refresh token (clears API cache) so we always get fresh data
-                        print(f"\n[*] Refreshing token for {gt}...")
-                        refresh_account_token(gt)
-                        html_file, _lib = process_account(gt, method="both")
-                        file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
-                        print(f"[*] Opening in browser: {file_url}")
-                        webbrowser.open(file_url)
-                        _op_summary("Process gamertag", detail=f"{gt} — {len(_lib):,} items", elapsed=time.time() - _t0)
-                    except Exception as _e:
-                        _op_summary("Process gamertag", success=False, detail=str(_e), elapsed=time.time() - _t0)
-                    continue
-                else:
-                    print("  Invalid selection.")
-            except ValueError:
-                print("  Invalid selection.")
+            print("  Invalid selection.")
 
 
 # ===========================================================================
@@ -23108,7 +23834,7 @@ def main():
             else:
                 # Refresh token
                 print(f"[*] Refreshing token for {gamertag}...")
-                refresh_account_token(gamertag)
+                gamertag = refresh_account_token(gamertag) or gamertag
 
                 html_file, _lib = process_account(gamertag)
                 if html_file:
