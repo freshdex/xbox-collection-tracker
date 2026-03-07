@@ -30,6 +30,8 @@ async function _loadCollection(){
       _myRegions=data.settings.myRegions;
       localStorage.setItem('xct_my_regions',JSON.stringify(_myRegions));
       _initMyRegions()}
+    if(data.settings&&data.settings.gamertagInfo){
+      window._gamertagInfo=data.settings.gamertagInfo}
     var ownedPids=new Set(LIB.map(function(x){return x.productId}));
     if(MKT.length)MKT.forEach(function(x){x.owned=ownedPids.has(x.productId)});
     if(GP.length)GP.forEach(function(x){x.owned=ownedPids.has(x.productId)});
@@ -200,7 +202,8 @@ async function _xctReloadCollection(){
   var ok=await _loadCollection();
   if(ok){
     try{initDropdowns();filterLib();filterPH();renderHistory();filterMKT();filterGP();
-      if(typeof filterPurchases==='function')filterPurchases()}catch(e){console.error('[auth] render error:',e)}
+      if(typeof filterPurchases==='function')filterPurchases();
+      if(typeof renderAccounts==='function')renderAccounts()}catch(e){console.error('[auth] render error:',e)}
     if(LIB.length){document.getElementById('tab-lib-cnt').textContent=LIB.length}
     if(PH.length){document.getElementById('tab-ph').style.display='';document.getElementById('tab-ph-cnt').textContent=PH.length}
     if(HISTORY.length){document.getElementById('tab-hist').style.display='';document.getElementById('tab-hist-cnt').textContent=HISTORY.length+' scans'}
@@ -219,7 +222,8 @@ if(_xctApiKey){
     console.log('[auth] initial load result:',ok,'LIB:',LIB.length,'PURCHASES:',typeof PURCHASES!=='undefined'?PURCHASES.length:0);
     if(ok){
       try{initDropdowns();filterLib();filterPH();renderHistory();filterMKT();filterGP();
-        if(typeof filterPurchases==='function')filterPurchases()}catch(e){console.error('[auth] init render error:',e)}
+        if(typeof filterPurchases==='function')filterPurchases();
+        if(typeof renderAccounts==='function')renderAccounts()}catch(e){console.error('[auth] init render error:',e)}
       if(LIB.length){document.getElementById('tab-lib-cnt').textContent=LIB.length}
       if(PH.length){document.getElementById('tab-ph').style.display='';document.getElementById('tab-ph-cnt').textContent=PH.length}
       if(HISTORY.length){document.getElementById('tab-hist').style.display='';document.getElementById('tab-hist-cnt').textContent=HISTORY.length+' scans'}
