@@ -1304,18 +1304,18 @@ def store_filters():
         """)
         developers = [dict(r) for r in cur.fetchall()]
 
-        # Subscriptions (with total value per tier)
+        # Subscriptions (with total value per tier from regional prices)
         try:
             cur.execute("""
                 SELECT ms.tier AS value,
                        COUNT(DISTINCT ms.product_id) AS count,
-                       COALESCE(SUM(p.price_usd), 0) AS total_value
+                       COALESCE(SUM(rp.msrp), 0) AS total_value
                 FROM marketplace_subscriptions ms
                 JOIN marketplace_products p ON p.product_id = ms.product_id AND p.title != p.product_id
+                LEFT JOIN marketplace_prices rp ON rp.product_id = ms.product_id AND rp.market = 'US'
                 GROUP BY ms.tier ORDER BY count DESC
             """)
             subscriptions = [dict(r) for r in cur.fetchall()]
-            # Convert Decimal to float for JSON
             for s in subscriptions:
                 s["total_value"] = float(s.get("total_value", 0) or 0)
         except Exception:
