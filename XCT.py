@@ -4630,6 +4630,27 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<button onclick="_savePriceSettings()" style="padding:8px 20px;background:#107c10;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px">Save &amp; Apply</button>\n'
         '<span id="set-status" style="margin-left:12px;font-size:12px;color:#4caf50"></span>\n'
         '</div>\n'
+        # Change Passphrase card
+        '<div id="set-pass-card" style="display:none;background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:20px;max-width:600px;margin:16px 0">\n'
+        '<h3 style="margin:0 0 16px;font-size:14px;color:#ccc">Change Passphrase</h3>\n'
+        '<div style="margin-bottom:12px">\n'
+        '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px">Current Passphrase</label>\n'
+        '<input id="set-pass-current" type="password" placeholder="Current passphrase" '
+        'style="width:100%;max-width:300px;padding:8px;background:#222;color:#e0e0e0;border:1px solid #444;border-radius:4px;font-size:13px;box-sizing:border-box">\n'
+        '</div>\n'
+        '<div style="margin-bottom:12px">\n'
+        '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px">New Passphrase</label>\n'
+        '<input id="set-pass-new" type="password" placeholder="New passphrase" '
+        'style="width:100%;max-width:300px;padding:8px;background:#222;color:#e0e0e0;border:1px solid #444;border-radius:4px;font-size:13px;box-sizing:border-box">\n'
+        '</div>\n'
+        '<div style="margin-bottom:16px">\n'
+        '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px">Confirm New Passphrase</label>\n'
+        '<input id="set-pass-confirm" type="password" placeholder="Confirm new passphrase" '
+        'style="width:100%;max-width:300px;padding:8px;background:#222;color:#e0e0e0;border:1px solid #444;border-radius:4px;font-size:13px;box-sizing:border-box">\n'
+        '</div>\n'
+        '<button onclick="_changePassphrase()" style="padding:8px 20px;background:#107c10;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px">Change Passphrase</button>\n'
+        '<span id="set-pass-status" style="margin-left:12px;font-size:12px"></span>\n'
+        '</div>\n'
         '</div>\n'
 
         # -- Our Mission --
@@ -4762,7 +4783,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "var f=document.getElementById('set-ar-formula');"
         "var g=document.getElementById('set-gc-price');"
         "if(f)f.value=_arFormula;"
-        "if(g)g.value=_gcPrice!==100?_gcPrice:''}\n"
+        "if(g)g.value=_gcPrice!==100?_gcPrice:'';"
+        "var pc=document.getElementById('set-pass-card');"
+        "if(pc&&window._xctHosted&&window._xctApiKey)pc.style.display=''}\n"
         "function _savePriceSettings(){"
         "var f=document.getElementById('set-ar-formula');"
         "var g=document.getElementById('set-gc-price');"
@@ -4779,6 +4802,28 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "st.textContent='Saved!';st.style.color='#4caf50';"
         "setTimeout(function(){st.textContent=''},2000);"
         "if(typeof filterMKT==='function')filterMKT()}\n"
+        "function _changePassphrase(){"
+        "var cur=document.getElementById('set-pass-current').value.trim();"
+        "var nw=document.getElementById('set-pass-new').value.trim();"
+        "var cf=document.getElementById('set-pass-confirm').value.trim();"
+        "var st=document.getElementById('set-pass-status');"
+        "st.style.color='#f44';"
+        "if(!cur){st.textContent='Current passphrase required';return}"
+        "if(!nw||nw.length<4){st.textContent='New passphrase must be at least 4 characters';return}"
+        "if(nw!==cf){st.textContent='New passphrases do not match';return}"
+        "st.textContent='Saving...';st.style.color='#888';"
+        "fetch('/api/v1/profile/passphrase',{method:'PUT',"
+        "headers:{'Content-Type':'application/json','Authorization':'Bearer '+window._xctApiKey},"
+        "body:JSON.stringify({current:cur,new_passphrase:nw})})"
+        ".then(function(r){return r.json().then(function(d){return{ok:r.ok,data:d}})})"
+        ".then(function(res){"
+        "if(res.ok){st.textContent='Passphrase changed!';st.style.color='#4caf50';"
+        "document.getElementById('set-pass-current').value='';"
+        "document.getElementById('set-pass-new').value='';"
+        "document.getElementById('set-pass-confirm').value='';"
+        "setTimeout(function(){st.textContent=''},3000)}"
+        "else{st.textContent=res.data.error||'Failed';st.style.color='#f44'}})"
+        ".catch(function(e){st.textContent='Error: '+e.message;st.style.color='#f44'})}\n"
         "const _kinds=['Game','Durable'];\n"
         "const _kindN=['Games','DLC'];\n"
         # Compute Collection row stats (deduped, all owned — matches Summary card)

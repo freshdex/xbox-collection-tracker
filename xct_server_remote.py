@@ -4415,6 +4415,37 @@ def profile_put(conn=None, cur=None, contributor=None, api_key=None):
         return jsonify(error=str(e)), 500
 
 
+@app.route("/api/v1/profile/passphrase", methods=["PUT"])
+@require_auth
+def profile_change_passphrase(conn=None, cur=None, contributor=None, api_key=None):
+    """Change passphrase for the authenticated user."""
+    try:
+        data = request.get_json(force=True)
+        current = (data.get("current") or "").strip()[:128]
+        new_pass = (data.get("new_passphrase") or "").strip()[:128]
+        if not current:
+            return jsonify(error="Current passphrase required"), 400
+        if not new_pass or len(new_pass) < 4:
+            return jsonify(error="New passphrase must be at least 4 characters"), 400
+        # Verify current passphrase
+        cur.execute("SELECT passphrase_hash FROM contributors WHERE id = %s", (contributor["id"],))
+        row = cur.fetchone()
+        if not row or not row["passphrase_hash"]:
+            return jsonify(error="No passphrase set on this account"), 400
+        current_hash = hashlib.sha256(current.encode()).hexdigest()
+        if current_hash != row["passphrase_hash"]:
+            return jsonify(error="Current passphrase is incorrect"), 403
+        # Update
+        new_hash = hashlib.sha256(new_pass.encode()).hexdigest()
+        cur.execute("UPDATE contributors SET passphrase_hash = %s WHERE id = %s",
+                    (new_hash, contributor["id"]))
+        conn.commit()
+        return jsonify(ok=True)
+    except Exception as e:
+        conn.rollback()
+        return jsonify(error=str(e)), 500
+
+
 # ---------------------------------------------------------------------------
 # CDN Version Monitor
 # ---------------------------------------------------------------------------
@@ -4861,6 +4892,7 @@ def add_cors_headers(response):
 @app.route("/api/v1/leaderboard/admin", methods=["OPTIONS"])
 @app.route("/api/v1/leaderboard/stop", methods=["OPTIONS"])
 @app.route("/api/v1/profile", methods=["OPTIONS"])
+@app.route("/api/v1/profile/passphrase", methods=["OPTIONS"])
 @app.route("/api/v1/admin/changelog", methods=["OPTIONS"])
 @app.route("/api/v1/admin/scans", methods=["OPTIONS"])
 @app.route("/api/v1/admin/scan", methods=["OPTIONS"])
