@@ -2854,10 +2854,10 @@ def merge_library(entitlements, catalog, gamertag=""):
                 item["platforms"] = ["Windows Phone"]
 
         # TitleHub-only items go to play_history (disc rentals, trials, etc.)
-        # Detect by: has _titlehub metadata but no Collections purchase data
-        is_th_only = (ent.get("_titlehub_only")
-                      or ("_titlehub" in ent and not ent.get("acquiredDate")
-                          and not ent.get("skuId")))
+        # Only items explicitly flagged _titlehub_only by the merge step
+        # (present in TitleHub but absent from Collections API) belong here.
+        # Collections API items may have empty acquiredDate/skuId — that's normal.
+        is_th_only = bool(ent.get("_titlehub_only"))
         if is_th_only:
             play_history.append(item)
         else:
