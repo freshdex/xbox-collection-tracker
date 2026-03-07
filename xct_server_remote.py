@@ -4380,6 +4380,20 @@ def profile_put(conn=None, cur=None, contributor=None, api_key=None):
             raw = data["settings"]
             if "myRegions" in raw and isinstance(raw["myRegions"], list):
                 settings_update["myRegions"] = [r for r in raw["myRegions"] if r in valid_regions]
+            if "gamertagInfo" in raw and isinstance(raw["gamertagInfo"], dict):
+                clean = {}
+                for gt, info in raw["gamertagInfo"].items():
+                    if not isinstance(info, dict):
+                        continue
+                    entry = {}
+                    if "region" in info and (info["region"] == "" or info["region"] in valid_regions):
+                        entry["region"] = info["region"]
+                    if "email" in info and isinstance(info["email"], str):
+                        entry["email"] = info["email"][:320]
+                    if entry:
+                        clean[gt[:64]] = entry
+                if clean:
+                    settings_update["gamertagInfo"] = clean
         has_status = "status" in data
         status = (data.get("status") or "")[:280] if has_status else None
         if settings_update and has_status:
