@@ -4643,7 +4643,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const _kinds=['Game','Durable'];\n"
         "const _kindN=['Games','DLC'];\n"
         # Pre-compute Collection row stats (deduped, all owned — matches Summary card)
-        "const _collSeen={};const _collOwned=LIB.concat(typeof _impLib!=='undefined'&&_impLib?_impLib:[]).filter(x=>x.owned).filter(x=>{if(_collSeen[x.productId])return false;_collSeen[x.productId]=1;return true});\n"
+        "const _collSeen={};const _collOwned=LIB.filter(x=>x.owned).filter(x=>{if(_collSeen[x.productId])return false;_collSeen[x.productId]=1;return true});\n"
         "const _collTotal=_collOwned.length,_collVal=_collOwned.reduce((s,x)=>s+(x.priceUSD||0),0);\n"
         "const _collD=_kinds.map(k=>{const a=_collOwned.filter(x=>x.productKind===k);return{cnt:a.length,val:a.reduce((s,x)=>s+(x.priceUSD||0),0)}});\n"
         "const _collGTs=new Set(_collOwned.map(x=>x.gamertag||'')).size||(_collOwned.length?1:0);\n"
