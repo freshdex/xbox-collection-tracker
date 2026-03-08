@@ -1765,6 +1765,8 @@ def store_products():
 
         if own_raw:
             o_list = [o.strip() for o in own_raw.split(",") if o.strip()]
+            # Backward compat: old "notowned" → "notowned_digital"
+            o_list = ["notowned_digital" if o == "notowned" else o for o in o_list]
             own_conds = []
             # Owned on Digital
             if "owned" in o_list and owned_pids is not None:
