@@ -1794,28 +1794,37 @@ def store_products():
                 wheres.append("(" + " OR ".join(own_conds) + ")")
 
         # Hide owned editions — exclude unowned products sharing a title ID
-        # with any owned product OR any game the user has achievements in
+        # with any digitally-owned or disc-owned product
         if hide_owned_ed == "1" and owned_pids:
-            # Get title IDs of owned products
+            # Get title IDs of digitally owned products
             cur.execute(
                 "SELECT DISTINCT xbox_title_id FROM marketplace_products "
                 "WHERE product_id = ANY(%s) AND xbox_title_id != ''",
                 (list(owned_pids),))
             owned_tids = set(row["xbox_title_id"] for row in cur.fetchall())
-            # Also include title IDs from achievement summaries
+            # Also include title IDs from disc-owned products
             if contributor:
                 cur.execute(
-                    "SELECT DISTINCT xbox_title_id FROM xbox_achievement_summaries "
-                    "WHERE contributor_id = %s AND current_achievements > 0 "
-                    "AND xbox_title_id != ''",
+                    "SELECT DISTINCT mp.xbox_title_id "
+                    "FROM disc_ownership dsc "
+                    "JOIN marketplace_products mp ON mp.product_id = dsc.product_id "
+                    "WHERE dsc.contributor_id = %s AND mp.xbox_title_id != ''",
                     (contributor["id"],))
                 owned_tids.update(row["xbox_title_id"] for row in cur.fetchall())
+            # Combine digital + disc owned product IDs for the exclusion check
+            hoe_pids = set(owned_pids)
+            if contributor:
+                cur.execute(
+                    "SELECT product_id FROM disc_ownership "
+                    "WHERE contributor_id = %s",
+                    (contributor["id"],))
+                hoe_pids.update(row["product_id"] for row in cur.fetchall())
             if owned_tids:
                 wheres.append(
                     "NOT (p.xbox_title_id = ANY(%(owned_tids)s) "
                     "AND NOT p.product_id = ANY(%(hoe_owned_pids)s))")
                 params["owned_tids"] = list(owned_tids)
-                params["hoe_owned_pids"] = list(owned_pids)
+                params["hoe_owned_pids"] = list(hoe_pids)
 
         # Release status
         if rel_raw:
