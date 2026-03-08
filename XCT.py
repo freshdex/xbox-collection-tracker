@@ -4320,6 +4320,13 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Physical Disc (cb-drop)
         '<div class="mkt-sf"><div class="mkt-sf-label">Physical Disc</div>'
         '<div class="cb-drop mkt-cb-full" id="mkt-phys"><div class="cb-btn" onclick="toggleCB(this)">All Physical &#9662;</div><div class="cb-panel"></div></div></div>\n'
+        # Disc Ownership (select dropdown — only shown when logged in)
+        '<div class="mkt-sf" id="mkt-disc-wrap" style="display:none"><div class="mkt-sf-label">Disc Ownership</div>'
+        '<select id="mkt-disc-sel" onchange="mktPage=0;filterMKT()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px">'
+        '<option value="">All</option>'
+        '<option value="owned">Own on Disc</option>'
+        '<option value="notowned">Do Not Own on Disc</option>'
+        '</select></div>\n'
         # Region Availability (select dropdown)
         '<div class="mkt-sf"><div class="mkt-sf-label">Region Availability</div>'
         '<select id="mkt-region-sel" onchange="mktPage=0;filterMKT()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px">'
@@ -5330,6 +5337,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('noplayed')==='1'&&document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=true;"
         "if(p.get('noach')==='1'&&document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=true;"
         "if(p.has('region'))document.getElementById('mkt-region-sel').value=p.get('region');"
+        "if(p.has('disc')&&document.getElementById('mkt-disc-sel'))document.getElementById('mkt-disc-sel').value=p.get('disc');"
         "return true}\n"
 
         # -- Library filter serialization --
@@ -5517,6 +5525,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=false;"
         "if(document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=false;"
         "if(document.getElementById('mkt-region-sel'))document.getElementById('mkt-region-sel').value='';"
+        "if(document.getElementById('mkt-disc-sel'))document.getElementById('mkt-disc-sel').value='';"
         "document.getElementById('mkt-search').value='';"
         # Apply saved params
         "const p=new URLSearchParams(found.params);"
@@ -5538,6 +5547,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('noplayed')==='1'&&document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=true;"
         "if(p.get('noach')==='1'&&document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=true;"
         "if(p.has('region'))document.getElementById('mkt-region-sel').value=p.get('region');"
+        "if(p.has('disc')&&document.getElementById('mkt-disc-sel'))document.getElementById('mkt-disc-sel').value=p.get('disc');"
         "_mktActiveSaved=val;_mktInitSaved();mktPage=0;filterMKT()}\n"
 
         "function _mktSerializeState(){"
@@ -5562,6 +5572,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');"
         "if(document.getElementById('mkt-noach')&&document.getElementById('mkt-noach').checked)p.set('noach','1');"
         "var _rg=(document.getElementById('mkt-region-sel')||{}).value;if(_rg)p.set('region',_rg);"
+        "var _dc=(document.getElementById('mkt-disc-sel')||{}).value;if(_dc)p.set('disc',_dc);"
         "return p.toString()}\n"
 
         "function _mktSuggestName(){"
@@ -5780,7 +5791,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "fillStatic('mkt-preorder',[['released','Released'],['preorder','Pre-Order'],['noPrice','No Price']],'filterMKT',['released']);\n"
         "fillStatic('mkt-bundle',[['bundles','Bundles'],['notbundle','Not Bundles']],'filterMKT');\n"
         "fillStatic('mkt-phys',[['physical','Has Physical Disc'],['uk','UK Only'],['us','US Only'],['digital','Digital Only'],['notscanned','Not Scanned']],'filterMKT');\n"
-        ""
+        "if(window._xctApiKey){document.getElementById('mkt-disc-wrap').style.display=''}\n"
         # Fetch dynamic dropdowns from API
         "fetch('/api/v1/store/filters').then(function(r){return r.json()}).then(function(data){\n"
         "var chSel=document.getElementById('mkt-channel');data.channels.forEach(function(c){var o=document.createElement('option');o.value=c.value;o.textContent=c.value+' ('+c.count+')';chSel.appendChild(o)});\n"
@@ -5816,6 +5827,11 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "'Last scan: '+agoStr+' ('+(data.totalProducts||0).toLocaleString()+' products)'}\n"
         # Deserialize URL filters, then trigger initial load
         "_mktDeserializeFilters();\n"
+        # Load disc ownership set for logged-in user
+        "if(window._xctApiKey){"
+        "fetch('/api/v1/store/disc-owned/all',{headers:{'Authorization':'Bearer '+window._xctApiKey}})"
+        ".then(r=>r.json()).then(d=>{(d.owned||[]).forEach(id=>_discOwned.add(id))})"
+        ".catch(e=>console.error('[disc] init error:',e))}\n"
         "_mktFiltersReady=true;\n"
         "filterMKT();\n"
         "if(typeof renderSummary==='function')renderSummary();\n"
@@ -6695,6 +6711,22 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
 
         # -- Amazon Physical Disc Links --
         "var _azLinks={};\n"
+        "var _discOwned=new Set();\n"
+        "function _discBulkFetch(pids){"
+        "if(!window._xctHosted||!window._xctApiKey||!pids||!pids.length)return;"
+        "fetch('/api/v1/store/disc-owned/bulk?pids='+pids.join(','),"
+        "{headers:{'Authorization':'Bearer '+window._xctApiKey}})"
+        ".then(r=>r.json()).then(data=>{"
+        "(data.owned||[]).forEach(id=>_discOwned.add(id))"
+        "}).catch(e=>console.error('[disc] bulk error:',e))}\n"
+        "function _discToggle(pid,cb){"
+        "const method=cb.checked?'POST':'DELETE';"
+        "fetch('/api/v1/store/disc-owned/'+pid,{method:method,"
+        "headers:{'Authorization':'Bearer '+window._xctApiKey}})"
+        ".then(r=>r.json()).then(d=>{"
+        "if(d.ok){if(cb.checked)_discOwned.add(pid);else _discOwned.delete(pid)}"
+        "else{cb.checked=!cb.checked}"
+        "}).catch(e=>{cb.checked=!cb.checked;console.error('[disc] toggle error:',e)})}\n"
         "function _azSearchUrl(title,mkt){"
         "const q=encodeURIComponent((title||'')+' Xbox').replace(/%20/g,'+');"
         "if(mkt==='UK')return 'https://www.amazon.co.uk/s?k='+q+'&i=videogames&dc&ref=a9_asc_1';"
@@ -6760,6 +6792,12 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const el=document.getElementById('phy-links-'+pid);if(!el)return;"
         "const links=data.links||[];"
         "let h='';"
+        # Disc ownership checkbox (any logged-in user)
+        "const _discChecked=_discOwned.has(pid);"
+        "h+='<label style=\"display:flex;align-items:center;gap:6px;margin-bottom:8px;cursor:pointer;font-size:13px;color:#ccc\">"
+        "<input type=\"checkbox\" id=\"disc-own-'+pid+'\" '+(_discChecked?'checked ':'')"
+        "+'onchange=\"_discToggle(\\''+pid+'\\',this)\" "
+        "style=\"accent-color:#4caf50;width:16px;height:16px;cursor:pointer\"> I own this on disc</label>';\n"
         # Show existing links
         "if(links.length){"
         "h+='<table style=\"width:100%;border-collapse:collapse;margin-bottom:8px\">';"
@@ -7307,6 +7345,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');\n"
         "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');\n"
         "if(document.getElementById('mkt-noach')&&document.getElementById('mkt-noach').checked)p.set('noach','1');\n"
+        "var _discV=(document.getElementById('mkt-disc-sel')||{}).value;if(_discV)p.set('disc',_discV);\n"
         # Fetch
         "var h={};if(window._xctApiKey)h['Authorization']='Bearer '+window._xctApiKey;\n"
         "fetch('/api/v1/store/products?'+p.toString(),{headers:h,signal:ac.signal})"
@@ -7320,6 +7359,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "var _azIsAdmin=typeof _xctUser!=='undefined'&&_xctUser.toLowerCase()==='freshdex';\n"
         # Bulk fetch amazon links for this page
         "_azBulkFetch(products.map(p=>p.productId));\n"
+        "_discBulkFetch(products.map(p=>p.productId));\n"
         # Render products
         "const g=document.getElementById('mkt-grid'),l=document.getElementById('mkt-list');\n"
         "let gh='',lh='<div class=\"lv-head\"><div></div>"

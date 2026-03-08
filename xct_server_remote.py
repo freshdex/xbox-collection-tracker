@@ -494,6 +494,29 @@ def init_db():
     except Exception as e:
         conn.rollback()
         print(f"[!] Physical links table init failed ({e}) — run migration manually")
+    # Disc ownership (per-user "I own this disc" flags)
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS disc_ownership (
+                contributor_id INTEGER NOT NULL,
+                product_id     VARCHAR(16) NOT NULL,
+                created_at     TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (contributor_id, product_id)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_disc_ownership_pid
+            ON disc_ownership(product_id)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_disc_ownership_cid
+            ON disc_ownership(contributor_id)
+        """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[!] Disc ownership table init failed ({e}) — run migration manually")
     # Shared title ID database (community-contributed from collection uploads)
     try:
         cur = conn.cursor()
@@ -1534,6 +1557,14 @@ def store_products():
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+        # Optional auth for user-specific filters (disc ownership)
+        contributor = None
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            api_key = auth[7:].strip()
+            if api_key:
+                contributor = _get_contributor(cur, api_key)
+
         # Refresh in-memory caches
         _refresh_gp_pids(cur)
         _refresh_exchange_rates(cur)
@@ -1568,6 +1599,7 @@ def store_products():
         noplayed = request.args.get("noplayed", "")
         noach = request.args.get("noach", "")
         phys_raw = request.args.get("phys", "")
+        disc_raw = request.args.get("disc", "")
 
         # Sort
         sort_sql, needs_us_price = _STORE_SORT_MAP.get(sort_key, _STORE_SORT_MAP["relDesc"])
@@ -1829,6 +1861,21 @@ def store_products():
                     "WHERE al.product_id = p.product_id)")
             if phys_conds:
                 wheres.append("(" + " OR ".join(phys_conds) + ")")
+
+        # Disc ownership filter (requires authenticated user)
+        if disc_raw and contributor:
+            if disc_raw == "owned":
+                wheres.append(
+                    "EXISTS (SELECT 1 FROM disc_ownership do "
+                    "WHERE do.product_id = p.product_id "
+                    "AND do.contributor_id = %(disc_cid)s)")
+                params["disc_cid"] = contributor["id"]
+            elif disc_raw == "notowned":
+                wheres.append(
+                    "NOT EXISTS (SELECT 1 FROM disc_ownership do "
+                    "WHERE do.product_id = p.product_id "
+                    "AND do.contributor_id = %(disc_cid)s)")
+                params["disc_cid"] = contributor["id"]
 
         # Boolean checkboxes
         if xcloud == "1":
@@ -2599,6 +2646,62 @@ def _sync_amazon_links_from_physical(cur, conn, product_id):
         ON CONFLICT (product_id) DO UPDATE
         SET status = %s, url_uk = %s, url_us = %s, updated_at = NOW()
     """, (product_id, status, url_uk, url_us, status, url_uk, url_us))
+
+
+# ---------------------------------------------------------------------------
+# Disc Ownership (per-user "I own this disc" tracking)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/store/disc-owned/bulk")
+@require_auth
+def disc_owned_bulk(contributor, conn, cur, api_key):
+    """Return owned disc product IDs for the current user (for a page of products)."""
+    pids_raw = request.args.get("pids", "")
+    pids = [p.strip() for p in pids_raw.split(",") if p.strip()][:500]
+    if not pids:
+        return jsonify(owned=[])
+    cur.execute(
+        "SELECT product_id FROM disc_ownership "
+        "WHERE contributor_id = %s AND product_id = ANY(%s)",
+        (contributor["id"], pids))
+    owned = [r["product_id"] for r in cur.fetchall()]
+    return jsonify(owned=owned)
+
+
+@app.route("/api/v1/store/disc-owned/all")
+@require_auth
+def disc_owned_all(contributor, conn, cur, api_key):
+    """Return all product IDs the user has marked as disc-owned."""
+    cur.execute(
+        "SELECT product_id FROM disc_ownership WHERE contributor_id = %s",
+        (contributor["id"],))
+    return jsonify(owned=[r["product_id"] for r in cur.fetchall()])
+
+
+@app.route("/api/v1/store/disc-owned/<product_id>", methods=["POST"])
+@require_auth
+def disc_owned_set(product_id, contributor, conn, cur, api_key):
+    """Mark a product as disc-owned for the current user."""
+    if len(product_id) > 16:
+        return jsonify(error="Invalid product ID"), 400
+    cur.execute("""
+        INSERT INTO disc_ownership (contributor_id, product_id)
+        VALUES (%s, %s)
+        ON CONFLICT DO NOTHING
+    """, (contributor["id"], product_id))
+    conn.commit()
+    return jsonify(ok=True)
+
+
+@app.route("/api/v1/store/disc-owned/<product_id>", methods=["DELETE"])
+@require_auth
+def disc_owned_unset(product_id, contributor, conn, cur, api_key):
+    """Remove disc-owned mark for the current user."""
+    cur.execute(
+        "DELETE FROM disc_ownership WHERE contributor_id = %s AND product_id = %s",
+        (contributor["id"], product_id))
+    conn.commit()
+    return jsonify(ok=True)
 
 
 # ---------------------------------------------------------------------------
