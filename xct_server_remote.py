@@ -1781,19 +1781,28 @@ def store_products():
             if own_conds:
                 wheres.append("(" + " OR ".join(own_conds) + ")")
 
-        # Hide owned editions — exclude unowned products sharing a title ID with any owned product
+        # Hide owned editions — exclude unowned products sharing a title ID
+        # with any owned product OR any game the user has achievements in
         if hide_owned_ed == "1" and owned_pids:
             # Get title IDs of owned products
             cur.execute(
                 "SELECT DISTINCT xbox_title_id FROM marketplace_products "
                 "WHERE product_id = ANY(%s) AND xbox_title_id != ''",
                 (list(owned_pids),))
-            owned_tids = [row["xbox_title_id"] for row in cur.fetchall()]
+            owned_tids = set(row["xbox_title_id"] for row in cur.fetchall())
+            # Also include title IDs from achievement summaries
+            if contributor:
+                cur.execute(
+                    "SELECT DISTINCT xbox_title_id FROM xbox_achievement_summaries "
+                    "WHERE contributor_id = %s AND current_achievements > 0 "
+                    "AND xbox_title_id != ''",
+                    (contributor["id"],))
+                owned_tids.update(row["xbox_title_id"] for row in cur.fetchall())
             if owned_tids:
                 wheres.append(
                     "NOT (p.xbox_title_id = ANY(%(owned_tids)s) "
                     "AND NOT p.product_id = ANY(%(hoe_owned_pids)s))")
-                params["owned_tids"] = owned_tids
+                params["owned_tids"] = list(owned_tids)
                 params["hoe_owned_pids"] = list(owned_pids)
 
         # Release status
@@ -1914,7 +1923,7 @@ def store_products():
                 contributor = _get_contributor(cur, api_key)
                 if contributor:
                     cur.execute(
-                        "SELECT xbox_title_id, product_id, title_name "
+                        "SELECT xbox_title_id, product_id "
                         "FROM xbox_achievement_summaries "
                         "WHERE contributor_id = %s AND current_achievements > 0",
                         (contributor["id"],))
@@ -1930,24 +1939,6 @@ def store_products():
                             parts.append("p.product_id != ALL(%(ach_pids)s)")
                             params["ach_pids"] = ach_pids
                         wheres.append("(" + " AND ".join(parts) + ")")
-                    # Also hide editions: products whose title starts with a
-                    # played game's title (catches "Game - Deluxe Edition" etc.)
-                    ach_titles = [r["title_name"] for r in ach_rows
-                                  if r.get("title_name") and len(r["title_name"]) >= 5]
-                    if ach_titles:
-                        # Find edition PIDs: title starts with an ach title + separator
-                        cur.execute("""
-                            SELECT DISTINCT mp.product_id
-                            FROM marketplace_products mp, UNNEST(%(ach_titles)s::text[]) AS base
-                            WHERE mp.title LIKE base || ' -%%'
-                               OR mp.title LIKE base || ':%%'
-                               OR mp.title LIKE base || ' (%%'
-                               OR mp.title LIKE base || ' |%%'
-                        """, {"ach_titles": ach_titles})
-                        edition_pids = [r["product_id"] for r in cur.fetchall()]
-                        if edition_pids:
-                            wheres.append("p.product_id != ALL(%(noach_ed_pids)s)")
-                            params["noach_ed_pids"] = edition_pids
 
         # Region availability filter
         if regions_raw and regions_raw in ("myregions", "notmy"):
