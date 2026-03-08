@@ -3839,7 +3839,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '.gp-list .lv-row{grid-template-columns:50px 1fr 160px 120px 90px 80px}\n'
         '#purch-list .lv-head,#purch-list .lv-row{grid-template-columns:42px minmax(180px,1fr) 100px 120px 80px 90px 50px 50px 90px 80px 70px}\n'
         '#purch-list .lv-head{position:sticky;top:47px;z-index:20}\n'
-        '#mkt-list .lv-head,#mkt-list .lv-row,#mkt-list .mkt-alt{grid-template-columns:42px minmax(200px,1fr) 90px 90px 90px 100px 36px 42px 130px 130px}\n'
+        '#mkt-list .lv-head,#mkt-list .lv-row,#mkt-list .mkt-alt{grid-template-columns:42px minmax(200px,1fr) 150px 90px 90px 100px 36px 42px 130px 130px}\n'
         '#mkt-list .lv-row{min-height:46px}\n'
         '#mkt-list .lv-head{position:relative;top:auto;z-index:2}\n'
         '#mkt-list .lv-title,#mkt-list .lv-pub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n'
