@@ -1914,7 +1914,8 @@ def store_products():
                 contributor = _get_contributor(cur, api_key)
                 if contributor:
                     cur.execute(
-                        "SELECT xbox_title_id, product_id FROM xbox_achievement_summaries "
+                        "SELECT xbox_title_id, product_id, title_name "
+                        "FROM xbox_achievement_summaries "
                         "WHERE contributor_id = %s AND current_achievements > 0",
                         (contributor["id"],))
                     ach_rows = cur.fetchall()
@@ -1929,6 +1930,24 @@ def store_products():
                             parts.append("p.product_id != ALL(%(ach_pids)s)")
                             params["ach_pids"] = ach_pids
                         wheres.append("(" + " AND ".join(parts) + ")")
+                    # Also hide editions: products whose title starts with a
+                    # played game's title (catches "Game - Deluxe Edition" etc.)
+                    ach_titles = [r["title_name"] for r in ach_rows
+                                  if r.get("title_name") and len(r["title_name"]) >= 5]
+                    if ach_titles:
+                        # Find edition PIDs: title starts with an ach title + separator
+                        cur.execute("""
+                            SELECT DISTINCT mp.product_id
+                            FROM marketplace_products mp, UNNEST(%(ach_titles)s::text[]) AS base
+                            WHERE mp.title LIKE base || ' -%%'
+                               OR mp.title LIKE base || ':%%'
+                               OR mp.title LIKE base || ' (%%'
+                               OR mp.title LIKE base || ' |%%'
+                        """, {"ach_titles": ach_titles})
+                        edition_pids = [r["product_id"] for r in cur.fetchall()]
+                        if edition_pids:
+                            wheres.append("p.product_id != ALL(%(noach_ed_pids)s)")
+                            params["noach_ed_pids"] = edition_pids
 
         # Region availability filter
         if regions_raw and regions_raw in ("myregions", "notmy"):
