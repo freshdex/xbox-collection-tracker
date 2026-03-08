@@ -316,6 +316,7 @@ PRICE_REGIONS = {
     "NZ": {"locale": "en-NZ", "name": "New Zealand", "currency": "NZD", "symbol": "NZ$"},
     "CO": {"locale": "es-CO", "name": "Colombia", "currency": "COP", "symbol": "CO$"},
     "HK": {"locale": "zh-HK", "name": "Hong Kong", "currency": "HKD", "symbol": "HK$"},
+    "JP": {"locale": "ja-JP", "name": "Japan", "currency": "JPY", "symbol": "\u00a5"},
     "US": {"locale": "en-US", "name": "USA", "currency": "USD", "symbol": "$"},
 }
 
@@ -6616,13 +6617,13 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '\n'
 
         # -- Regional pricing helpers --
-        "const _RORD=['AR','BR','TR','IS','NG','TW','NZ','CO','HK','US'];\n"
-        "const _RNAME={AR:'Argentina',BR:'Brazil',TR:'Turkey',IS:'Iceland',NG:'Nigeria',TW:'Taiwan',NZ:'New Zealand',CO:'Colombia',HK:'Hong Kong',US:'USA'};\n"
+        "const _RORD=['AR','BR','TR','IS','NG','TW','NZ','CO','HK','JP','US'];\n"
+        "const _RNAME={AR:'Argentina',BR:'Brazil',TR:'Turkey',IS:'Iceland',NG:'Nigeria',TW:'Taiwan',NZ:'New Zealand',CO:'Colombia',HK:'Hong Kong',JP:'Japan',US:'USA'};\n"
         "const _ALL_REGIONS_ORD=['AE','AR','AT','AU','BE','BG','BH','BR','CA','CH','CL','CN','CO','CY','CZ','DE','DK','EE','EG','ES','FI','FR','GB','GR','GT','HK','HR','HU','ID','IE','IL','IN','IS','IT','JP','KR','KW','LT','LV','MT','MX','MY','NG','NL','NO','NZ','OM','PE','PH','PL','PT','QA','RO','RS','RU','SA','SE','SG','SI','SK','TH','TR','TT','TW','UA','US','VN','ZA'];\n"
         "const _ALL_REGIONS_NAME={AE:'UAE',AR:'Argentina',AT:'Austria',AU:'Australia',BE:'Belgium',BG:'Bulgaria',BH:'Bahrain',BR:'Brazil',CA:'Canada',CH:'Switzerland',CL:'Chile',CN:'China',CO:'Colombia',CY:'Cyprus',CZ:'Czechia',DE:'Germany',DK:'Denmark',EE:'Estonia',EG:'Egypt',ES:'Spain',FI:'Finland',FR:'France',GB:'United Kingdom',GR:'Greece',GT:'Guatemala',HK:'Hong Kong',HR:'Croatia',HU:'Hungary',ID:'Indonesia',IE:'Ireland',IL:'Israel',IN:'India',IS:'Iceland',IT:'Italy',JP:'Japan',KR:'South Korea',KW:'Kuwait',LT:'Lithuania',LV:'Latvia',MT:'Malta',MX:'Mexico',MY:'Malaysia',NG:'Nigeria',NL:'Netherlands',NO:'Norway',NZ:'New Zealand',OM:'Oman',PE:'Peru',PH:'Philippines',PL:'Poland',PT:'Portugal',QA:'Qatar',RO:'Romania',RS:'Serbia',RU:'Russia',SA:'Saudi Arabia',SE:'Sweden',SG:'Singapore',SI:'Slovenia',SK:'Slovakia',TH:'Thailand',TR:'Turkey',TT:'Trinidad',TW:'Taiwan',UA:'Ukraine',US:'USA',VN:'Vietnam',ZA:'South Africa'};\n"
-        "const _RSYM={AR:'AR$',BR:'R$',TR:'\\u20ba',IS:'kr',NG:'\\u20a6',TW:'NT$',NZ:'NZ$',CO:'CO$',HK:'HK$',US:'$'};\n"
-        "const _RCC={AR:'ARS',BR:'BRL',TR:'TRY',IS:'ISK',NG:'NGN',TW:'TWD',NZ:'NZD',CO:'COP',HK:'HKD',US:'USD'};\n"
-        "const _RLOCALE={AR:'es-ar',BR:'pt-br',TR:'tr-tr',IS:'is-is',NG:'en-ng',TW:'zh-tw',NZ:'en-nz',CO:'es-co',HK:'zh-hk',US:'en-us'};\n"
+        "const _RSYM={AR:'AR$',BR:'R$',TR:'\\u20ba',IS:'kr',NG:'\\u20a6',TW:'NT$',NZ:'NZ$',CO:'CO$',HK:'HK$',JP:'\\u00a5',US:'$'};\n"
+        "const _RCC={AR:'ARS',BR:'BRL',TR:'TRY',IS:'ISK',NG:'NGN',TW:'TWD',NZ:'NZD',CO:'COP',HK:'HKD',JP:'JPY',US:'USD'};\n"
+        "const _RLOCALE={AR:'es-ar',BR:'pt-br',TR:'tr-tr',IS:'is-is',NG:'en-ng',TW:'zh-tw',NZ:'en-nz',CO:'es-co',HK:'zh-hk',JP:'ja-jp',US:'en-us'};\n"
         "const _MKT_LOCALE={AE:'ar-ae',AR:'es-ar',AT:'de-at',AU:'en-au',BE:'fr-be',BG:'bg-bg',BH:'ar-bh',BR:'pt-br',CA:'en-ca',CH:'de-ch',CL:'es-cl',CN:'zh-cn',CO:'es-co',CY:'en-cy',CZ:'cs-cz',DE:'de-de',DK:'da-dk',EE:'et-ee',EG:'ar-eg',ES:'es-es',FI:'fi-fi',FR:'fr-fr',GB:'en-gb',GR:'el-gr',GT:'es-gt',HK:'zh-hk',HR:'hr-hr',HU:'hu-hu',ID:'id-id',IE:'en-ie',IL:'he-il',IN:'en-in',IS:'is-is',IT:'it-it',JP:'ja-jp',KR:'ko-kr',KW:'ar-kw',LT:'lt-lt',LV:'lv-lv',MT:'en-mt',MX:'es-mx',MY:'en-my',NG:'en-ng',NL:'nl-nl',NO:'nb-no',NZ:'en-nz',OM:'ar-om',PE:'es-pe',PH:'en-ph',PL:'pl-pl',PT:'pt-pt',QA:'ar-qa',RO:'ro-ro',RS:'sr-latn-rs',RU:'ru-ru',SA:'ar-sa',SE:'sv-se',SG:'en-sg',SI:'sl-si',SK:'sk-sk',TH:'th-th',TR:'tr-tr',TT:'en-tt',TW:'zh-tw',UA:'uk-ua',US:'en-us',VN:'vi-vn',ZA:'en-za'};\n"
         "function _storeHref(pid,regions){"
         "var loc='en-us';"
@@ -6673,7 +6674,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "_RORD.forEach(m=>{const rp=item.regionalPrices[m];"
         "if(!rp){h+='<tr><td>'+(_RNAME[m]||m)+'</td><td style=\"color:#555\">-</td><td style=\"color:#555\">-</td><td style=\"color:#555\">-</td></tr>';return}"
         "const sym=_RSYM[m]||'';const rate=RATES[rp.currency]||1;"
-        "const nd=(['ISK','COP','NGN'].includes(rp.currency))?0:2;"
+        "const nd=(['ISK','COP','NGN','JPY'].includes(rp.currency))?0:2;"
         "const fmt=v=>sym+v.toLocaleString('en',{minimumFractionDigits:nd,maximumFractionDigits:nd});"
         "const baseP=rp.msrp||rp.price||0;"
         "const priceStr=fmt(baseP);"
