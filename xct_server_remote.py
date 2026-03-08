@@ -1766,26 +1766,28 @@ def store_products():
         if own_raw:
             o_list = [o.strip() for o in own_raw.split(",") if o.strip()]
             own_conds = []
+            # Owned on Digital
             if "owned" in o_list and owned_pids is not None:
                 own_conds.append("p.product_id = ANY(%(owned_pids)s)")
                 params["owned_pids"] = list(owned_pids)
-            if "notowned" in o_list and owned_pids is not None:
-                not_owned_parts = ["NOT (p.product_id = ANY(%(notowned_pids)s))"]
+            # Not Owned on Digital
+            if "notowned_digital" in o_list and owned_pids is not None:
+                own_conds.append("NOT (p.product_id = ANY(%(notowned_pids)s))")
                 params["notowned_pids"] = list(owned_pids)
-                # Also exclude disc-owned if "discowned" isn't selected
-                if "discowned" not in o_list and contributor:
-                    not_owned_parts.append(
-                        "NOT EXISTS (SELECT 1 FROM disc_ownership dsc "
-                        "WHERE dsc.product_id = p.product_id "
-                        "AND dsc.contributor_id = %(notowned_disc_cid)s)")
-                    params["notowned_disc_cid"] = contributor["id"]
-                own_conds.append("(" + " AND ".join(not_owned_parts) + ")")
+            # Owned on Disc
             if "discowned" in o_list and contributor:
                 own_conds.append(
                     "EXISTS (SELECT 1 FROM disc_ownership dsc "
                     "WHERE dsc.product_id = p.product_id "
                     "AND dsc.contributor_id = %(disc_cid)s)")
                 params["disc_cid"] = contributor["id"]
+            # Not Owned on Disc
+            if "notowned_disc" in o_list and contributor:
+                own_conds.append(
+                    "NOT EXISTS (SELECT 1 FROM disc_ownership dsc "
+                    "WHERE dsc.product_id = p.product_id "
+                    "AND dsc.contributor_id = %(notowned_disc_cid)s)")
+                params["notowned_disc_cid"] = contributor["id"]
             if own_conds:
                 wheres.append("(" + " OR ".join(own_conds) + ")")
 
