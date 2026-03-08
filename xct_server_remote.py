@@ -1821,10 +1821,13 @@ def store_products():
             rel_conds = []
             if "released" in r_list:
                 rel_conds.append(
-                    "(p.release_date IS NOT NULL AND p.release_date <= CURRENT_DATE "
+                    "((p.release_date IS NOT NULL AND p.release_date <= CURRENT_DATE "
                     "AND EXTRACT(YEAR FROM p.release_date) < 2100 "
                     "AND EXISTS (SELECT 1 FROM marketplace_prices rp "
-                    "WHERE rp.product_id = p.product_id AND rp.msrp > 0))")
+                    "WHERE rp.product_id = p.product_id AND rp.msrp > 0)) "
+                    "OR (EXTRACT(YEAR FROM p.release_date) >= 2100 "
+                    "AND EXISTS (SELECT 1 FROM marketplace_prices rp "
+                    "WHERE rp.product_id = p.product_id AND rp.msrp > 0)))")
             if "preorder" in r_list:
                 rel_conds.append(
                     "(p.release_date > CURRENT_DATE AND EXTRACT(YEAR FROM p.release_date) < 2100 "
@@ -1892,7 +1895,7 @@ def store_products():
         if trial == "1":
             wheres.append("p.has_trial_sku = TRUE")
         if ach == "1":
-            wheres.append("p.has_achievements = TRUE")
+            wheres.append("(p.has_achievements = TRUE OR 'Xbox 360' = ANY(p.platforms))")
 
         # Hide all subscription games
         if nosub == "1":
