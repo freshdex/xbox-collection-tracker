@@ -1618,7 +1618,7 @@ def cmd_add():
             print()
             scan_now = input("  Process full collection scan now? [Y/n]: ").strip().lower()
             if scan_now not in ("n", "no"):
-                html_file, _lib = process_account(gamertag, method="both")
+                html_file, _lib, _ = process_account(gamertag, method="both")
                 file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
                 print(f"[*] Opening in browser: {file_url}")
                 webbrowser.open(file_url)
@@ -9860,6 +9860,7 @@ def process_account(gamertag, method=None, prompt_upload=True, open_browser=True
     # -- Save scan and print changelog --
     changelog = save_scan(gamertag, library, method)
     print_changelog(changelog)
+    _last_changelog_new = len(changelog.get("newItems", []))
 
     # -- Load scan history for HTML --
     scan_history = load_all_scans(gamertag)
@@ -9969,7 +9970,7 @@ def process_account(gamertag, method=None, prompt_upload=True, open_browser=True
             webbrowser.open(file_url)
     print()
 
-    return OUTPUT_HTML_COMBINED, library
+    return OUTPUT_HTML_COMBINED, library, _last_changelog_new
 
 
 # ===========================================================================
@@ -11600,21 +11601,25 @@ def process_all_accounts():
 
         # Process account with chosen method
         try:
-            html_file, lib = process_account(gt, method=method, prompt_upload=False, open_browser=False)
-            results.append((gt, True, html_file))
+            html_file, lib, new_count = process_account(gt, method=method, prompt_upload=False, open_browser=False)
+            results.append((gt, True, html_file, new_count))
             all_libraries.extend(lib)
         except Exception as e:
             print(f"[!] Failed to process {gt}: {e}")
-            results.append((gt, False, str(e)))
+            results.append((gt, False, str(e), 0))
 
     # Summary
+    total_new = sum(r[3] for r in results)
     print()
     print("=" * 64)
     print("  Summary")
     print("=" * 64)
-    for gt, ok, info in results:
+    for gt, ok, info, nc in results:
         status = "OK" if ok else "FAILED"
-        print(f"  {gt}: {status}" + (f" — {info}" if not ok else ""))
+        new_str = f" (+{nc} new)" if nc else ""
+        print(f"  {gt}: {status}{new_str}" + (f" — {info}" if not ok else ""))
+    if total_new:
+        print(f"\n  Total new games: +{total_new}")
 
     # Build combined HTML if we have libraries from multiple accounts
     if all_libraries:
@@ -11737,21 +11742,25 @@ def _run_batch(name, batch_gamertags):
             gt = refreshed_gt
 
         try:
-            html_file, lib = process_account(gt, method=method, prompt_upload=False, open_browser=False)
-            results.append((gt, True, html_file))
+            html_file, lib, new_count = process_account(gt, method=method, prompt_upload=False, open_browser=False)
+            results.append((gt, True, html_file, new_count))
             all_libraries.extend(lib)
         except Exception as e:
             print(f"[!] Failed to process {gt}: {e}")
-            results.append((gt, False, str(e)))
+            results.append((gt, False, str(e), 0))
 
     # Summary
+    total_new = sum(r[3] for r in results)
     print()
     print("=" * 64)
     print(f"  Batch \"{name}\" — Summary")
     print("=" * 64)
-    for gt, ok, info in results:
+    for gt, ok, info, nc in results:
         status = "OK" if ok else "FAILED"
-        print(f"  {gt}: {status}" + (f" — {info}" if not ok else ""))
+        new_str = f" (+{nc} new)" if nc else ""
+        print(f"  {gt}: {status}{new_str}" + (f" — {info}" if not ok else ""))
+    if total_new:
+        print(f"\n  Total new games: +{total_new}")
 
     # Rebuild full combined index (all accounts, not just batch)
     _uploaded = False
@@ -24905,7 +24914,7 @@ def _menu_scan(gamertags):
                     print(f"\n  === [{i}/{len(target_gts)}] {g} ===")
                 if _is_token_expired(g):
                     _auto_refresh_token(g)
-                html_file, _lib = process_account(g, method="collection")
+                html_file, _lib, _ = process_account(g, method="collection")
             if len(target_gts) > 1:
                 build_index()
                 _op_summary("Collections API scan", detail=target_label, elapsed=time.time() - _t0)
@@ -24923,7 +24932,7 @@ def _menu_scan(gamertags):
                     print(f"\n  === [{i}/{len(target_gts)}] {g} ===")
                 if _is_token_expired(g):
                     _auto_refresh_token(g)
-                html_file, _lib = process_account(g, method="titlehub")
+                html_file, _lib, _ = process_account(g, method="titlehub")
             if len(target_gts) > 1:
                 build_index()
                 _op_summary("TitleHub scan", detail=target_label, elapsed=time.time() - _t0)
@@ -25025,7 +25034,7 @@ def _menu_manage(gamertags):
                 try:
                     print(f"\n[*] Refreshing token for {gt}...")
                     gt = refresh_account_token(gt) or gt
-                    html_file, _lib = process_account(gt, method="both")
+                    html_file, _lib, _ = process_account(gt, method="both")
                     _op_summary("Process gamertag", detail=f"{gt} — {len(_lib):,} items", elapsed=time.time() - _t0)
                 except Exception as _e:
                     _op_summary("Process gamertag", success=False, detail=str(_e), elapsed=time.time() - _t0)
@@ -25064,7 +25073,7 @@ def _menu_manage(gamertags):
             gt = refresh_account_token(gt) or gt
             process_now = input("\n  Process collection now? [Y/n]: ").strip().lower()
             if process_now not in ("n", "no"):
-                html_file, _lib = process_account(gt)
+                html_file, _lib, _ = process_account(gt)
             _op_summary("Refresh token", detail=f"{gt}", elapsed=time.time() - _t0)
         except Exception as _e:
             _op_summary("Refresh token", success=False, detail=str(_e), elapsed=time.time() - _t0)
@@ -25537,7 +25546,7 @@ def main():
                 print(f"[*] Refreshing token for {gamertag}...")
                 gamertag = refresh_account_token(gamertag) or gamertag
 
-                html_file, _lib = process_account(gamertag)
+                html_file, _lib, _ = process_account(gamertag)
                 if html_file:
                     file_url = "file:///" + html_file.replace("\\", "/").replace(" ", "%20")
                     print(f"[*] Opening in browser: {file_url}")
