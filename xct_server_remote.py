@@ -273,6 +273,12 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_mp_xbox_title_id
             ON marketplace_products(xbox_title_id) WHERE xbox_title_id != ''
         """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ms_product_id ON marketplace_subscriptions(product_id);
+            CREATE INDEX IF NOT EXISTS idx_mt_product_id ON marketplace_tags(product_id);
+            CREATE INDEX IF NOT EXISTS idx_mc_product_id ON marketplace_channels(product_id);
+            CREATE INDEX IF NOT EXISTS idx_al_product_id ON amazon_links(product_id);
+        """)
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -1939,8 +1945,7 @@ def store_products():
                        COUNT(*) OVER (
                            PARTITION BY CASE WHEN p.xbox_title_id != '' THEN p.xbox_title_id
                                              ELSE p.product_id END
-                       ) - 1 AS alt_count,
-                       COUNT(*) OVER () AS _total
+                       ) - 1 AS alt_count
                 FROM marketplace_products p
                 {join_clause}
                 WHERE {where_sql}
@@ -1977,13 +1982,18 @@ def store_products():
                        p.short_description, p.capabilities,
                        pr_us.msrp AS price_usd,
                        CASE WHEN pr_us.sale_price > 0 AND pr_us.sale_price < pr_us.msrp
-                            THEN pr_us.sale_price ELSE NULL END AS current_price_usd,
-                       COUNT(*) OVER () AS _total
+                            THEN pr_us.sale_price ELSE NULL END AS current_price_usd
                 FROM marketplace_products p
                 {join_clause}
                 WHERE {where_sql}
                 ORDER BY {sort_sql}
                 LIMIT %(limit)s OFFSET %(offset)s
+            """
+            count_sql = f"""
+                SELECT COUNT(*) AS cnt
+                FROM marketplace_products p
+                {join_clause}
+                WHERE {where_sql}
             """
 
         params["limit"] = per_page
@@ -1992,11 +2002,8 @@ def store_products():
         cur.execute(sql, params)
         rows = cur.fetchall()
 
-        total = rows[0]["_total"] if rows else 0
-        if do_group == "1" and rows:
-            # For grouped, _total is pre-grouping; recalculate
-            cur.execute(count_sql, params)
-            total = cur.fetchone()["cnt"]
+        cur.execute(count_sql, params)
+        total = cur.fetchone()["cnt"]
 
         product_ids = [r["product_id"] for r in rows]
 
