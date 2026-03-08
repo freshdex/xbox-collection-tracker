@@ -1621,8 +1621,16 @@ def store_products():
 
         # Subscriptions filter — accepts tier names (e.g. "Game Pass PC")
         # or legacy short codes ("gp", "ea", "none")
-        # _none_ means all unchecked → no filter (show everything)
-        if subs_raw and subs_raw != "_none_":
+        # _none_ means all unchecked → exclude subscription games (show only non-sub)
+        if subs_raw == "_none_":
+            none_cond = (
+                "NOT EXISTS (SELECT 1 FROM marketplace_subscriptions ms2 "
+                "WHERE ms2.product_id = p.product_id)")
+            if _gp_pids:
+                none_cond = "(" + none_cond + " AND NOT (p.product_id = ANY(%(gp_pids_nosub)s)))"
+                params["gp_pids_nosub"] = list(_gp_pids)
+            wheres.append(none_cond)
+        elif subs_raw:
             s_list = [s.strip() for s in subs_raw.split(",") if s.strip()]
             subs_conds = []
             # Collect actual tier names for DB query
