@@ -1401,6 +1401,17 @@ def store_filters():
             GROUP BY u ORDER BY count DESC
         """)
         platforms = [dict(r) for r in cur.fetchall()]
+        # Add virtual "Windows Only" platform (PC without any Xbox console)
+        cur.execute("""
+            SELECT COUNT(*) AS count FROM marketplace_products
+            WHERE title != product_id AND 'PC' = ANY(platforms)
+            AND NOT ('Xbox One' = ANY(platforms))
+            AND NOT ('Xbox Series X|S' = ANY(platforms))
+            AND NOT ('Xbox 360' = ANY(platforms))
+        """)
+        winonly_cnt = cur.fetchone()["count"]
+        if winonly_cnt:
+            platforms.append({"value": "Windows Only", "count": winonly_cnt})
 
         # Categories
         cur.execute("""
@@ -1642,11 +1653,24 @@ def store_products():
         if plat_raw:
             p_list = [p.strip() for p in plat_raw.split(",") if p.strip()]
             if p_list:
-                wheres.append("p.platforms && %(platforms)s")
-                params["platforms"] = p_list
+                # "Windows Only" is a virtual platform: PC present, no Xbox consoles
+                has_winonly = "Windows Only" in p_list
+                real_plats = [p for p in p_list if p != "Windows Only"]
+                plat_conds = []
+                if real_plats:
+                    plat_conds.append("p.platforms && %(platforms)s")
+                    params["platforms"] = real_plats
+                if has_winonly:
+                    plat_conds.append(
+                        "('PC' = ANY(p.platforms) "
+                        "AND NOT ('Xbox One' = ANY(p.platforms)) "
+                        "AND NOT ('Xbox Series X|S' = ANY(p.platforms)) "
+                        "AND NOT ('Xbox 360' = ANY(p.platforms)))")
+                if plat_conds:
+                    wheres.append("(" + " OR ".join(plat_conds) + ")")
                 # Xbox 360 BC games are tagged with Xbox One/Series by Microsoft.
                 # If Xbox 360 is NOT selected, explicitly exclude them.
-                if "Xbox 360" not in p_list:
+                if "Xbox 360" not in p_list and not has_winonly:
                     wheres.append("NOT ('Xbox 360' = ANY(p.platforms))")
 
         # Price filter
