@@ -2232,6 +2232,7 @@ def store_product_detail(product_id):
             "_onSale": is_on_sale,
             "capabilities": p["capabilities"] or [],
             "subscriptions": subscriptions,
+            "availableRegions": list(regional.keys()) if regional else [],
         }
         return _gzip_json_response(result)
     except Exception as e:
@@ -2385,6 +2386,32 @@ def store_amazon_bulk():
         return jsonify(error=str(e)), 500
     finally:
         conn.close()
+
+
+@app.route("/api/v1/store/amazon/hits")
+@require_auth
+def store_amazon_hits(contributor, conn, cur, api_key):
+    """Return all non-digital amazon_links (positive hits) with game titles."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin only"), 403
+    cur.execute("""
+        SELECT al.product_id, al.status, al.url_uk, al.url_us,
+               COALESCE(mp.title, '') as title
+        FROM amazon_links al
+        LEFT JOIN marketplace_products mp ON mp.product_id = al.product_id
+        WHERE al.status != 'digital'
+        ORDER BY mp.title
+    """)
+    hits = []
+    for r in cur.fetchall():
+        hits.append({
+            "productId": r["product_id"],
+            "status": r["status"],
+            "urlUK": r["url_uk"],
+            "urlUS": r["url_us"],
+            "title": r["title"],
+        })
+    return _gzip_json_response(hits)
 
 
 @app.route("/api/v1/store/amazon/set", methods=["POST"])
@@ -3124,6 +3151,29 @@ def collection_upload(conn=None, cur=None, contributor=None, api_key=None):
             _upsert_title_ids(cur, conn, lib)
         except Exception as e:
             print(f"[!] Title ID DB upsert failed: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+        # Tag Xbox 360 BC games in marketplace_products from collection data
+        try:
+            x360_pids = [
+                g["productId"] for g in lib
+                if "Xbox 360" in (g.get("platforms") or [])
+                and g.get("productId")
+            ]
+            if x360_pids:
+                cur.execute("""
+                    UPDATE marketplace_products
+                    SET platforms = array_append(platforms, 'Xbox 360')
+                    WHERE product_id = ANY(%s)
+                    AND NOT ('Xbox 360' = ANY(platforms))
+                """, (x360_pids,))
+                if cur.rowcount:
+                    conn.commit()
+        except Exception as e:
+            print(f"[!] Xbox 360 platform tagging failed: {e}")
             try:
                 conn.rollback()
             except Exception:
@@ -4939,6 +4989,7 @@ def add_cors_headers(response):
 @app.route("/api/v1/store/product/<product_id>", methods=["OPTIONS"])
 @app.route("/api/v1/store/editions/<xbox_title_id>", methods=["OPTIONS"])
 @app.route("/api/v1/store/amazon/bulk", methods=["OPTIONS"])
+@app.route("/api/v1/store/amazon/hits", methods=["OPTIONS"])
 @app.route("/api/v1/store/amazon/set", methods=["OPTIONS"])
 @app.route("/api/v1/store/amazon/remove", methods=["OPTIONS"])
 @app.route("/api/v1/admin/cdn-monitor/scan", methods=["OPTIONS"])

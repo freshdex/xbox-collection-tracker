@@ -6168,7 +6168,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div><span class="lbl">Release:</span></div><div class="val">${(item.releaseDate||\'\').substring(0,10)}</div>\n'
         '<div><span class="lbl">Type:</span></div><div class="val">${item.productType||\'\'}</div>\n'
         "${item.priceUSD>0?'<div><span class=\"lbl\">Price:</span></div><div class=\"val\" style=\"color:#42a5f5;font-weight:600\">'+_p(item.priceUSD)+'</div>':''}\n"
-        '<div><span class="lbl">Store:</span></div><div class="val"><a href="${_storeUrl(item.productId)}" target="_blank">${item.productId}</a></div>\n'
+        '<div><span class="lbl">Store:</span></div><div class="val"><a href="${_storeHref(item.productId,item.availableRegions||item._availableRegions)}" target="_blank">${item.productId}</a></div>\n'
         "</div>`;\n"
         "document.getElementById('modal').classList.add('active')}\n"
         '\n'
@@ -6223,7 +6223,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div><span class="lbl">Start Date:</span></div><div class="val">${(item.startDate||\'\').substring(0,10)}</div>\n'
         '<div><span class="lbl">End Date:</span></div><div class="val">${(item.endDate||\'\').substring(0,10)}</div>\n'
         '<div><span class="lbl">Game Pass:</span></div><div class="val">${item.onGamePass?\'Yes\':\'No\'}</div>\n'
-        '<div><span class="lbl">Store:</span></div><div class="val"><a href="${_storeUrl(item.productId)}" target="_blank">${item.productId}</a></div>\n'
+        '<div><span class="lbl">Store:</span></div><div class="val"><a href="${_storeHref(item.productId,item.availableRegions||item._availableRegions)}" target="_blank">${item.productId}</a></div>\n'
         "</div>`;\n"
         "const _cdnR=typeof CDN_DB!=='undefined'&&CDN_DB?CDN_DB[pid]:null;\n"
         "if(_cdnR){\n"
@@ -7329,7 +7329,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "${ratingHtml}\n"
         "${item.priceUSD>0?'<div><span class=\"lbl\">Price:</span></div><div class=\"val\" style=\"color:#42a5f5;font-weight:600\">'+_p(_gcAdj(item.priceUSD))+'</div>':''}\n"
         "${item.currentPriceUSD>0&&item.currentPriceUSD<item.priceUSD?'<div><span class=\"lbl\">Sale:</span></div><div class=\"val\" style=\"color:#4caf50;font-weight:600\">'+_p(_gcAdj(item.currentPriceUSD))+'</div>':''}\n"
-        '<div><span class="lbl">Store:</span></div><div class="val"><a href="${_storeUrl(item.productId)}" target="_blank">${item.productId}</a></div>\n'
+        '<div><span class="lbl">Store:</span></div><div class="val"><a href="${_storeHref(item.productId,item.availableRegions||item._availableRegions)}" target="_blank">${item.productId}</a></div>\n'
         "${descHtml}\n"
         "</div>\n"
         "${_regionTbl(item)}"
@@ -7385,7 +7385,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "${ratingHtml}\n"
         "${item.priceUSD>0?'<div><span class=\"lbl\">Price:</span></div><div class=\"val\" style=\"color:#42a5f5;font-weight:600\">'+_p(_gcAdj(item.priceUSD))+'</div>':''}\n"
         "${item.currentPriceUSD>0&&item.currentPriceUSD<item.priceUSD?'<div><span class=\"lbl\">Sale:</span></div><div class=\"val\" style=\"color:#4caf50;font-weight:600\">'+_p(_gcAdj(item.currentPriceUSD))+'</div>':''}\n"
-        '<div><span class="lbl">Store:</span></div><div class="val"><a href="${_storeUrl(item.productId)}" target="_blank">${item.productId}</a></div>\n'
+        '<div><span class="lbl">Store:</span></div><div class="val"><a href="${_storeHref(item.productId,item.availableRegions||item._availableRegions)}" target="_blank">${item.productId}</a></div>\n'
         "${descHtml}\n"
         "</div>\n"
         "${_regionTbl(item)}"
