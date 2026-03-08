@@ -6755,7 +6755,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Init function — called after modal renders
         "function _initPhysicalLinks(pid){"
         "if(!window._xctHosted||!window._xctApiKey)return;"
-        "const isAdmin=window._xctUser&&window._xctUser.toLowerCase()==='freshdex';"
+        "const isAdmin=typeof _xctUser!=='undefined'&&_xctUser&&_xctUser.toLowerCase()==='freshdex';"
         "fetch('/api/v1/store/physical/'+pid,{headers:{'Authorization':'Bearer '+window._xctApiKey}})"
         ".then(r=>r.json()).then(data=>{"
         "const el=document.getElementById('phy-links-'+pid);if(!el)return;"
