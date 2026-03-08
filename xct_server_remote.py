@@ -1917,11 +1917,11 @@ def store_products():
         where_sql = " AND ".join(wheres)
 
         # Build main query
-        join_clause = ""
-        if join_us:
-            join_clause = (
-                "LEFT JOIN marketplace_prices pr_us "
-                "ON pr_us.product_id = p.product_id AND pr_us.market = 'US'")
+        join_clause = (
+            "LEFT JOIN marketplace_prices pr_us "
+            "ON pr_us.product_id = p.product_id AND pr_us.market = 'US'")
+        # Count query only needs the price join if WHERE references pr_us
+        count_join = join_clause if "pr_us" in where_sql else ""
 
         # Edition grouping
         if do_group == "1":
@@ -1992,7 +1992,7 @@ def store_products():
             count_sql = f"""
                 SELECT COUNT(*) AS cnt
                 FROM marketplace_products p
-                {join_clause}
+                {count_join}
                 WHERE {where_sql}
             """
 
