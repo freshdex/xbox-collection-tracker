@@ -1599,7 +1599,6 @@ def store_products():
         noplayed = request.args.get("noplayed", "")
         noach = request.args.get("noach", "")
         phys_raw = request.args.get("phys", "")
-        disc_raw = request.args.get("disc", "")
 
         # Sort
         sort_sql, needs_us_price = _STORE_SORT_MAP.get(sort_key, _STORE_SORT_MAP["relDesc"])
@@ -1766,16 +1765,21 @@ def store_products():
 
         if own_raw:
             o_list = [o.strip() for o in own_raw.split(",") if o.strip()]
-            if owned_pids is not None:
-                own_conds = []
-                if "owned" in o_list:
-                    own_conds.append("p.product_id = ANY(%(owned_pids)s)")
-                    params["owned_pids"] = list(owned_pids)
-                if "notowned" in o_list:
-                    own_conds.append("NOT (p.product_id = ANY(%(notowned_pids)s))")
-                    params["notowned_pids"] = list(owned_pids)
-                if own_conds:
-                    wheres.append("(" + " OR ".join(own_conds) + ")")
+            own_conds = []
+            if "owned" in o_list and owned_pids is not None:
+                own_conds.append("p.product_id = ANY(%(owned_pids)s)")
+                params["owned_pids"] = list(owned_pids)
+            if "notowned" in o_list and owned_pids is not None:
+                own_conds.append("NOT (p.product_id = ANY(%(notowned_pids)s))")
+                params["notowned_pids"] = list(owned_pids)
+            if "discowned" in o_list and contributor:
+                own_conds.append(
+                    "EXISTS (SELECT 1 FROM disc_ownership do "
+                    "WHERE do.product_id = p.product_id "
+                    "AND do.contributor_id = %(disc_cid)s)")
+                params["disc_cid"] = contributor["id"]
+            if own_conds:
+                wheres.append("(" + " OR ".join(own_conds) + ")")
 
         # Hide owned editions — exclude unowned products sharing a title ID with any owned product
         if hide_owned_ed == "1" and owned_pids:
@@ -1862,20 +1866,6 @@ def store_products():
             if phys_conds:
                 wheres.append("(" + " OR ".join(phys_conds) + ")")
 
-        # Disc ownership filter (requires authenticated user)
-        if disc_raw and contributor:
-            if disc_raw == "owned":
-                wheres.append(
-                    "EXISTS (SELECT 1 FROM disc_ownership do "
-                    "WHERE do.product_id = p.product_id "
-                    "AND do.contributor_id = %(disc_cid)s)")
-                params["disc_cid"] = contributor["id"]
-            elif disc_raw == "notowned":
-                wheres.append(
-                    "NOT EXISTS (SELECT 1 FROM disc_ownership do "
-                    "WHERE do.product_id = p.product_id "
-                    "AND do.contributor_id = %(disc_cid)s)")
-                params["disc_cid"] = contributor["id"]
 
         # Boolean checkboxes
         if xcloud == "1":
