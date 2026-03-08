@@ -18,6 +18,7 @@ Usage:
     flask --app xct_server import-shared gfwl /path/to/gfwl_links.json
 """
 
+import base64
 import gzip
 import hashlib
 import json
@@ -465,6 +466,28 @@ def init_db():
     except Exception as e:
         conn.rollback()
         print(f"[!] Amazon links table init failed ({e}) — run migration manually")
+    # Physical disc links (multi-locale, multi-link per product)
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS physical_links (
+                id          SERIAL PRIMARY KEY,
+                product_id  VARCHAR(16) NOT NULL,
+                locale      VARCHAR(5) NOT NULL,
+                url         TEXT NOT NULL,
+                label       TEXT NOT NULL DEFAULT '',
+                added_by    INTEGER,
+                created_at  TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_physical_links_pid
+            ON physical_links(product_id)
+        """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"[!] Physical links table init failed ({e}) — run migration manually")
     # Shared title ID database (community-contributed from collection uploads)
     try:
         cur = conn.cursor()
@@ -1457,7 +1480,7 @@ def store_filters():
         # Physical disc counts (separate table, tiny and fast)
         cur.execute("""
             SELECT
-                COUNT(*) FILTER (WHERE status IN ('uk','us','both')) AS physical,
+                COUNT(*) FILTER (WHERE status IN ('uk','us','both','ta_physical')) AS physical,
                 COUNT(*) FILTER (WHERE status IN ('uk','both')) AS uk,
                 COUNT(*) FILTER (WHERE status IN ('us','both')) AS us,
                 COUNT(*) FILTER (WHERE status = 'digital') AS digital
@@ -1778,7 +1801,7 @@ def store_products():
                 phys_conds.append(
                     "EXISTS (SELECT 1 FROM amazon_links al "
                     "WHERE al.product_id = p.product_id "
-                    "AND al.status IN ('uk','us','both'))")
+                    "AND al.status IN ('uk','us','both','ta_physical'))")
             if "uk" in ph_list:
                 phys_conds.append(
                     "EXISTS (SELECT 1 FROM amazon_links al "
@@ -2449,6 +2472,126 @@ def store_amazon_remove(contributor, conn, cur, api_key):
     cur.execute("DELETE FROM amazon_links WHERE product_id = %s", (pid,))
     conn.commit()
     return jsonify(ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Physical Disc Links (multi-locale, community-contributed)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/store/physical/<product_id>")
+@require_auth
+def store_physical_get(product_id, contributor, conn, cur, api_key):
+    """Get all physical disc links for a product."""
+    cur.execute("""
+        SELECT id, locale, url, label, created_at
+        FROM physical_links WHERE product_id = %s
+        ORDER BY locale, created_at
+    """, (product_id,))
+    links = []
+    for r in cur.fetchall():
+        links.append({
+            "id": r["id"],
+            "locale": r["locale"],
+            "url": r["url"],
+            "label": r["label"],
+            "createdAt": r["created_at"].isoformat() if r["created_at"] else None,
+        })
+    return jsonify(links=links)
+
+
+@app.route("/api/v1/store/physical/<product_id>", methods=["POST"])
+@require_auth
+def store_physical_add(product_id, contributor, conn, cur, api_key):
+    """Add a physical disc link for a product."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin only"), 403
+    body = request.get_json(force=True) or {}
+    locale = body.get("locale", "").strip().upper()
+    url = body.get("url", "").strip()
+    label = body.get("label", "").strip()
+    if not locale or not url:
+        return jsonify(error="locale and url required"), 400
+    if len(locale) > 5 or len(url) > 2000:
+        return jsonify(error="Invalid input"), 400
+    cur.execute("""
+        INSERT INTO physical_links (product_id, locale, url, label, added_by)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id
+    """, (product_id, locale, url, label, contributor["id"]))
+    link_id = cur.fetchone()["id"]
+    # Auto-sync amazon_links status for filter compatibility
+    _sync_amazon_links_from_physical(cur, conn, product_id)
+    conn.commit()
+    return jsonify(ok=True, id=link_id)
+
+
+@app.route("/api/v1/store/physical/<int:link_id>", methods=["DELETE"])
+@require_auth
+def store_physical_delete(link_id, contributor, conn, cur, api_key):
+    """Remove a physical disc link."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin only"), 403
+    # Get product_id before deleting
+    cur.execute("SELECT product_id FROM physical_links WHERE id = %s", (link_id,))
+    row = cur.fetchone()
+    if not row:
+        return jsonify(error="Link not found"), 404
+    product_id = row["product_id"]
+    cur.execute("DELETE FROM physical_links WHERE id = %s", (link_id,))
+    # Re-sync amazon_links
+    _sync_amazon_links_from_physical(cur, conn, product_id)
+    conn.commit()
+    return jsonify(ok=True)
+
+
+def _sync_amazon_links_from_physical(cur, conn, product_id):
+    """Update amazon_links status based on physical_links entries."""
+    cur.execute(
+        "SELECT DISTINCT locale FROM physical_links WHERE product_id = %s",
+        (product_id,))
+    locales = {r["locale"] for r in cur.fetchall()}
+    if not locales:
+        # No physical links — remove amazon_links entry if it was auto-created
+        cur.execute(
+            "DELETE FROM amazon_links WHERE product_id = %s "
+            "AND status NOT IN ('digital', 'ta_physical')", (product_id,))
+        return
+    has_uk = "GB" in locales
+    has_us = "US" in locales
+    if has_uk and has_us:
+        status = "both"
+    elif has_uk:
+        status = "uk"
+    elif has_us:
+        status = "us"
+    else:
+        # Has links but not UK/US — still physical
+        status = "ta_physical"
+    # Get first UK/US URLs for backward compat
+    url_uk = ""
+    url_us = ""
+    if has_uk:
+        cur.execute(
+            "SELECT url FROM physical_links "
+            "WHERE product_id = %s AND locale = 'GB' ORDER BY created_at LIMIT 1",
+            (product_id,))
+        r = cur.fetchone()
+        if r:
+            url_uk = r["url"]
+    if has_us:
+        cur.execute(
+            "SELECT url FROM physical_links "
+            "WHERE product_id = %s AND locale = 'US' ORDER BY created_at LIMIT 1",
+            (product_id,))
+        r = cur.fetchone()
+        if r:
+            url_us = r["url"]
+    cur.execute("""
+        INSERT INTO amazon_links (product_id, status, url_uk, url_us, updated_at)
+        VALUES (%s, %s, %s, %s, NOW())
+        ON CONFLICT (product_id) DO UPDATE
+        SET status = %s, url_uk = %s, url_us = %s, updated_at = NOW()
+    """, (product_id, status, url_uk, url_us, status, url_uk, url_us))
 
 
 # ---------------------------------------------------------------------------
@@ -4952,6 +5095,308 @@ def admin_cdn_monitor_stop(conn=None, cur=None, contributor=None, api_key=None):
 
 
 # ---------------------------------------------------------------------------
+# Xbox 360 BC TitleHub Scanner
+# ---------------------------------------------------------------------------
+# TitleHub is the authoritative source for Xbox 360 platform data.
+# Microsoft catalog API tags BC games as "Xbox One"/"Xbox Series X|S" only,
+# but TitleHub correctly reports "Xbox360" in the devices array.
+# This scanner checks ALL marketplace_products against TitleHub and tags
+# any Xbox 360 BC games that were missed by collection-based tagging.
+# ---------------------------------------------------------------------------
+
+_x360_scan_lock = threading.Lock()
+_x360_scan_active = False
+
+
+def _titlehub_batch_scan_x360(xbl3_token):
+    """Scan marketplace_products via TitleHub and tag Xbox 360 BC games.
+
+    Queries TitleHub batch endpoint for all products with a non-empty
+    xbox_title_id that don't already have 'Xbox 360' in platforms.
+    Tags any that TitleHub reports as Xbox360 devices.
+
+    Returns (tagged_count, checked_count, error_msg_or_None).
+    """
+    import urllib.request as _ur
+    import urllib.error as _ue
+    import ssl
+
+    global _x360_scan_active
+    with _x360_scan_lock:
+        if _x360_scan_active:
+            return 0, 0, "Scan already running"
+        _x360_scan_active = True
+
+    conn = None
+    try:
+        conn = psycopg2.connect(os.environ["DATABASE_URL"],
+                                cursor_factory=psycopg2.extras.RealDictCursor)
+        cur = conn.cursor()
+
+        # Get all products with a title ID that aren't already tagged Xbox 360
+        # Also extract XBOXTITLEID from alternate_ids for products missing
+        # xbox_title_id (belt-and-suspenders coverage)
+        cur.execute("""
+            SELECT product_id, xbox_title_id, alternate_ids
+            FROM marketplace_products
+            WHERE NOT ('Xbox 360' = ANY(platforms))
+            AND (xbox_title_id != ''
+                 OR alternate_ids @> '[{"idType": "XboxTitleId"}]'::jsonb
+                 OR alternate_ids @> '[{"idType": "XBOXTITLEID"}]'::jsonb)
+        """)
+        rows = cur.fetchall()
+        if not rows:
+            return 0, 0, None
+
+        # Build mapping: title_id -> list of product_ids
+        tid_to_pids = {}
+        for r in rows:
+            tid = r["xbox_title_id"].strip() if r["xbox_title_id"] else ""
+            if not tid:
+                # Fallback: extract from alternate_ids JSONB
+                alt_ids = r.get("alternate_ids") or []
+                if isinstance(alt_ids, list):
+                    for alt in alt_ids:
+                        if isinstance(alt, dict) and alt.get("idType", "").upper() == "XBOXTITLEID":
+                            tid = alt.get("id", "").strip()
+                            break
+            if tid:
+                tid_to_pids.setdefault(tid, []).append(r["product_id"])
+
+        all_tids = list(tid_to_pids.keys())
+        print(f"[x360-scan] Checking {len(all_tids)} title IDs via TitleHub...",
+              flush=True)
+
+        tagged_count = 0
+        checked = 0
+        batch_size = 500
+        ssl_ctx = ssl.create_default_context()
+
+        for i in range(0, len(all_tids), batch_size):
+            batch = all_tids[i:i + batch_size]
+            batch_num = i // batch_size + 1
+            total_batches = (len(all_tids) + batch_size - 1) // batch_size
+
+            cv = base64.b64encode(os.urandom(12)).decode().rstrip("=") + ".0"
+            body = json.dumps({
+                "pfns": None,
+                "titleIds": batch,
+            }).encode("utf-8")
+
+            url = "https://titlehub.xboxlive.com/titles/batch/decoration/Image,ProductId"
+            req = _ur.Request(url, data=body, headers={
+                "Authorization": xbl3_token,
+                "Content-Type": "application/json",
+                "x-xbl-contract-version": "2",
+                "Accept-Language": "en-US",
+                "MS-CV": cv,
+                "Accept": "application/json",
+            })
+
+            try:
+                with _ur.urlopen(req, context=ssl_ctx, timeout=60) as resp:
+                    data = json.loads(resp.read())
+            except _ue.HTTPError as e:
+                err_body = ""
+                try:
+                    err_body = e.read().decode("utf-8", errors="replace")[:300]
+                except Exception:
+                    pass
+                print(f"[x360-scan] Batch {batch_num}/{total_batches} "
+                      f"HTTP {e.code}: {err_body[:100]}")
+                continue
+            except Exception as e:
+                print(f"[x360-scan] Batch {batch_num}/{total_batches} FAILED: {e}")
+                continue
+
+            # Check each title for Xbox360 device
+            x360_pids = set()
+            titles = data.get("titles", [])
+            for title in titles:
+                devices = title.get("devices", [])
+                if "Xbox360" in devices:
+                    pid = title.get("productId", "")
+                    t_id = str(title.get("titleId", ""))
+                    # Add the productId from TitleHub response
+                    if pid:
+                        x360_pids.add(pid)
+                    # Also tag all products sharing this titleId
+                    for p in tid_to_pids.get(t_id, []):
+                        x360_pids.add(p)
+
+            if x360_pids:
+                pid_list = list(x360_pids)
+                cur.execute("""
+                    UPDATE marketplace_products
+                    SET platforms = array_append(platforms, 'Xbox 360')
+                    WHERE product_id = ANY(%s)
+                    AND NOT ('Xbox 360' = ANY(platforms))
+                """, (pid_list,))
+                batch_tagged = cur.rowcount
+                conn.commit()
+                tagged_count += batch_tagged
+                print(f"[x360-scan] Batch {batch_num}/{total_batches}: "
+                      f"tagged {batch_tagged} Xbox 360 games")
+            else:
+                print(f"[x360-scan] Batch {batch_num}/{total_batches}: "
+                      f"no new Xbox 360 games found")
+
+            checked += len(batch)
+
+        if tagged_count:
+            _shared_cache.pop("marketplace_full", None)
+
+        print(f"[x360-scan] Done: tagged {tagged_count} games, "
+              f"checked {checked} title IDs")
+        return tagged_count, checked, None
+
+    except Exception as e:
+        print(f"[x360-scan] Error: {e}")
+        return 0, 0, str(e)
+    finally:
+        _x360_scan_active = False
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _x360_tag_from_all_collections():
+    """One-time migration: scan ALL user collections for Xbox 360 games.
+
+    This catches games uploaded before the per-upload Xbox 360 tagging
+    code was added.
+    """
+    conn = None
+    try:
+        conn = psycopg2.connect(os.environ["DATABASE_URL"],
+                                cursor_factory=psycopg2.extras.RealDictCursor)
+        cur = conn.cursor()
+
+        cur.execute("SELECT lib FROM user_collections WHERE lib IS NOT NULL")
+        all_x360_pids = set()
+        for row in cur:
+            lib = row["lib"]
+            if not isinstance(lib, list):
+                continue
+            for g in lib:
+                if ("Xbox 360" in (g.get("platforms") or [])
+                        and g.get("productId")):
+                    all_x360_pids.add(g["productId"])
+
+        if all_x360_pids:
+            pid_list = list(all_x360_pids)
+            cur.execute("""
+                UPDATE marketplace_products
+                SET platforms = array_append(platforms, 'Xbox 360')
+                WHERE product_id = ANY(%s)
+                AND NOT ('Xbox 360' = ANY(platforms))
+            """, (pid_list,))
+            tagged = cur.rowcount
+            conn.commit()
+            if tagged:
+                _shared_cache.pop("marketplace_full", None)
+                print(f"[x360-scan] Collection migration: tagged {tagged} "
+                      f"games from {len(all_x360_pids)} Xbox 360 PIDs "
+                      f"across all user collections")
+        else:
+            print("[x360-scan] Collection migration: no Xbox 360 games "
+                  "found in user collections")
+    except Exception as e:
+        print(f"[x360-scan] Collection migration failed: {e}")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _x360_scan_startup():
+    """Run Xbox 360 scans on server startup (background thread).
+
+    Phase 1: Tag from all user collections (no auth needed)
+    Phase 2: TitleHub batch scan (needs Xbox auth)
+    """
+    # Phase 1: Collection-based tagging (catches all games in user libraries)
+    _x360_tag_from_all_collections()
+
+    # Phase 2: TitleHub scan (catches games NOT in any user's collection)
+    try:
+        conn = psycopg2.connect(os.environ["DATABASE_URL"],
+                                cursor_factory=psycopg2.extras.RealDictCursor)
+        cur = conn.cursor()
+
+        # Find any linked Xbox user to use as auth source
+        cur.execute("""
+            SELECT contributor_id FROM xbox_auth
+            WHERE refresh_token_enc IS NOT NULL
+            LIMIT 1
+        """)
+        row = cur.fetchone()
+        if not row:
+            print("[x360-scan] No linked Xbox users — skipping TitleHub scan")
+            conn.close()
+            return
+
+        contributor_id = row["contributor_id"]
+        try:
+            xbl3, _, _ = _ensure_xbl3_token(cur, conn, contributor_id)
+        except Exception as e:
+            print(f"[x360-scan] Could not get XBL3 token: {e}")
+            conn.close()
+            return
+        conn.close()
+
+        tagged, checked, err = _titlehub_batch_scan_x360(xbl3)
+        if err:
+            print(f"[x360-scan] TitleHub scan error: {err}")
+        elif tagged:
+            print(f"[x360-scan] TitleHub scan tagged {tagged}/{checked} "
+                  f"Xbox 360 BC games")
+        else:
+            print(f"[x360-scan] TitleHub scan complete: "
+                  f"all {checked} title IDs already correctly tagged")
+
+    except Exception as e:
+        print(f"[x360-scan] TitleHub scan failed: {e}")
+
+
+# Launch startup scan after 10 seconds (let Flask start first)
+threading.Timer(10.0, _x360_scan_startup).start()
+
+
+@app.route("/api/v1/admin/tag-xbox360", methods=["POST"])
+@require_auth
+def admin_tag_xbox360(conn=None, cur=None, contributor=None, api_key=None):
+    """Scan marketplace via TitleHub and tag Xbox 360 BC games. Admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+
+    if _x360_scan_active:
+        return jsonify(error="Scan already running"), 409
+
+    # Get auth token from the admin's linked Xbox account
+    try:
+        xbl3, _, _ = _ensure_xbl3_token(cur, conn, contributor["id"])
+    except ValueError as e:
+        return jsonify(error=str(e)), 401
+
+    # Run scan in background thread
+    def _run():
+        tagged, checked, err = _titlehub_batch_scan_x360(xbl3)
+        if err:
+            print(f"[x360-scan] Admin scan error: {err}")
+        else:
+            print(f"[x360-scan] Admin scan complete: tagged {tagged}/{checked}")
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return jsonify(status="ok", message="Xbox 360 TitleHub scan started")
+
+
+# ---------------------------------------------------------------------------
 # CORS (allow xct.freshdex.app frontend)
 # ---------------------------------------------------------------------------
 
@@ -4992,11 +5437,14 @@ def add_cors_headers(response):
 @app.route("/api/v1/store/amazon/hits", methods=["OPTIONS"])
 @app.route("/api/v1/store/amazon/set", methods=["OPTIONS"])
 @app.route("/api/v1/store/amazon/remove", methods=["OPTIONS"])
+@app.route("/api/v1/store/physical/<product_id>", methods=["OPTIONS"])
+@app.route("/api/v1/store/physical/<int:link_id>", methods=["OPTIONS"])
 @app.route("/api/v1/admin/cdn-monitor/scan", methods=["OPTIONS"])
 @app.route("/api/v1/admin/cdn-monitor/scans", methods=["OPTIONS"])
 @app.route("/api/v1/admin/cdn-monitor/status", methods=["OPTIONS"])
 @app.route("/api/v1/admin/cdn-monitor/purged", methods=["OPTIONS"])
 @app.route("/api/v1/admin/cdn-monitor/stop", methods=["OPTIONS"])
+@app.route("/api/v1/admin/tag-xbox360", methods=["OPTIONS"])
 def cors_preflight():
     return Response(status=204)
 
