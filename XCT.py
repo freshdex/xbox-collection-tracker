@@ -6839,6 +6839,18 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "onclick=\"this.parentElement.remove()\" title=\"Remove row\">\\u2716</span>';"
         "container.appendChild(row)}\n"
 
+        # Clean Amazon/eBay URLs
+        "function _phyCleanUrl(raw){"
+        "let u=raw.trim();"
+        "if(!/^https?:\\/\\//i.test(u))u='https://'+u;"
+        # Amazon: extract domain + /dp/ASIN
+        "const amz=u.match(/^(https?:\\/\\/(?:www\\.)?amazon\\.[a-z.]+)\\/.*?\\/dp\\/([A-Z0-9]{10})/i);"
+        "if(amz)return amz[1]+'/dp/'+amz[2].toUpperCase()+'/';"
+        # eBay: strip query params, keep /itm/ID
+        "const ebay=u.match(/^(https?:\\/\\/(?:www\\.)?ebay\\.[a-z.]+\\/itm\\/[^?#]+)/i);"
+        "if(ebay)return ebay[1];"
+        "return u}\n"
+
         # Save all rows
         "function _phySaveAll(pid){"
         "const container=document.getElementById('phy-rows-'+pid);if(!container)return;"
@@ -6846,7 +6858,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "let saved=0,total=0;"
         "rows.forEach(row=>{"
         "const locale=row.querySelector('.phy-locale').value;"
-        "const url=row.querySelector('.phy-url').value.trim();"
+        "const url=_phyCleanUrl(row.querySelector('.phy-url').value);"
         "const label=row.querySelector('.phy-label').value.trim();"
         "if(!url)return;"
         "total++;"
