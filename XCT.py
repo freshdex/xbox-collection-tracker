@@ -7068,7 +7068,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(priceVals.includes('sale')&&item._onSale)pp=true;"
         "if(!pp)return false}\n"
         # Subscriptions cb-drop (with tier hierarchy expansion)
-        "if(subsVals){"
+        # Empty array (all unchecked) = no filter, same as null (all checked)
+        "if(subsVals&&subsVals.length){"
         "let _sv=subsVals;"
         "if(_sv.includes('Game Pass Ultimate'))_sv=_sv.concat(['Game Pass Premium','Game Pass PC','Game Pass Console','Game Pass Essential'].filter(x=>!_sv.includes(x)));"
         "if(_sv.includes('Game Pass Premium'))_sv=_sv.concat(['Game Pass Essential'].filter(x=>!_sv.includes(x)));"

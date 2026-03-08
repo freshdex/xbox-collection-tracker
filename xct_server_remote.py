@@ -1587,7 +1587,8 @@ def store_products():
                 params["channels"] = ch_list
 
         # Check for _none_ sentinel in any filter (means "nothing selected" → zero results)
-        _all_filter_raws = [type_raw, plat_raw, price_raw, cat_raw, subs_raw, mp_raw,
+        # Exclude subs: clearing all subscriptions = no filter (show everything)
+        _all_filter_raws = [type_raw, plat_raw, price_raw, cat_raw, mp_raw,
                             pub_raw, dev_raw, own_raw, rel_raw, bundle_raw, phys_raw, regions_raw]
         if any(v == "_none_" for v in _all_filter_raws):
             wheres.append("FALSE")
