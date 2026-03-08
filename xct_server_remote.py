@@ -1578,11 +1578,11 @@ def store_products():
                 wheres.append("p.product_kind = ANY(%(types)s)")
                 params["types"] = db_types
 
-        # Platform filter (GIN array overlap)
+        # Platform filter (GIN array overlap — game must have at least one selected platform)
         if plat_raw:
             p_list = [p.strip() for p in plat_raw.split(",") if p.strip()]
             if p_list:
-                wheres.append("p.platforms <@ %(platforms)s")
+                wheres.append("p.platforms && %(platforms)s")
                 params["platforms"] = p_list
 
         # Price filter
