@@ -1774,9 +1774,9 @@ def store_products():
                 params["notowned_pids"] = list(owned_pids)
             if "discowned" in o_list and contributor:
                 own_conds.append(
-                    "EXISTS (SELECT 1 FROM disc_ownership do "
-                    "WHERE do.product_id = p.product_id "
-                    "AND do.contributor_id = %(disc_cid)s)")
+                    "EXISTS (SELECT 1 FROM disc_ownership dsc "
+                    "WHERE dsc.product_id = p.product_id "
+                    "AND dsc.contributor_id = %(disc_cid)s)")
                 params["disc_cid"] = contributor["id"]
             if own_conds:
                 wheres.append("(" + " OR ".join(own_conds) + ")")
