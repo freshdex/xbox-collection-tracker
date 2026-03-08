@@ -1584,6 +1584,10 @@ def store_products():
             if p_list:
                 wheres.append("p.platforms && %(platforms)s")
                 params["platforms"] = p_list
+                # Xbox 360 BC games are tagged with Xbox One/Series by Microsoft.
+                # If Xbox 360 is NOT selected, explicitly exclude them.
+                if "Xbox 360" not in p_list:
+                    wheres.append("NOT ('Xbox 360' = ANY(p.platforms))")
 
         # Price filter
         if price_raw:
