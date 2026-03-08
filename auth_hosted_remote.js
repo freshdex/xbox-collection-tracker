@@ -201,15 +201,18 @@ async function _xctReloadCollection(){
   _showLoading();
   var ok=await _loadCollection();
   if(ok){
-    try{initDropdowns();filterLib();filterPH();renderHistory();filterMKT();filterGP();
-      if(typeof filterPurchases==='function')filterPurchases();
-      if(typeof renderAccounts==='function')renderAccounts()}catch(e){console.error('[auth] render error:',e)}
+    try{initDropdowns();filterLib()}catch(e){console.error('[auth] render error:',e)}
     if(LIB.length){document.getElementById('tab-lib-cnt').textContent=LIB.length}
     if(PH.length){document.getElementById('tab-ph').style.display='';document.getElementById('tab-ph-cnt').textContent=PH.length}
     if(HISTORY.length){document.getElementById('tab-hist').style.display='';document.getElementById('tab-hist-cnt').textContent=HISTORY.length+' scans'}
     if(ACCOUNTS.length){document.getElementById('tab-acct').style.display='';document.getElementById('tab-acct-cnt').textContent=ACCOUNTS.length}
     if(typeof PURCHASES!=='undefined'&&PURCHASES.length){document.getElementById('tab-purch').style.display='';document.getElementById('tab-purch-cnt').textContent=PURCHASES.length}
-    if(typeof _achFetch==='function'&&!_achLoaded)_achFetch();
+    setTimeout(function(){
+      try{filterPH();renderHistory();filterMKT();filterGP();
+        if(typeof filterPurchases==='function')filterPurchases();
+        if(typeof renderAccounts==='function')renderAccounts()}catch(e){console.error('[auth] deferred render error:',e)}
+      if(typeof _achFetch==='function'&&!_achLoaded)_achFetch();
+    },50);
   }
   _hideLoading()}
 
@@ -221,15 +224,19 @@ if(_xctApiKey){
   _loadCollection().then(function(ok){
     console.log('[auth] initial load result:',ok,'LIB:',LIB.length,'PURCHASES:',typeof PURCHASES!=='undefined'?PURCHASES.length:0);
     if(ok){
-      try{initDropdowns();filterLib();filterPH();renderHistory();filterMKT();filterGP();
-        if(typeof filterPurchases==='function')filterPurchases();
-        if(typeof renderAccounts==='function')renderAccounts()}catch(e){console.error('[auth] init render error:',e)}
+      try{initDropdowns();filterLib()}catch(e){console.error('[auth] init render error:',e)}
       if(LIB.length){document.getElementById('tab-lib-cnt').textContent=LIB.length}
       if(PH.length){document.getElementById('tab-ph').style.display='';document.getElementById('tab-ph-cnt').textContent=PH.length}
       if(HISTORY.length){document.getElementById('tab-hist').style.display='';document.getElementById('tab-hist-cnt').textContent=HISTORY.length+' scans'}
       if(ACCOUNTS.length){document.getElementById('tab-acct').style.display='';document.getElementById('tab-acct-cnt').textContent=ACCOUNTS.length}
       if(typeof PURCHASES!=='undefined'&&PURCHASES.length){document.getElementById('tab-purch').style.display='';document.getElementById('tab-purch-cnt').textContent=PURCHASES.length}
-      if(typeof _achFetch==='function'&&!_achLoaded)_achFetch();
+      // Defer non-visible tabs to avoid blocking the UI
+      setTimeout(function(){
+        try{filterPH();renderHistory();filterMKT();filterGP();
+          if(typeof filterPurchases==='function')filterPurchases();
+          if(typeof renderAccounts==='function')renderAccounts()}catch(e){console.error('[auth] deferred render error:',e)}
+        if(typeof _achFetch==='function'&&!_achLoaded)_achFetch();
+      },50);
     }
     _updateAuthUI();_hideLoading()
   }).catch(function(e){console.error('[auth] init error:',e);_updateAuthUI();_hideLoading()})

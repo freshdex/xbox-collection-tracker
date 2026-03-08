@@ -3182,18 +3182,24 @@ def collection_get(conn=None, cur=None, contributor=None, api_key=None):
                     if info["image_url"] and not item.get("boxArt"):
                         item["boxArt"] = info["image_url"]
 
-        return jsonify(
-            library=lib,
-            playHistory=row["play_history"] or [],
-            history=row["scan_history"] or [],
-            accounts=row["accounts_meta"] or [],
-            purchases=row["purchases"] or [],
-            username=contributor["username"],
-            settings=contributor.get("settings") or {},
-            uploadedAt=row["uploaded_at"].isoformat() if row["uploaded_at"] else None,
-            version=row["version"],
-            uploaded=True,
-        )
+        result = {
+            "library": lib,
+            "playHistory": row["play_history"] or [],
+            "history": row["scan_history"] or [],
+            "accounts": row["accounts_meta"] or [],
+            "purchases": row["purchases"] or [],
+            "username": contributor["username"],
+            "settings": contributor.get("settings") or {},
+            "uploadedAt": row["uploaded_at"].isoformat() if row["uploaded_at"] else None,
+            "version": row["version"],
+            "uploaded": True,
+        }
+        json_bytes = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        gz_bytes = gzip.compress(json_bytes, compresslevel=6)
+        return Response(gz_bytes, status=200, headers={
+            "Content-Type": "application/json",
+            "Content-Encoding": "gzip",
+        })
     except Exception as e:
         return jsonify(error=str(e)), 500
 
