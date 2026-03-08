@@ -1564,7 +1564,8 @@ def store_products():
                 params["channels"] = ch_list
 
         # Check for _none_ sentinel in any filter (means "nothing selected" → zero results)
-        _all_filter_raws = [type_raw, plat_raw, price_raw, cat_raw, subs_raw, mp_raw,
+        # Exclude subs: unchecking all subscriptions means "no filter", not "show nothing"
+        _all_filter_raws = [type_raw, plat_raw, price_raw, cat_raw, mp_raw,
                             pub_raw, dev_raw, own_raw, rel_raw, bundle_raw, phys_raw, regions_raw]
         if any(v == "_none_" for v in _all_filter_raws):
             wheres.append("FALSE")
@@ -1616,7 +1617,8 @@ def store_products():
 
         # Subscriptions filter — accepts tier names (e.g. "Game Pass PC")
         # or legacy short codes ("gp", "ea", "none")
-        if subs_raw:
+        # _none_ means all unchecked → no filter (show everything)
+        if subs_raw and subs_raw != "_none_":
             s_list = [s.strip() for s in subs_raw.split(",") if s.strip()]
             subs_conds = []
             # Collect actual tier names for DB query
