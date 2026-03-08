@@ -6866,7 +6866,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "headers:{'Content-Type':'application/json','Authorization':'Bearer '+window._xctApiKey},"
         "body:JSON.stringify({locale:locale,url:url,label:label})})"
         ".then(r=>r.json()).then(d=>{"
-        "saved++;if(saved===total){_initPhysicalLinks(pid);filterMKT()}"
+        "saved++;if(saved===total){_initPhysicalLinks(pid);delete _azLinks[pid];filterMKT()}"
         "}).catch(e=>console.error('Save error:',e))});"
         "if(!total){alert('Enter at least one URL')}}\n"
 
@@ -6876,7 +6876,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "fetch('/api/v1/store/physical/'+linkId,{method:'DELETE',"
         "headers:{'Authorization':'Bearer '+window._xctApiKey}})"
         ".then(r=>r.json()).then(d=>{"
-        "if(d.ok){_initPhysicalLinks(pid);filterMKT()}"
+        "if(d.ok){_initPhysicalLinks(pid);delete _azLinks[pid];filterMKT()}"
         "else{alert(d.error||'Error')}}).catch(e=>alert('Error: '+e))}\n"
 
         # Bulk fetch amazon links for visible product IDs
