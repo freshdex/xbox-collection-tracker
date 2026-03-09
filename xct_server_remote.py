@@ -861,7 +861,7 @@ def data_js():
         conn.close()
 _TAB_SLUGS = {
     "summary", "library", "store", "marketplace", "subscriptions", "gamepass", "playhistory", "scanlog",
-    "gamertags", "gfwl", "xvcdb", "imports", "purchases", "achievements", "admin",
+    "gamertags", "gfwl", "xvcdb", "imports", "purchases", "achievements", "developers", "publishers", "admin",
 }
 
 # GP PIDs set (loaded from shared_data, refreshed every 5 minutes)
