@@ -2577,6 +2577,285 @@ def store_amazon_remove(contributor, conn, cur, api_key):
 
 
 # ---------------------------------------------------------------------------
+# Developers & Publishers — aggregated directory listing
+# ---------------------------------------------------------------------------
+
+_ENTITY_SORT_MAP = {
+    "games": "game_count DESC",
+    "gamesAsc": "game_count ASC",
+    "name": "entity_name ASC",
+    "nameDesc": "entity_name DESC",
+    "products": "product_count DESC",
+    "productsAsc": "product_count ASC",
+    "rating": "avg_rating DESC NULLS LAST",
+    "ratingAsc": "avg_rating ASC NULLS LAST",
+    "metacritic": "avg_metacritic DESC NULLS LAST",
+    "metacriticAsc": "avg_metacritic ASC NULLS LAST",
+    "newest": "newest_release DESC NULLS LAST",
+    "oldest": "oldest_release ASC NULLS LAST",
+}
+
+
+def _entity_listing(entity_type):
+    """Shared logic for /developers and /publishers listing."""
+    conn = get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        col = "developer" if entity_type == "developer" else "publisher"
+        profile_table = "developer_profiles" if entity_type == "developer" else "publisher_profiles"
+
+        page = max(0, request.args.get("page", 0, type=int))
+        per_page = min(max(1, request.args.get("per_page", 50, type=int)), 200)
+        q = (request.args.get("q") or "").strip()
+        sort_key = request.args.get("sort", "games")
+        sort_sql = _ENTITY_SORT_MAP.get(sort_key, "game_count DESC")
+
+        wheres = [f"p.{col} != ''", "p.title != p.product_id"]
+        params = {}
+
+        if q:
+            wheres.append(f"p.{col} ILIKE %(q)s")
+            params["q"] = f"%{q}%"
+
+        where_sql = " AND ".join(wheres)
+
+        # Main aggregation query
+        sql = f"""
+            SELECT p.{col} AS entity_name,
+                   COUNT(*) AS product_count,
+                   COUNT(*) FILTER (WHERE p.product_kind = 'Game') AS game_count,
+                   COUNT(*) FILTER (WHERE p.product_kind = 'Durable') AS dlc_count,
+                   AVG(p.average_rating) FILTER (WHERE p.average_rating > 0) AS avg_rating,
+                   MAX(p.average_rating) FILTER (WHERE p.average_rating > 0) AS max_rating,
+                   SUM(p.rating_count) FILTER (WHERE p.rating_count > 0) AS total_ratings,
+                   AVG(p.metacritic_score) FILTER (WHERE p.metacritic_score IS NOT NULL) AS avg_metacritic,
+                   MAX(p.metacritic_score) AS max_metacritic,
+                   COUNT(*) FILTER (WHERE p.metacritic_score IS NOT NULL) AS metacritic_count,
+                   MIN(p.release_date) FILTER (WHERE p.release_date IS NOT NULL
+                       AND EXTRACT(YEAR FROM p.release_date) < 2100) AS oldest_release,
+                   MAX(p.release_date) FILTER (WHERE p.release_date IS NOT NULL
+                       AND EXTRACT(YEAR FROM p.release_date) < 2100) AS newest_release,
+                   COUNT(*) FILTER (WHERE p.xcloud_streamable) AS xcloud_count,
+                   COUNT(*) FILTER (WHERE p.has_achievements) AS ach_count,
+                   ARRAY_AGG(DISTINCT unnest_plat) FILTER (WHERE unnest_plat IS NOT NULL) AS all_platforms
+            FROM marketplace_products p
+            LEFT JOIN LATERAL UNNEST(p.platforms) AS unnest_plat ON TRUE
+            WHERE {where_sql}
+            GROUP BY p.{col}
+            ORDER BY {sort_sql}
+            LIMIT %(limit)s OFFSET %(offset)s
+        """
+        params["limit"] = per_page
+        params["offset"] = page * per_page
+
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+
+        # Get total count
+        count_sql = f"""
+            SELECT COUNT(DISTINCT p.{col}) AS cnt
+            FROM marketplace_products p
+            WHERE {where_sql}
+        """
+        cur.execute(count_sql, params)
+        total = cur.fetchone()["cnt"]
+
+        # Fetch profile data for these entities
+        entity_names = [r["entity_name"] for r in rows]
+        profiles = {}
+        if entity_names:
+            cur.execute(
+                f"SELECT * FROM {profile_table} WHERE name = ANY(%(names)s)",
+                {"names": entity_names})
+            for pr in cur.fetchall():
+                profiles[pr["name"]] = pr
+
+        # Fetch a representative image (box art of highest-rated game)
+        rep_images = {}
+        if entity_names:
+            cur.execute(f"""
+                SELECT DISTINCT ON (p.{col}) p.{col} AS entity_name,
+                       p.image_box_art, p.image_tile
+                FROM marketplace_products p
+                WHERE p.{col} = ANY(%(names)s) AND p.title != p.product_id
+                      AND p.product_kind = 'Game'
+                      AND (p.image_box_art != '' OR p.image_tile != '')
+                ORDER BY p.{col}, p.average_rating DESC NULLS LAST, p.rating_count DESC NULLS LAST
+            """, {"names": entity_names})
+            for img_row in cur.fetchall():
+                rep_images[img_row["entity_name"]] = img_row["image_box_art"] or img_row["image_tile"] or ""
+
+        # Assemble response
+        entities = []
+        for r in rows:
+            name = r["entity_name"]
+            prof = profiles.get(name, {})
+            entities.append({
+                "name": name,
+                "productCount": r["product_count"],
+                "gameCount": r["game_count"],
+                "dlcCount": r["dlc_count"],
+                "avgRating": round(float(r["avg_rating"]), 2) if r["avg_rating"] else None,
+                "maxRating": round(float(r["max_rating"]), 2) if r["max_rating"] else None,
+                "totalRatings": r["total_ratings"] or 0,
+                "avgMetacritic": round(float(r["avg_metacritic"])) if r["avg_metacritic"] else None,
+                "maxMetacritic": r["max_metacritic"],
+                "metacriticCount": r["metacritic_count"] or 0,
+                "oldestRelease": r["oldest_release"].isoformat() if r["oldest_release"] else None,
+                "newestRelease": r["newest_release"].isoformat() if r["newest_release"] else None,
+                "xcloudCount": r["xcloud_count"] or 0,
+                "achievementCount": r["ach_count"] or 0,
+                "platforms": sorted(r["all_platforms"]) if r["all_platforms"] else [],
+                "logoUrl": prof.get("logo_url", "") or "",
+                "bannerUrl": prof.get("banner_url", "") or "",
+                "website": prof.get("website", "") or "",
+                "twitter": prof.get("twitter", "") or "",
+                "youtube": prof.get("youtube", "") or "",
+                "discord": prof.get("discord", "") or "",
+                "repImage": rep_images.get(name, ""),
+            })
+
+        result = {
+            "entities": entities,
+            "total": total,
+            "page": page,
+            "perPage": per_page,
+            "totalPages": max(1, -(-total // per_page)),
+        }
+        return _gzip_json_response(result)
+    except Exception as e:
+        log.exception(f"{entity_type}_listing error")
+        return jsonify(error=str(e)), 500
+    finally:
+        conn.close()
+
+
+def _entity_detail(entity_type, name):
+    """Shared logic for developer/publisher detail — profile + games list."""
+    conn = get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        col = "developer" if entity_type == "developer" else "publisher"
+        profile_table = "developer_profiles" if entity_type == "developer" else "publisher_profiles"
+
+        _refresh_exchange_rates(cur)
+
+        # Profile
+        cur.execute(f"SELECT * FROM {profile_table} WHERE name = %s", (name,))
+        prof = cur.fetchone() or {}
+
+        # All products by this entity
+        cur.execute(f"""
+            SELECT p.product_id, p.title, p.publisher, p.developer, p.category,
+                   p.release_date, p.platforms, p.product_kind, p.xbox_title_id,
+                   p.is_bundle, p.is_ea_play, p.xcloud_streamable,
+                   p.has_trial_sku, p.has_achievements,
+                   p.image_box_art, p.image_tile, p.image_hero,
+                   p.average_rating, p.rating_count,
+                   p.metacritic_score, p.metacritic_url,
+                   p.best_gc_usd, p.short_description,
+                   pr_us.msrp AS price_usd,
+                   CASE WHEN pr_us.sale_price > 0 AND pr_us.sale_price < pr_us.msrp
+                        THEN pr_us.sale_price ELSE NULL END AS current_price_usd
+            FROM marketplace_products p
+            LEFT JOIN marketplace_prices pr_us ON pr_us.product_id = p.product_id AND pr_us.market = 'US'
+            WHERE p.{col} = %s AND p.title != p.product_id
+            ORDER BY p.product_kind ASC, p.release_date DESC NULLS LAST
+        """, (name,))
+        rows = cur.fetchall()
+
+        # Fetch subscription info
+        pids = [r["product_id"] for r in rows]
+        subs_map = {}
+        if pids:
+            cur.execute(
+                "SELECT product_id, tier FROM marketplace_subscriptions "
+                "WHERE product_id = ANY(%(pids)s)",
+                {"pids": pids})
+            for s in cur.fetchall():
+                subs_map.setdefault(s["product_id"], []).append(s["tier"])
+
+        products = []
+        for r in rows:
+            pid = r["product_id"]
+            products.append({
+                "productId": pid,
+                "title": r["title"],
+                "publisher": r["publisher"],
+                "developer": r["developer"],
+                "category": r["category"],
+                "releaseDate": r["release_date"].isoformat() if r["release_date"] else "",
+                "platforms": r["platforms"] or [],
+                "productKind": r["product_kind"],
+                "isBundle": r["is_bundle"],
+                "isEAPlay": r["is_ea_play"],
+                "xCloudStreamable": r["xcloud_streamable"],
+                "hasAchievements": r["has_achievements"],
+                "imageBoxArt": r["image_box_art"] or r["image_tile"] or "",
+                "imageHero": r["image_hero"] or "",
+                "averageRating": r["average_rating"],
+                "ratingCount": r["rating_count"],
+                "metacriticScore": r["metacritic_score"],
+                "metacriticUrl": r["metacritic_url"] or "",
+                "priceUSD": r["price_usd"] or 0,
+                "currentPriceUSD": r["current_price_usd"] or 0,
+                "subscriptions": subs_map.get(pid, []),
+            })
+
+        result = {
+            "name": name,
+            "profile": {
+                "logoUrl": prof.get("logo_url", "") or "",
+                "bannerUrl": prof.get("banner_url", "") or "",
+                "website": prof.get("website", "") or "",
+                "twitter": prof.get("twitter", "") or "",
+                "youtube": prof.get("youtube", "") or "",
+                "facebook": prof.get("facebook", "") or "",
+                "instagram": prof.get("instagram", "") or "",
+                "discord": prof.get("discord", "") or "",
+                "linkedin": prof.get("linkedin", "") or "",
+                "description": prof.get("description", "") or "",
+                "country": prof.get("country", "") or "",
+                "foundedYear": prof.get("founded_year"),
+            },
+            "products": products,
+            "gameCount": sum(1 for p in products if p["productKind"] == "Game"),
+            "dlcCount": sum(1 for p in products if p["productKind"] == "Durable"),
+            "totalProducts": len(products),
+        }
+        return _gzip_json_response(result)
+    except Exception as e:
+        log.exception(f"{entity_type}_detail error")
+        return jsonify(error=str(e)), 500
+    finally:
+        conn.close()
+
+
+@app.route("/api/v1/store/developers")
+def store_developers():
+    """Paginated, sorted developer directory."""
+    return _entity_listing("developer")
+
+
+@app.route("/api/v1/store/developer/<path:name>")
+def store_developer_detail(name):
+    """Developer detail: profile + all products."""
+    return _entity_detail("developer", name)
+
+
+@app.route("/api/v1/store/publishers")
+def store_publishers():
+    """Paginated, sorted publisher directory."""
+    return _entity_listing("publisher")
+
+
+@app.route("/api/v1/store/publisher/<path:name>")
+def store_publisher_detail(name):
+    """Publisher detail: profile + all products."""
+    return _entity_detail("publisher", name)
+
+
+# ---------------------------------------------------------------------------
 # Physical Disc Links (multi-locale, community-contributed)
 # ---------------------------------------------------------------------------
 

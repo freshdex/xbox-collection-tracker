@@ -135,7 +135,13 @@ function _updateAuthUI(){
       xboxBtn.style.background='#107c10';xboxBtn.style.border='none';xboxBtn.style.color='#fff';
       xboxBtn.onclick=_xctXboxAuth;xboxBtn.style.display=''}
     var adminTab=document.getElementById('tab-admin');
-    if(adminTab){adminTab.style.display=_xctUser.toLowerCase()==='freshdex'?'':'none'}
+    var adminSec=document.getElementById('admin');
+    if(_xctUser.toLowerCase()==='freshdex'){
+      if(adminTab)adminTab.style.display='';
+    }else{
+      if(adminTab)adminTab.remove();
+      if(adminSec)adminSec.remove();
+    }
     var settingsTab=document.getElementById('tab-settings');
     if(settingsTab){settingsTab.style.display='';if(typeof _loadPriceSettings==='function')_loadPriceSettings()}
   }else{
@@ -145,7 +151,9 @@ function _updateAuthUI(){
     uploadBtn.style.display='none';xboxBtn.style.display='none';xboxGt.style.display='none';
     if(avatarEl)avatarEl.style.display='none';
     var adminTab=document.getElementById('tab-admin');
-    if(adminTab)adminTab.style.display='none';
+    var adminSec=document.getElementById('admin');
+    if(adminTab)adminTab.remove();
+    if(adminSec)adminSec.remove();
     var settingsTab=document.getElementById('tab-settings');
     if(settingsTab)settingsTab.style.display='none'}}
 

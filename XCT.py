@@ -3853,6 +3853,26 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '.rp-tbl td{padding:4px 6px;border-bottom:1px solid #222;text-align:right}\n'
         '.rp-tbl td:first-child{text-align:left;color:#ccc}\n'
         '.rp-best td{color:#4caf50 !important;font-weight:bold}\n'
+        '.entity-list{display:flex;flex-direction:column;gap:1px}\n'
+        '.entity-list .ent-head{display:grid;grid-template-columns:48px minmax(180px,1fr) 70px 70px 70px 80px 80px 80px 150px;gap:8px;padding:8px 12px;background:#161616;border-bottom:1px solid #333;font-size:11px;font-weight:600;color:#888;position:sticky;top:47px;z-index:20}\n'
+        '.entity-list .ent-head div[data-sort]{cursor:pointer;user-select:none}\n'
+        '.entity-list .ent-head div[data-sort]:hover{color:#107c10}\n'
+        '.entity-list .ent-row{display:grid;grid-template-columns:48px minmax(180px,1fr) 70px 70px 70px 80px 80px 80px 150px;gap:8px;padding:8px 12px;background:#1a1a1a;border-bottom:1px solid #1e1e1e;align-items:center;cursor:pointer;font-size:12px;transition:background .15s}\n'
+        '.entity-list .ent-row:hover{background:#222}\n'
+        '.entity-list .ent-row img{width:42px;height:42px;object-fit:cover;border-radius:6px;background:#222}\n'
+        '.entity-list .ent-name{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#eee}\n'
+        '.entity-list .ent-sub{font-size:10px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n'
+        '.entity-detail{background:#111;border:1px solid #333;border-radius:8px;margin:12px 0;overflow:hidden}\n'
+        '.entity-detail .ent-banner{width:100%;height:160px;object-fit:cover;background:#222}\n'
+        '.entity-detail .ent-info{padding:16px}\n'
+        '.entity-detail .ent-links a{display:inline-block;margin-right:12px;color:#42a5f5;font-size:12px;text-decoration:none}\n'
+        '.entity-detail .ent-links a:hover{text-decoration:underline}\n'
+        '.ent-games-list{margin:12px 0}\n'
+        '.ent-games-list .ent-game{display:grid;grid-template-columns:36px 1fr 80px 80px 70px 60px;gap:8px;padding:6px 12px;border-bottom:1px solid #1e1e1e;align-items:center;font-size:11px}\n'
+        '.ent-games-list .ent-game:hover{background:#1a1a1a}\n'
+        '.ent-games-list .ent-game img{width:32px;height:32px;object-fit:cover;border-radius:3px}\n'
+        '.ent-expand-btn{background:#1a1a1a;border:1px solid #333;border-radius:4px;color:#888;font-size:11px;padding:4px 10px;cursor:pointer;margin-top:8px}\n'
+        '.ent-expand-btn:hover{background:#222;color:#ccc}\n'
         '#ctx-menu{display:none;position:fixed;background:#222;border:1px solid #444;border-radius:6px;z-index:300;min-width:160px;box-shadow:0 4px 16px rgba(0,0,0,.5);overflow:hidden}\n'
         '.ctx-opt{padding:8px 12px;cursor:pointer;font-size:12px;color:#ddd}\n'
         '.ctx-opt:hover{background:#333}\n'
@@ -3960,6 +3980,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="tab" id="tab-gfwl" onclick="switchTab(\'gfwl\',this)" style="display:none">GFWL <span class="cnt" id="tab-gfwl-cnt"></span></div>\n'
         '<div class="tab" id="tab-cdnsync" onclick="switchTab(\'cdnsync\',this)" style="display:none">XVC <span class="cnt" id="tab-cdnsync-cnt"></span></div>\n'
         '<div class="tab" id="tab-imp" onclick="switchTab(\'imports\',this)" style="display:none">Imports <span class="cnt" id="tab-imp-cnt"></span></div>\n'
+        '<div class="tab" id="tab-devs" onclick="switchTab(\'developers\',this)" style="display:none">Developers <span class="cnt" id="tab-devs-cnt"></span></div>\n'
+        '<div class="tab" id="tab-pubs" onclick="switchTab(\'publishers\',this)" style="display:none">Publishers <span class="cnt" id="tab-pubs-cnt"></span></div>\n'
         '<div class="tab" id="tab-admin" onclick="switchTab(\'admin\',this)" style="display:none">Admin</div>\n'
         '<div class="tab" id="tab-settings" onclick="switchTab(\'settings\',this)" style="display:none">Settings</div>\n'
         '<div class="tab" id="tab-mission" onclick="switchTab(\'mission\',this)">Our Mission</div>\n'
@@ -4525,6 +4547,48 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div id="cdnsync-log" style="display:none">\n'
         '<div id="cdnlog-list"></div>\n'
         '</div>\n'
+        '</div>\n'
+
+        # -- Developers section --
+        '<div class="section" id="developers">\n'
+        '<div style="display:flex;align-items:center;gap:16px;margin-bottom:16px">\n'
+        '<h2 style="margin:0">Developers</h2>\n'
+        '<span class="cnt" id="devs-total" style="font-size:13px;color:#888"></span>\n'
+        '</div>\n'
+        '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">\n'
+        '<input type="text" id="devs-search" placeholder="Search developers..." class="search" onkeyup="_devsPage=0;_devsFilter()" style="width:200px">\n'
+        '<select id="devs-sort" class="styled-select" onchange="_devsPage=0;_devsFilter()">\n'
+        '<option value="games">Games (High-Low)</option><option value="gamesAsc">Games (Low-High)</option>\n'
+        '<option value="name">Name (A-Z)</option><option value="nameDesc">Name (Z-A)</option>\n'
+        '<option value="products">Products (High-Low)</option><option value="productsAsc">Products (Low-High)</option>\n'
+        '<option value="rating">Store Rating (High-Low)</option><option value="ratingAsc">Store Rating (Low-High)</option>\n'
+        '<option value="metacritic">Metacritic (High-Low)</option><option value="metacriticAsc">Metacritic (Low-High)</option>\n'
+        '<option value="newest">Newest Release</option><option value="oldest">Oldest Release</option>\n'
+        '</select>\n'
+        '</div>\n'
+        '<div id="devs-list" class="entity-list"></div>\n'
+        '<div id="devs-pager" class="pager" style="margin-top:12px"></div>\n'
+        '</div>\n'
+
+        # -- Publishers section --
+        '<div class="section" id="publishers">\n'
+        '<div style="display:flex;align-items:center;gap:16px;margin-bottom:16px">\n'
+        '<h2 style="margin:0">Publishers</h2>\n'
+        '<span class="cnt" id="pubs-total" style="font-size:13px;color:#888"></span>\n'
+        '</div>\n'
+        '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">\n'
+        '<input type="text" id="pubs-search" placeholder="Search publishers..." class="search" onkeyup="_pubsPage=0;_pubsFilter()" style="width:200px">\n'
+        '<select id="pubs-sort" class="styled-select" onchange="_pubsPage=0;_pubsFilter()">\n'
+        '<option value="games">Games (High-Low)</option><option value="gamesAsc">Games (Low-High)</option>\n'
+        '<option value="name">Name (A-Z)</option><option value="nameDesc">Name (Z-A)</option>\n'
+        '<option value="products">Products (High-Low)</option><option value="productsAsc">Products (Low-High)</option>\n'
+        '<option value="rating">Store Rating (High-Low)</option><option value="ratingAsc">Store Rating (Low-High)</option>\n'
+        '<option value="metacritic">Metacritic (High-Low)</option><option value="metacriticAsc">Metacritic (Low-High)</option>\n'
+        '<option value="newest">Newest Release</option><option value="oldest">Oldest Release</option>\n'
+        '</select>\n'
+        '</div>\n'
+        '<div id="pubs-list" class="entity-list"></div>\n'
+        '<div id="pubs-pager" class="pager" style="margin-top:12px"></div>\n'
         '</div>\n'
 
         # -- Admin section (hosted mode only, shown for admin users) --
@@ -5773,6 +5837,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # API mode: fetch filters from server, then trigger first load
         "if(window._xctHosted){\n"
         "document.getElementById('tab-mkt').style.display='';\n"
+        "document.getElementById('tab-devs').style.display='';\n"
+        "document.getElementById('tab-pubs').style.display='';\n"
         # Static cb-drops (same in both modes)
         "fillStatic('mkt-price',[['free','Free'],['under10','Under $10'],['under20','Under $20'],['under40','Under $40'],['over40','$40+'],['sale','On Sale']],'filterMKT');\n"
         "fillStatic('mkt-subs',[],'filterMKT');\n"
@@ -5920,7 +5986,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(typeof _loadTabData==='function')_loadTabData(id);"
         "var _slugMap={summary:'summary',library:'library',marketplace:'store',subscriptions:'subscriptions',gamepass:'gamepass',"
         "playhistory:'playhistory',history:'scanlog',gamertags:'gamertags',"
-        "gfwl:'gfwl',cdnsync:'xvcdb',imports:'imports',purchases:'purchases',achievements:'achievements',admin:'admin',settings:'settings'};"
+        "gfwl:'gfwl',cdnsync:'xvcdb',imports:'imports',purchases:'purchases',achievements:'achievements',developers:'developers',publishers:'publishers',admin:'admin',settings:'settings'};"
         "var slug=_slugMap[id]||id;"
         "_setRoute(slug,'')}\n"
 
@@ -9007,10 +9073,157 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "  _subsInitCards();\n"
         "}\n\n"
 
+        # -- Developers & Publishers tabs JS --
+        "var _devsLoaded=false,_pubsLoaded=false,_devsPage=0,_pubsPage=0;\n"
+        "var _ENT_PAGE=50;\n"
+
+        "function _entFetch(type,listEl,pagerEl,totalEl,page,sort,q){\n"
+        "  listEl.innerHTML='<div style=\"color:#888;padding:20px\">Loading...</div>';\n"
+        "  var url='/api/v1/store/'+type+'s?page='+page+'&per_page='+_ENT_PAGE+'&sort='+sort;\n"
+        "  if(q)url+='&q='+encodeURIComponent(q);\n"
+        "  fetch(url).then(r=>r.json()).then(function(data){\n"
+        "    var entities=data.entities||[];\n"
+        "    var total=data.total||0;\n"
+        "    var totalPages=data.totalPages||1;\n"
+        "    totalEl.textContent=total+' '+type+'s';\n"
+        "    var tabCnt=document.getElementById('tab-'+type.substring(0,4)+'s-cnt');\n"
+        "    if(tabCnt)tabCnt.textContent=total;\n"
+        "    var h='<div class=\"ent-head\">"
+        "<div></div>"
+        "<div data-sort>Name</div>"
+        "<div data-sort style=\"text-align:center\">Games</div>"
+        "<div data-sort style=\"text-align:center\">DLC</div>"
+        "<div data-sort style=\"text-align:center\">Total</div>"
+        "<div data-sort style=\"text-align:center\">Rating</div>"
+        "<div data-sort style=\"text-align:center\">Metacritic</div>"
+        "<div data-sort style=\"text-align:center\">Newest</div>"
+        "<div>Platforms</div>"
+        "</div>';\n"
+        "    entities.forEach(function(e){\n"
+        "      var img=e.repImage?(e.repImage+'?w=84&h=84'):'';var imgTag=img?'<img src=\"'+img+'\" loading=\"lazy\" onerror=\"this.style.display=\\'none\\'\">':'<div style=\"width:42px;height:42px;background:#222;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#444;font-size:18px\">'+(e.name||'?')[0]+'</div>';\n"
+        "      var rating=e.avgRating?'<span style=\"color:#ffa726\">'+e.avgRating.toFixed(1)+'</span>':'<span style=\"color:#333\">-</span>';\n"
+        "      var mc=e.avgMetacritic?'<span style=\"color:'+(e.avgMetacritic>=75?'#66bb6a':e.avgMetacritic>=50?'#ffa726':'#ef5350')+'\">'+e.avgMetacritic+'</span>':'<span style=\"color:#333\">-</span>';\n"
+        "      var newest=e.newestRelease||'-';\n"
+        "      var platBadges=(e.platforms||[]).slice(0,4).map(function(p){return'<span class=\"badge\" style=\"font-size:8px;background:#222;color:#888;padding:1px 4px\">'+p+'</span>'}).join(' ');\n"
+        "      h+='<div class=\"ent-row\" onclick=\"_entDetail(\\''+type+'\\',\\''+_esc(e.name)+'\\')\">';\n"
+        "      h+='<div>'+imgTag+'</div>';\n"
+        "      h+='<div><div class=\"ent-name\">'+_esc(e.name)+'</div>';\n"
+        "      var sub=[];\n"
+        "      if(e.website)sub.push('<a href=\"'+e.website+'\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#42a5f5;font-size:10px\">Website</a>');\n"
+        "      if(e.twitter)sub.push('<a href=\"https://twitter.com/'+e.twitter+'\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#42a5f5;font-size:10px\">Twitter</a>');\n"
+        "      if(e.discord)sub.push('<a href=\"'+e.discord+'\" target=\"_blank\" onclick=\"event.stopPropagation()\" style=\"color:#42a5f5;font-size:10px\">Discord</a>');\n"
+        "      if(sub.length)h+='<div class=\"ent-sub\">'+sub.join(' ')+'</div>';\n"
+        "      h+='</div>';\n"
+        "      h+='<div style=\"text-align:center;font-weight:600;color:#4caf50\">'+e.gameCount+'</div>';\n"
+        "      h+='<div style=\"text-align:center;color:#888\">'+e.dlcCount+'</div>';\n"
+        "      h+='<div style=\"text-align:center;color:#888\">'+e.productCount+'</div>';\n"
+        "      h+='<div style=\"text-align:center\">'+rating+'</div>';\n"
+        "      h+='<div style=\"text-align:center\">'+mc+'</div>';\n"
+        "      h+='<div style=\"text-align:center;color:#888;font-size:11px\">'+newest+'</div>';\n"
+        "      h+='<div>'+platBadges+'</div>';\n"
+        "      h+='</div>';\n"
+        "    });\n"
+        "    listEl.innerHTML=h;\n"
+        "    _entPager(pagerEl,page,totalPages,type);\n"
+        "  }).catch(function(err){\n"
+        "    listEl.innerHTML='<div style=\"color:#f44;padding:20px\">Error loading: '+err+'</div>';\n"
+        "  });\n"
+        "}\n"
+
+        "function _entPager(el,page,totalPages,type){\n"
+        "  if(totalPages<=1){el.innerHTML='';return}\n"
+        "  var h='<div style=\"display:flex;gap:6px;justify-content:center;flex-wrap:wrap\">';\n"
+        "  if(page>0)h+='<button class=\"ent-expand-btn\" onclick=\"_'+(type==='developer'?'devs':'pubs')+'Page='+(page-1)+';_'+(type==='developer'?'devs':'pubs')+'Filter()\">← Prev</button>';\n"
+        "  h+='<span style=\"color:#888;font-size:12px;padding:4px 8px\">Page '+(page+1)+' of '+totalPages+'</span>';\n"
+        "  if(page<totalPages-1)h+='<button class=\"ent-expand-btn\" onclick=\"_'+(type==='developer'?'devs':'pubs')+'Page='+(page+1)+';_'+(type==='developer'?'devs':'pubs')+'Filter()\">Next →</button>';\n"
+        "  h+='</div>';el.innerHTML=h;\n"
+        "}\n"
+
+        "function _devsFilter(){\n"
+        "  var q=document.getElementById('devs-search').value.trim();\n"
+        "  var sort=document.getElementById('devs-sort').value;\n"
+        "  _entFetch('developer',document.getElementById('devs-list'),document.getElementById('devs-pager'),document.getElementById('devs-total'),_devsPage,sort,q);\n"
+        "}\n"
+        "function _pubsFilter(){\n"
+        "  var q=document.getElementById('pubs-search').value.trim();\n"
+        "  var sort=document.getElementById('pubs-sort').value;\n"
+        "  _entFetch('publisher',document.getElementById('pubs-list'),document.getElementById('pubs-pager'),document.getElementById('pubs-total'),_pubsPage,sort,q);\n"
+        "}\n"
+
+        # Entity detail — fetches all games, renders inline expandable
+        "function _entDetail(type,name){\n"
+        "  var modal=document.getElementById('detail-modal');\n"
+        "  if(!modal){modal=document.createElement('div');modal.id='detail-modal';\n"
+        "    modal.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);z-index:500;display:flex;align-items:center;justify-content:center;overflow-y:auto';\n"
+        "    modal.onclick=function(ev){if(ev.target===modal)modal.style.display='none'};\n"
+        "    document.body.appendChild(modal)}\n"
+        "  modal.style.display='flex';\n"
+        "  modal.innerHTML='<div style=\"background:#111;border:1px solid #333;border-radius:12px;max-width:900px;width:95%;max-height:90vh;overflow-y:auto;padding:0\">"
+        "<div style=\"padding:20px;color:#888\">Loading...</div></div>';\n"
+        "  fetch('/api/v1/store/'+type+'/'+encodeURIComponent(name)).then(r=>r.json()).then(function(d){\n"
+        "    var prof=d.profile||{};\n"
+        "    var h='<div style=\"position:relative\">';\n"
+        "    if(prof.bannerUrl)h+='<img src=\"'+prof.bannerUrl+'\" style=\"width:100%;height:160px;object-fit:cover;border-radius:12px 12px 0 0\">';\n"
+        "    else h+='<div style=\"height:80px;background:linear-gradient(135deg,#1a1a2e,#16213e);border-radius:12px 12px 0 0\"></div>';\n"
+        "    h+='</div>';\n"
+        "    h+='<div style=\"padding:20px\">';\n"
+        "    h+='<div style=\"display:flex;align-items:center;gap:16px;margin-bottom:16px\">';\n"
+        "    if(prof.logoUrl)h+='<img src=\"'+prof.logoUrl+'\" style=\"width:64px;height:64px;object-fit:cover;border-radius:8px;border:2px solid #333\">';\n"
+        "    h+='<div><h2 style=\"margin:0;color:#eee\">'+_esc(d.name)+'</h2>';\n"
+        "    h+='<span style=\"color:#888;font-size:13px\">'+d.gameCount+' games &middot; '+d.dlcCount+' DLC &middot; '+d.totalProducts+' total products</span></div></div>';\n"
+        "    if(prof.description)h+='<p style=\"color:#aaa;font-size:13px;margin:0 0 12px\">'+_esc(prof.description)+'</p>';\n"
+        "    var links=[];\n"
+        "    if(prof.website)links.push('<a href=\"'+prof.website+'\" target=\"_blank\">🌐 Website</a>');\n"
+        "    if(prof.twitter)links.push('<a href=\"https://twitter.com/'+prof.twitter+'\" target=\"_blank\">𝕏 Twitter</a>');\n"
+        "    if(prof.youtube)links.push('<a href=\"https://youtube.com/'+prof.youtube+'\" target=\"_blank\">▶ YouTube</a>');\n"
+        "    if(prof.discord)links.push('<a href=\"'+prof.discord+'\" target=\"_blank\">💬 Discord</a>');\n"
+        "    if(prof.facebook)links.push('<a href=\"https://facebook.com/'+prof.facebook+'\" target=\"_blank\">f Facebook</a>');\n"
+        "    if(prof.instagram)links.push('<a href=\"https://instagram.com/'+prof.instagram+'\" target=\"_blank\">📷 Instagram</a>');\n"
+        "    if(prof.linkedin)links.push('<a href=\"https://linkedin.com/company/'+prof.linkedin+'\" target=\"_blank\">in LinkedIn</a>');\n"
+        "    if(links.length)h+='<div class=\"entity-detail ent-links\" style=\"border:none;margin:0 0 16px;padding:0\">'+links.join('')+'</div>';\n"
+
+        # Games list grouped by type
+        "    var games=d.products.filter(function(p){return p.productKind==='Game'});\n"
+        "    var dlcs=d.products.filter(function(p){return p.productKind!=='Game'});\n"
+        "    function _gameRows(items,label){\n"
+        "      if(!items.length)return '';\n"
+        "      var g='<div style=\"margin-top:16px\"><h3 style=\"color:#888;font-size:13px;margin:0 0 8px\">'+label+' ('+items.length+')</h3>';\n"
+        "      g+='<div class=\"ent-games-list\">';\n"
+        "      g+='<div class=\"ent-game\" style=\"font-weight:600;color:#888;border-bottom:1px solid #333\">';\n"
+        "      g+='<div></div><div>Title</div><div style=\"text-align:center\">Rating</div><div style=\"text-align:center\">Metacritic</div><div style=\"text-align:right\">Price</div><div style=\"text-align:center\">Release</div></div>';\n"
+        "      items.forEach(function(p){\n"
+        "        var img=p.imageBoxArt?(p.imageBoxArt+'?w=64&h=64'):'';var iTag=img?'<img src=\"'+img+'\" loading=\"lazy\" onerror=\"this.style.display=\\'none\\'\">':'<div style=\"width:32px;height:32px;background:#222;border-radius:3px\"></div>';\n"
+        "        var rat=p.averageRating>0?'<span style=\"color:#ffa726\">'+p.averageRating.toFixed(1)+'</span>':'-';\n"
+        "        var mc=p.metacriticScore?'<span style=\"color:'+(p.metacriticScore>=75?'#66bb6a':p.metacriticScore>=50?'#ffa726':'#ef5350')+'\">'+p.metacriticScore+'</span>':'-';\n"
+        "        var price=p.priceUSD>0?'$'+p.priceUSD.toFixed(2):'Free';\n"
+        "        if(p.currentPriceUSD>0&&p.currentPriceUSD<p.priceUSD)price='<span style=\"color:#4caf50\">$'+p.currentPriceUSD.toFixed(2)+'</span> <s style=\"color:#555;font-size:10px\">$'+p.priceUSD.toFixed(2)+'</s>';\n"
+        "        var rel=(p.releaseDate||'').substring(0,10)||'-';\n"
+        "        var href='https://www.xbox.com/en-us/games/store/'+_slug(p.title)+'/'+p.productId;\n"
+        "        g+='<div class=\"ent-game\" onclick=\"window.open(\\''+href+'\\',\\'_blank\\')\" style=\"cursor:pointer\">';\n"
+        "        g+='<div>'+iTag+'</div>';\n"
+        "        g+='<div style=\"overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#ddd\">'+_esc(p.title)+'</div>';\n"
+        "        g+='<div style=\"text-align:center\">'+rat+'</div>';\n"
+        "        g+='<div style=\"text-align:center\">'+mc+'</div>';\n"
+        "        g+='<div style=\"text-align:right;color:#42a5f5\">'+price+'</div>';\n"
+        "        g+='<div style=\"text-align:center;color:#888\">'+rel+'</div></div>';\n"
+        "      });\n"
+        "      g+='</div></div>';return g;\n"
+        "    }\n"
+        "    h+=_gameRows(games,'Games');\n"
+        "    h+=_gameRows(dlcs,'DLC & Add-Ons');\n"
+        "    h+='</div>';\n"
+        "    modal.querySelector('div').innerHTML=h;\n"
+        "  }).catch(function(err){\n"
+        "    modal.querySelector('div').innerHTML='<div style=\"padding:20px;color:#f44\">Error: '+err+'</div>';\n"
+        "  });\n"
+        "}\n"
+
         "var _cdnLoaded=false;\n"
         "function _loadTabData(id){\n"
         "if(id==='summary')renderSummary();\n"
         "if(id==='subscriptions')_subsRender();\n"
+        "if(id==='developers'&&!_devsLoaded){_devsLoaded=true;_devsFilter()}\n"
+        "if(id==='publishers'&&!_pubsLoaded){_pubsLoaded=true;_pubsFilter()}\n"
         "if(id==='achievements'&&!_achLoaded&&window._xctHosted&&window._xctApiKey)_achFetch();\n"
         "if(id==='admin'){_adminLoadScans();_cdnMonRefreshStatus();_cdnMonLoadScans();_cdnMonLoadPurged();_tidLoad()}\n"
         "if(id==='settings')_loadPriceSettings();\n"
