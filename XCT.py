@@ -4591,7 +4591,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<span class="cnt" id="devs-total" style="font-size:13px;color:#888"></span>\n'
         '</div>\n'
         '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">\n'
-        '<input type="text" id="devs-search" placeholder="Search developers..." class="search" onkeyup="_devsPage=0;_devsFilter()" style="width:200px">\n'
+        '<input type="text" id="devs-search" placeholder="Search developers..." class="search" onkeyup="_devsPage=0;_devsFilter()" autocomplete="off" style="width:200px">\n'
         '<select id="devs-sort" class="styled-select" onchange="_devsPage=0;_devsFilter()">\n'
         '<option value="games">Games (High-Low)</option><option value="gamesAsc">Games (Low-High)</option>\n'
         '<option value="name">Name (A-Z)</option><option value="nameDesc">Name (Z-A)</option>\n'
@@ -4613,7 +4613,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<span class="cnt" id="pubs-total" style="font-size:13px;color:#888"></span>\n'
         '</div>\n'
         '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">\n'
-        '<input type="text" id="pubs-search" placeholder="Search publishers..." class="search" onkeyup="_pubsPage=0;_pubsFilter()" style="width:200px">\n'
+        '<input type="text" id="pubs-search" placeholder="Search publishers..." class="search" onkeyup="_pubsPage=0;_pubsFilter()" autocomplete="off" style="width:200px">\n'
         '<select id="pubs-sort" class="styled-select" onchange="_pubsPage=0;_pubsFilter()">\n'
         '<option value="games">Games (High-Low)</option><option value="gamesAsc">Games (Low-High)</option>\n'
         '<option value="name">Name (A-Z)</option><option value="nameDesc">Name (Z-A)</option>\n'
@@ -9328,10 +9328,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Admin: renders an add-account row (search + label dropdown + URL input + Save)
         "function _xAddRow(name,type){\n"
         "  var s='<div class=\"x-add-row\" style=\"display:flex;gap:3px;align-items:center;margin-top:2px\" data-ent-name=\"'+_esc(name)+'\" data-ent-type=\"'+type+'\">';\n"
-        "  s+='<button onclick=\"event.stopPropagation();window.open(\\'https://x.com/search?q='+encodeURIComponent(name)+'&src=typed_query&f=user\\',\\'_blank\\')\" style=\"background:#1d9bf0;color:#fff;border:none;border-radius:3px;padding:1px 4px;font-size:9px;cursor:pointer\" title=\"Search X\">+</button>';\n"
+        "  s+='<button type=\"button\" onclick=\"event.stopPropagation();event.preventDefault();window.open(\\'https://x.com/search?q='+encodeURIComponent(name)+'&src=typed_query&f=user\\',\\'_blank\\')\" style=\"background:#1d9bf0;color:#fff;border:none;border-radius:3px;padding:1px 4px;font-size:9px;cursor:pointer\" title=\"Search X\">+</button>';\n"
         "  s+='<select onchange=\"_xCustomLabel(this)\" onclick=\"event.stopPropagation()\" style=\"width:52px;padding:1px;font-size:9px;background:#111;color:#ccc;border:1px solid #333;border-radius:3px\">'+_xLabelOpts()+'</select>';\n"
-        "  s+='<input type=\"text\" placeholder=\"x.com/...\" onclick=\"event.stopPropagation()\" style=\"width:68px;padding:1px 3px;font-size:9px;background:#111;color:#ccc;border:1px solid #333;border-radius:3px\">';\n"
-        "  s+='<button onclick=\"event.stopPropagation();_entSaveXAcct(this)\" style=\"background:#333;color:#ccc;border:1px solid #555;border-radius:3px;padding:1px 4px;font-size:9px;cursor:pointer\">Save</button>';\n"
+        "  s+='<input type=\"text\" placeholder=\"x.com/...\" onclick=\"event.stopPropagation()\" autocomplete=\"off\" style=\"width:68px;padding:1px 3px;font-size:9px;background:#111;color:#ccc;border:1px solid #333;border-radius:3px\">';\n"
+        "  s+='<button type=\"button\" onclick=\"event.stopPropagation();event.preventDefault();_entSaveXAcct(this)\" style=\"background:#333;color:#ccc;border:1px solid #555;border-radius:3px;padding:1px 4px;font-size:9px;cursor:pointer\">Save</button>';\n"
         "  s+='</div>';\n"
         "  return s;\n"
         "}\n"
