@@ -2670,6 +2670,8 @@ _ENTITY_SORT_MAP = {
     "metacriticAsc": "avg_metacritic ASC NULLS LAST",
     "newest": "newest_release DESC NULLS LAST",
     "oldest": "oldest_release ASC NULLS LAST",
+    "xFollowers": "x_followers DESC NULLS LAST",
+    "xFollowersAsc": "x_followers ASC NULLS LAST",
 }
 
 
@@ -2714,9 +2716,11 @@ def _entity_listing(entity_type):
                        AND EXTRACT(YEAR FROM p.release_date) < 2100) AS newest_release,
                    COUNT(*) FILTER (WHERE p.xcloud_streamable) AS xcloud_count,
                    COUNT(*) FILTER (WHERE p.has_achievements) AS ach_count,
-                   ARRAY_AGG(DISTINCT unnest_plat) FILTER (WHERE unnest_plat IS NOT NULL) AS all_platforms
+                   ARRAY_AGG(DISTINCT unnest_plat) FILTER (WHERE unnest_plat IS NOT NULL) AS all_platforms,
+                   MAX(ep.x_followers) AS x_followers
             FROM marketplace_products p
             LEFT JOIN LATERAL UNNEST(p.platforms) AS unnest_plat ON TRUE
+            LEFT JOIN {profile_table} ep ON ep.name = p.{col}
             WHERE {where_sql}
             GROUP BY p.{col}
             ORDER BY {sort_sql}

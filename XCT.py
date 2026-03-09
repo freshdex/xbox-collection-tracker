@@ -4599,6 +4599,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<option value="rating">Store Rating (High-Low)</option><option value="ratingAsc">Store Rating (Low-High)</option>\n'
         '<option value="metacritic">Metacritic (High-Low)</option><option value="metacriticAsc">Metacritic (Low-High)</option>\n'
         '<option value="newest">Newest Release</option><option value="oldest">Oldest Release</option>\n'
+        '<option value="xFollowers">X Followers (High-Low)</option><option value="xFollowersAsc">X Followers (Low-High)</option>\n'
         '</select>\n'
         '</div>\n'
         '<div id="devs-list" class="entity-list"></div>\n'
@@ -4620,6 +4621,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<option value="rating">Store Rating (High-Low)</option><option value="ratingAsc">Store Rating (Low-High)</option>\n'
         '<option value="metacritic">Metacritic (High-Low)</option><option value="metacriticAsc">Metacritic (Low-High)</option>\n'
         '<option value="newest">Newest Release</option><option value="oldest">Oldest Release</option>\n'
+        '<option value="xFollowers">X Followers (High-Low)</option><option value="xFollowersAsc">X Followers (Low-High)</option>\n'
         '</select>\n'
         '</div>\n'
         '<div id="pubs-list" class="entity-list"></div>\n'
@@ -9210,6 +9212,13 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "var _ENT_PAGE=50;\n"
 
         "function _isAdmin(){return(localStorage.getItem('xct_username')||'').toLowerCase()==='freshdex'}\n"
+        "function _entSortCol(col,type){\n"
+        "  var sel=document.getElementById((type==='developer'?'devs':'pubs')+'-sort');\n"
+        "  var pairs={games:['games','gamesAsc'],name:['name','nameDesc'],products:['products','productsAsc'],rating:['rating','ratingAsc'],metacritic:['metacritic','metacriticAsc'],newest:['newest','oldest'],xFollowers:['xFollowers','xFollowersAsc']};\n"
+        "  var p=pairs[col]||[col,col+'Asc'];\n"
+        "  sel.value=sel.value===p[0]?p[1]:p[0];\n"
+        "  if(type==='developer'){_devsPage=0;_devsFilter()}else{_pubsPage=0;_pubsFilter()}\n"
+        "}\n"
         "function _entFetch(type,listEl,pagerEl,totalEl,page,sort,q){\n"
         "  listEl.innerHTML='<div style=\"color:#888;padding:20px\">Loading...</div>';\n"
         "  var url='/api/v1/store/'+type+'s?page='+page+'&per_page='+_ENT_PAGE+'&sort='+sort;\n"
@@ -9223,14 +9232,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "    if(tabCnt)tabCnt.textContent=total;\n"
         "    var h='<div class=\"ent-head\">"
         "<div></div>"
-        "<div data-sort>Name</div>"
-        "<div data-sort>X / Twitter</div>"
-        "<div data-sort style=\"text-align:center\">Games</div>"
-        "<div data-sort style=\"text-align:center\">DLC</div>"
-        "<div data-sort style=\"text-align:center\">Total</div>"
-        "<div data-sort style=\"text-align:center\">Rating</div>"
-        "<div data-sort style=\"text-align:center\">Metacritic</div>"
-        "<div data-sort style=\"text-align:center\">Newest</div>"
+        "<div data-sort onclick=\"_entSortCol(\\'name\\',\\''+type+'\\')\" style=\"cursor:pointer\">Name</div>"
+        "<div data-sort onclick=\"_entSortCol(\\'xFollowers\\',\\''+type+'\\')\" style=\"cursor:pointer\">X / Twitter</div>"
+        "<div data-sort onclick=\"_entSortCol(\\'games\\',\\''+type+'\\')\" style=\"cursor:pointer;text-align:center\">Games</div>"
+        "<div data-sort onclick=\"_entSortCol(\\'games\\',\\''+type+'\\')\" style=\"cursor:pointer;text-align:center\">DLC</div>"
+        "<div data-sort onclick=\"_entSortCol(\\'products\\',\\''+type+'\\')\" style=\"cursor:pointer;text-align:center\">Total</div>"
+        "<div data-sort onclick=\"_entSortCol(\\'rating\\',\\''+type+'\\')\" style=\"cursor:pointer;text-align:center\">Rating</div>"
+        "<div data-sort onclick=\"_entSortCol(\\'metacritic\\',\\''+type+'\\')\" style=\"cursor:pointer;text-align:center\">Metacritic</div>"
+        "<div data-sort onclick=\"_entSortCol(\\'newest\\',\\''+type+'\\')\" style=\"cursor:pointer;text-align:center\">Newest</div>"
         "<div>Platforms</div>"
         "</div>';\n"
         "    entities.forEach(function(e){\n"
