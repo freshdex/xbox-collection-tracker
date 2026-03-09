@@ -8,6 +8,8 @@ var _xctUser=localStorage.getItem('xct_username')||'';
 var _xctXboxGt=localStorage.getItem('xct_gamertag')||'';
 var _xctXuid=localStorage.getItem('xct_xuid')||'';
 var _xctAvatarUrl=localStorage.getItem('xct_avatar_url')||'';
+var _phLoaded=false,_purchLoaded=false;
+var _phCount=0,_purchCount=0;
 
 async function _fetchJSON(url,opts){
   var r=await fetch(url,opts||{});
@@ -21,10 +23,13 @@ async function _loadCollection(){
       headers:{'Authorization':'Bearer '+_xctApiKey}});
     if(!data.uploaded)return false;
     LIB.length=0;LIB.push.apply(LIB,data.library||[]);
-    PH.length=0;PH.push.apply(PH,data.playHistory||[]);
     HISTORY.length=0;HISTORY.push.apply(HISTORY,data.history||[]);
     ACCOUNTS.length=0;ACCOUNTS.push.apply(ACCOUNTS,data.accounts||[]);
-    if(typeof PURCHASES!=='undefined'){PURCHASES.length=0;PURCHASES.push.apply(PURCHASES,data.purchases||[])}
+    _phCount=data.phCount||0;
+    _purchCount=data.purchasesCount||0;
+    _phLoaded=false;_purchLoaded=false;
+    PH.length=0;
+    if(typeof PURCHASES!=='undefined')PURCHASES.length=0;
     _xctUser=data.username||_xctUser;
     if(data.settings&&Array.isArray(data.settings.myRegions)){
       _myRegions=data.settings.myRegions;
@@ -35,12 +40,43 @@ async function _loadCollection(){
     var ownedPids=new Set(LIB.map(function(x){return x.productId}));
     if(MKT.length)MKT.forEach(function(x){x.owned=ownedPids.has(x.productId)});
     if(GP.length)GP.forEach(function(x){x.owned=ownedPids.has(x.productId)});
-    console.log('[auth] Collection loaded:',LIB.length,'items');
+    console.log('[auth] Collection loaded:',LIB.length,'items (PH:',_phCount,'deferred, Purch:',_purchCount,'deferred)');
     return true
   }catch(e){
     console.error('[auth] _loadCollection error:',e);
     if(String(e).includes('401')){localStorage.removeItem('xct_api_key');_xctApiKey='';window._xctApiKey=''}
     return false}}
+
+async function _lazyLoadPH(){
+  if(_phLoaded||!_xctApiKey)return;
+  try{
+    var data=await _fetchJSON(_API+'/api/v1/collection/playhistory',{
+      headers:{'Authorization':'Bearer '+_xctApiKey}});
+    PH.length=0;PH.push.apply(PH,data.playHistory||[]);
+    _phLoaded=true;
+    console.log('[auth] Play history loaded:',PH.length,'items');
+    try{filterPH()}catch(e){console.error('[auth] filterPH error:',e)}
+    document.getElementById('tab-ph-cnt').textContent=PH.length;
+  }catch(e){console.error('[auth] _lazyLoadPH error:',e)}}
+
+async function _lazyLoadPurchases(){
+  if(_purchLoaded||!_xctApiKey)return;
+  try{
+    var data=await _fetchJSON(_API+'/api/v1/collection/purchases',{
+      headers:{'Authorization':'Bearer '+_xctApiKey}});
+    if(typeof PURCHASES!=='undefined'){PURCHASES.length=0;PURCHASES.push.apply(PURCHASES,data.purchases||[])}
+    _purchLoaded=true;
+    console.log('[auth] Purchases loaded:',PURCHASES.length,'items');
+    try{if(typeof filterPurchases==='function')filterPurchases()}catch(e){console.error('[auth] filterPurchases error:',e)}
+    document.getElementById('tab-purch-cnt').textContent=PURCHASES.length;
+  }catch(e){console.error('[auth] _lazyLoadPurchases error:',e)}}
+
+// Hook into tab switching to lazy-load data
+var _origSwitchTab=window.switchTab;
+window.switchTab=function(id,el){
+  if(id==='playhistory'&&!_phLoaded&&_xctApiKey)_lazyLoadPH();
+  if(id==='purchases'&&!_purchLoaded&&_xctApiKey)_lazyLoadPurchases();
+  if(_origSwitchTab)return _origSwitchTab(id,el)}
 
 function _showLoading(){
   var o=document.getElementById('loading-overlay');
@@ -100,13 +136,15 @@ function _xctLogout(){
   localStorage.removeItem('xct_xuid');
   localStorage.removeItem('xct_avatar_url');
   _xctApiKey='';window._xctApiKey='';_xctUser='';_xctXboxGt='';_xctXuid='';_xctAvatarUrl='';
+  _phLoaded=false;_purchLoaded=false;_phCount=0;_purchCount=0;
   LIB.length=0;PH.length=0;HISTORY.length=0;ACCOUNTS.length=0;
   if(typeof PURCHASES!=='undefined')PURCHASES.length=0;
   if(MKT.length)MKT.forEach(function(x){delete x.owned});
   GP.forEach(function(x){delete x.owned});
-  try{filterLib();filterPH();renderHistory();filterMKT();filterGP();
+  try{filterLib();filterPH();filterMKT();filterGP();
     if(typeof filterPurchases==='function')filterPurchases()}catch(e){}
   document.getElementById('tab-purch').style.display='none';
+  document.getElementById('tab-ph').style.display='none';
   _updateAuthUI()}
 
 function _updateAuthUI(){
@@ -205,19 +243,21 @@ window._xctUploadFile=async function(input){
     uploadBtn.disabled=false;uploadBtn.textContent='Upload'}
   input.value=''}
 
+function _showTabCounts(){
+  if(LIB.length){document.getElementById('tab-lib-cnt').textContent=LIB.length}
+  if(_phCount){document.getElementById('tab-ph').style.display='';document.getElementById('tab-ph-cnt').textContent=_phCount}
+  if(ACCOUNTS.length){document.getElementById('tab-acct').style.display='';document.getElementById('tab-acct-cnt').textContent=ACCOUNTS.length}
+  if(_purchCount){document.getElementById('tab-purch').style.display='';document.getElementById('tab-purch-cnt').textContent=_purchCount}
+}
+
 async function _xctReloadCollection(){
   _showLoading();
   var ok=await _loadCollection();
   if(ok){
     try{initDropdowns();filterLib()}catch(e){console.error('[auth] render error:',e)}
-    if(LIB.length){document.getElementById('tab-lib-cnt').textContent=LIB.length}
-    if(PH.length){document.getElementById('tab-ph').style.display='';document.getElementById('tab-ph-cnt').textContent=PH.length}
-    if(HISTORY.length){document.getElementById('tab-hist').style.display='';document.getElementById('tab-hist-cnt').textContent=HISTORY.length+' scans'}
-    if(ACCOUNTS.length){document.getElementById('tab-acct').style.display='';document.getElementById('tab-acct-cnt').textContent=ACCOUNTS.length}
-    if(typeof PURCHASES!=='undefined'&&PURCHASES.length){document.getElementById('tab-purch').style.display='';document.getElementById('tab-purch-cnt').textContent=PURCHASES.length}
+    _showTabCounts();
     setTimeout(function(){
-      try{filterPH();renderHistory();filterMKT();filterGP();
-        if(typeof filterPurchases==='function')filterPurchases();
+      try{filterMKT();filterGP();
         if(typeof renderAccounts==='function')renderAccounts()}catch(e){console.error('[auth] deferred render error:',e)}
       if(typeof _achFetch==='function'&&!_achLoaded)_achFetch();
     },50);
@@ -230,18 +270,13 @@ _xctHandleOAuthReturn();
 if(_xctApiKey){
   _showLoading();
   _loadCollection().then(function(ok){
-    console.log('[auth] initial load result:',ok,'LIB:',LIB.length,'PURCHASES:',typeof PURCHASES!=='undefined'?PURCHASES.length:0);
+    console.log('[auth] initial load result:',ok,'LIB:',LIB.length);
     if(ok){
       try{initDropdowns();filterLib()}catch(e){console.error('[auth] init render error:',e)}
-      if(LIB.length){document.getElementById('tab-lib-cnt').textContent=LIB.length}
-      if(PH.length){document.getElementById('tab-ph').style.display='';document.getElementById('tab-ph-cnt').textContent=PH.length}
-      if(HISTORY.length){document.getElementById('tab-hist').style.display='';document.getElementById('tab-hist-cnt').textContent=HISTORY.length+' scans'}
-      if(ACCOUNTS.length){document.getElementById('tab-acct').style.display='';document.getElementById('tab-acct-cnt').textContent=ACCOUNTS.length}
-      if(typeof PURCHASES!=='undefined'&&PURCHASES.length){document.getElementById('tab-purch').style.display='';document.getElementById('tab-purch-cnt').textContent=PURCHASES.length}
+      _showTabCounts();
       // Defer non-visible tabs to avoid blocking the UI
       setTimeout(function(){
-        try{filterPH();renderHistory();filterMKT();filterGP();
-          if(typeof filterPurchases==='function')filterPurchases();
+        try{filterMKT();filterGP();
           if(typeof renderAccounts==='function')renderAccounts()}catch(e){console.error('[auth] deferred render error:',e)}
         if(typeof _achFetch==='function'&&!_achLoaded)_achFetch();
       },50);
