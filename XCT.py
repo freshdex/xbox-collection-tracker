@@ -4591,7 +4591,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<span class="cnt" id="devs-total" style="font-size:13px;color:#888"></span>\n'
         '</div>\n'
         '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">\n'
-        '<input type="text" id="devs-search" placeholder="Search developers..." class="search" onkeyup="_devsPage=0;_devsFilter()" autocomplete="off" style="width:200px">\n'
+        '<input type="search" id="devs-search" name="xct_dev_filter_nofill" placeholder="Search developers..." class="search" onkeyup="_devsPage=0;_devsFilter()" autocomplete="one-time-code" data-lpignore="true" data-1p-ignore style="width:200px">\n'
         '<select id="devs-sort" class="styled-select" onchange="_devsPage=0;_devsFilter()">\n'
         '<option value="games">Games (High-Low)</option><option value="gamesAsc">Games (Low-High)</option>\n'
         '<option value="name">Name (A-Z)</option><option value="nameDesc">Name (Z-A)</option>\n'
@@ -4613,7 +4613,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<span class="cnt" id="pubs-total" style="font-size:13px;color:#888"></span>\n'
         '</div>\n'
         '<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">\n'
-        '<input type="text" id="pubs-search" placeholder="Search publishers..." class="search" onkeyup="_pubsPage=0;_pubsFilter()" autocomplete="off" style="width:200px">\n'
+        '<input type="search" id="pubs-search" name="xct_pub_filter_nofill" placeholder="Search publishers..." class="search" onkeyup="_pubsPage=0;_pubsFilter()" autocomplete="one-time-code" data-lpignore="true" data-1p-ignore style="width:200px">\n'
         '<select id="pubs-sort" class="styled-select" onchange="_pubsPage=0;_pubsFilter()">\n'
         '<option value="games">Games (High-Low)</option><option value="gamesAsc">Games (Low-High)</option>\n'
         '<option value="name">Name (A-Z)</option><option value="nameDesc">Name (Z-A)</option>\n'
@@ -9298,13 +9298,19 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "  h+='</div>';el.innerHTML=h;\n"
         "}\n"
 
+        "function _guardSearch(el){\n"
+        "  var v=el.value.trim();\n"
+        "  var u=(localStorage.getItem('xct_username')||'').trim();\n"
+        "  if(u&&v.toLowerCase()===u.toLowerCase()){el.value='';return ''}\n"
+        "  return v;\n"
+        "}\n"
         "function _devsFilter(){\n"
-        "  var q=document.getElementById('devs-search').value.trim();\n"
+        "  var q=_guardSearch(document.getElementById('devs-search'));\n"
         "  var sort=document.getElementById('devs-sort').value;\n"
         "  _entFetch('developer',document.getElementById('devs-list'),document.getElementById('devs-pager'),document.getElementById('devs-total'),_devsPage,sort,q);\n"
         "}\n"
         "function _pubsFilter(){\n"
-        "  var q=document.getElementById('pubs-search').value.trim();\n"
+        "  var q=_guardSearch(document.getElementById('pubs-search'));\n"
         "  var sort=document.getElementById('pubs-sort').value;\n"
         "  _entFetch('publisher',document.getElementById('pubs-list'),document.getElementById('pubs-pager'),document.getElementById('pubs-total'),_pubsPage,sort,q);\n"
         "}\n"
@@ -9330,7 +9336,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "  var s='<div class=\"x-add-row\" style=\"display:flex;gap:3px;align-items:center;margin-top:2px\" data-ent-name=\"'+_esc(name)+'\" data-ent-type=\"'+type+'\">';\n"
         "  s+='<button type=\"button\" onclick=\"event.stopPropagation();event.preventDefault();window.open(\\'https://x.com/search?q='+encodeURIComponent(name)+'&src=typed_query&f=user\\',\\'_blank\\')\" style=\"background:#1d9bf0;color:#fff;border:none;border-radius:3px;padding:2px 6px;font-size:12px;cursor:pointer\" title=\"Search X\">+</button>';\n"
         "  s+='<select onchange=\"_xCustomLabel(this)\" onclick=\"event.stopPropagation()\" style=\"padding:2px 4px;font-size:12px;background:#111;color:#ccc;border:1px solid #333;border-radius:3px\">'+_xLabelOpts()+'</select>';\n"
-        "  s+='<input type=\"text\" placeholder=\"x.com/...\" onclick=\"event.stopPropagation()\" autocomplete=\"off\" style=\"width:90px;padding:2px 4px;font-size:12px;background:#111;color:#ccc;border:1px solid #333;border-radius:3px\">';\n"
+        "  s+='<input type=\"text\" placeholder=\"x.com/...\" onclick=\"event.stopPropagation()\" autocomplete=\"one-time-code\" data-lpignore=\"true\" data-1p-ignore style=\"width:90px;padding:2px 4px;font-size:12px;background:#111;color:#ccc;border:1px solid #333;border-radius:3px\">';\n"
         "  s+='<button type=\"button\" onclick=\"event.stopPropagation();event.preventDefault();_entSaveXAcct(this)\" style=\"background:#333;color:#ccc;border:1px solid #555;border-radius:3px;padding:2px 6px;font-size:12px;cursor:pointer\">Save</button>';\n"
         "  s+='</div>';\n"
         "  return s;\n"
