@@ -147,6 +147,31 @@ def init_db():
         conn.commit()
     except Exception:
         conn.rollback()
+    # X (Twitter) profile columns on developer/publisher profiles (migration)
+    for _tbl in ("developer_profiles", "publisher_profiles"):
+        try:
+            cur = conn.cursor()
+            cur.execute(f"""
+                ALTER TABLE {_tbl}
+                    ADD COLUMN IF NOT EXISTS x_id TEXT DEFAULT '',
+                    ADD COLUMN IF NOT EXISTS x_handle TEXT DEFAULT '',
+                    ADD COLUMN IF NOT EXISTS x_name TEXT DEFAULT '',
+                    ADD COLUMN IF NOT EXISTS x_bio TEXT DEFAULT '',
+                    ADD COLUMN IF NOT EXISTS x_followers INTEGER DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS x_following INTEGER DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS x_tweet_count INTEGER DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS x_listed_count INTEGER DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS x_profile_image TEXT DEFAULT '',
+                    ADD COLUMN IF NOT EXISTS x_banner_image TEXT DEFAULT '',
+                    ADD COLUMN IF NOT EXISTS x_location TEXT DEFAULT '',
+                    ADD COLUMN IF NOT EXISTS x_url TEXT DEFAULT '',
+                    ADD COLUMN IF NOT EXISTS x_verified BOOLEAN DEFAULT FALSE,
+                    ADD COLUMN IF NOT EXISTS x_created_at TEXT DEFAULT '',
+                    ADD COLUMN IF NOT EXISTS x_updated_at TIMESTAMPTZ
+            """)
+            conn.commit()
+        except Exception:
+            conn.rollback()
     # OAuth state table (needed for multi-worker gunicorn)
     try:
         cur = conn.cursor()
@@ -2764,6 +2789,11 @@ def _entity_listing(entity_type):
                 "twitter": prof.get("twitter", "") or "",
                 "youtube": prof.get("youtube", "") or "",
                 "discord": prof.get("discord", "") or "",
+                "xHandle": prof.get("x_handle", "") or "",
+                "xFollowers": prof.get("x_followers") or 0,
+                "xProfileImage": prof.get("x_profile_image", "") or "",
+                "xVerified": bool(prof.get("x_verified")),
+                "xBio": prof.get("x_bio", "") or "",
                 "repImage": rep_images.get(name, ""),
             })
 
@@ -2869,6 +2899,19 @@ def _entity_detail(entity_type, name):
                 "description": prof.get("description", "") or "",
                 "country": prof.get("country", "") or "",
                 "foundedYear": prof.get("founded_year"),
+                "xHandle": prof.get("x_handle", "") or "",
+                "xName": prof.get("x_name", "") or "",
+                "xBio": prof.get("x_bio", "") or "",
+                "xFollowers": prof.get("x_followers") or 0,
+                "xFollowing": prof.get("x_following") or 0,
+                "xTweetCount": prof.get("x_tweet_count") or 0,
+                "xListedCount": prof.get("x_listed_count") or 0,
+                "xProfileImage": prof.get("x_profile_image", "") or "",
+                "xBannerImage": prof.get("x_banner_image", "") or "",
+                "xLocation": prof.get("x_location", "") or "",
+                "xUrl": prof.get("x_url", "") or "",
+                "xVerified": bool(prof.get("x_verified")),
+                "xCreatedAt": prof.get("x_created_at", "") or "",
             },
             "products": products,
             "gameCount": sum(1 for p in products if p["productKind"] == "Game"),
@@ -6192,6 +6235,136 @@ def admin_achievements_refresh(conn=None, cur=None, contributor=None, api_key=No
     return jsonify(ok=True, message=f"Refreshing achievements for {len(users)} users in background", count=len(users))
 
 
+def _x_lookup_user(username):
+    """Look up a single X/Twitter user by username. Returns profile dict or None."""
+    if not X_BEARER_TOKEN:
+        return None
+    import urllib.parse
+    token = urllib.parse.unquote(X_BEARER_TOKEN)
+    resp = _requests_lib.get(
+        f"https://api.x.com/2/users/by/username/{username}",
+        headers={"Authorization": f"Bearer {token}"},
+        params={
+            "user.fields": "id,name,username,description,public_metrics,profile_image_url,"
+                           "verified,verified_type,created_at,location,url,entities,"
+                           "protected,profile_banner_url"
+        },
+        timeout=15,
+    )
+    if resp.status_code == 429:
+        log.warning("[x-api] Rate limited (429)")
+        return {"error": "rate_limited", "reset": resp.headers.get("x-rate-limit-reset", "")}
+    if resp.status_code != 200:
+        log.warning("[x-api] HTTP %s for @%s: %s", resp.status_code, username, resp.text[:200])
+        return None
+    data = resp.json().get("data")
+    if not data:
+        return None
+    pm = data.get("public_metrics", {})
+    # Resolve t.co URL to real URL
+    expanded_url = ""
+    if data.get("entities") and data["entities"].get("url"):
+        urls = data["entities"]["url"].get("urls", [])
+        if urls:
+            expanded_url = urls[0].get("expanded_url", "") or urls[0].get("display_url", "")
+    return {
+        "x_id": data.get("id", ""),
+        "x_handle": data.get("username", ""),
+        "x_name": data.get("name", ""),
+        "x_bio": data.get("description", ""),
+        "x_followers": pm.get("followers_count", 0),
+        "x_following": pm.get("following_count", 0),
+        "x_tweet_count": pm.get("tweet_count", 0),
+        "x_listed_count": pm.get("listed_count", 0),
+        "x_profile_image": (data.get("profile_image_url") or "").replace("_normal.", "_400x400."),
+        "x_banner_image": data.get("profile_banner_url", ""),
+        "x_location": data.get("location", ""),
+        "x_url": expanded_url or data.get("url", ""),
+        "x_verified": bool(data.get("verified")),
+        "x_created_at": data.get("created_at", ""),
+    }
+
+
+@app.route("/api/v1/admin/entity-x-profile", methods=["PUT"])
+@require_auth
+def admin_entity_x_profile(conn=None, cur=None, contributor=None, api_key=None):
+    """Save X handle for a developer/publisher, fetch profile from X API. Admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+
+    data = request.get_json(force=True)
+    entity_type = data.get("entityType", "")  # "developer" or "publisher"
+    entity_name = data.get("name", "").strip()
+    x_url = data.get("xUrl", "").strip()
+
+    if entity_type not in ("developer", "publisher"):
+        return jsonify(error="Invalid entityType"), 400
+    if not entity_name:
+        return jsonify(error="name required"), 400
+    if not x_url:
+        return jsonify(error="xUrl required"), 400
+
+    # Extract handle from URL: https://x.com/handle or https://twitter.com/handle or just @handle
+    import re
+    m = re.search(r'(?:x\.com|twitter\.com)/([A-Za-z0-9_]+)', x_url)
+    if m:
+        handle = m.group(1)
+    elif x_url.startswith("@"):
+        handle = x_url[1:]
+    else:
+        handle = x_url.strip().split("/")[-1].lstrip("@")
+
+    if not handle or len(handle) > 50:
+        return jsonify(error=f"Could not parse handle from: {x_url}"), 400
+
+    profile_table = "developer_profiles" if entity_type == "developer" else "publisher_profiles"
+
+    # Look up from X API
+    x_data = _x_lookup_user(handle)
+    if not x_data:
+        return jsonify(error=f"X user @{handle} not found"), 404
+    if x_data.get("error") == "rate_limited":
+        return jsonify(error="X API rate limited. Try again later.",
+                       reset=x_data.get("reset")), 429
+
+    try:
+        cur.execute(f"""
+            UPDATE {profile_table} SET
+                twitter = %(handle)s,
+                x_id = %(x_id)s, x_handle = %(x_handle)s, x_name = %(x_name)s,
+                x_bio = %(x_bio)s, x_followers = %(x_followers)s,
+                x_following = %(x_following)s, x_tweet_count = %(x_tweet_count)s,
+                x_listed_count = %(x_listed_count)s,
+                x_profile_image = %(x_profile_image)s,
+                x_banner_image = %(x_banner_image)s,
+                x_location = %(x_location)s, x_url = %(x_url)s,
+                x_verified = %(x_verified)s, x_created_at = %(x_created_at)s,
+                x_updated_at = NOW(),
+                updated_at = NOW()
+            WHERE name = %(name)s
+        """, {**x_data, "handle": handle, "name": entity_name})
+        if cur.rowcount == 0:
+            # Profile row doesn't exist yet — insert it
+            cur.execute(f"""
+                INSERT INTO {profile_table} (name, twitter, x_id, x_handle, x_name, x_bio,
+                    x_followers, x_following, x_tweet_count, x_listed_count,
+                    x_profile_image, x_banner_image, x_location, x_url,
+                    x_verified, x_created_at, x_updated_at, updated_at)
+                VALUES (%(name)s, %(handle)s, %(x_id)s, %(x_handle)s, %(x_name)s, %(x_bio)s,
+                    %(x_followers)s, %(x_following)s, %(x_tweet_count)s, %(x_listed_count)s,
+                    %(x_profile_image)s, %(x_banner_image)s, %(x_location)s, %(x_url)s,
+                    %(x_verified)s, %(x_created_at)s, NOW(), NOW())
+            """, {**x_data, "handle": handle, "name": entity_name})
+        conn.commit()
+        log.info("[x-profile] Saved @%s for %s '%s' (%d followers)",
+                 handle, entity_type, entity_name, x_data.get("x_followers", 0))
+        return jsonify(ok=True, profile=x_data)
+    except Exception as e:
+        conn.rollback()
+        log.exception("[x-profile] DB error")
+        return jsonify(error=str(e)), 500
+
+
 @app.route("/api/v1/admin/tag-xbox360", methods=["POST"])
 @require_auth
 def admin_tag_xbox360(conn=None, cur=None, contributor=None, api_key=None):
@@ -6228,6 +6401,7 @@ def admin_tag_xbox360(conn=None, cur=None, contributor=None, api_key=None):
 _rawg_active = False
 _rawg_progress = {"status": "idle", "matched": 0, "total": 0, "page": 0}
 RAWG_API_KEY = os.environ.get("RAWG_API_KEY", "")
+X_BEARER_TOKEN = os.environ.get("X_BEARER_TOKEN", "")
 
 
 def _rawg_normalize(name):
@@ -6415,6 +6589,7 @@ def add_cors_headers(response):
 @app.route("/api/v1/admin/cdn-monitor/stop", methods=["OPTIONS"])
 @app.route("/api/v1/admin/achievements-refresh", methods=["OPTIONS"])
 @app.route("/api/v1/admin/tag-xbox360", methods=["OPTIONS"])
+@app.route("/api/v1/admin/entity-x-profile", methods=["OPTIONS"])
 def cors_preflight():
     return Response(status=204)
 
