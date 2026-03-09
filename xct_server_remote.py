@@ -35,6 +35,7 @@ from functools import wraps
 
 import click
 import psycopg2
+import requests as _requests_lib
 import psycopg2.extras
 from cryptography.fernet import Fernet
 from flask import Flask, Response, jsonify, redirect, request
@@ -1317,6 +1318,8 @@ _STORE_SORT_MAP = {
     "bestDesc":     ("p.best_gc_usd DESC NULLS LAST, p.title ASC", False),
     "ratingDesc":   ("p.average_rating DESC, p.title ASC", False),
     "ratingCntDesc":("p.rating_count DESC, p.title ASC", False),
+    "mcDesc":       ("p.metacritic_score DESC NULLS LAST, p.title ASC", False),
+    "mcAsc":        ("p.metacritic_score ASC NULLS LAST, p.title ASC", False),
     "platCntDesc":  ("array_length(p.platforms, 1) DESC NULLS LAST, p.title ASC", False),
     "pub":          ("p.publisher ASC, p.title ASC", False),
     "pubDesc":      ("p.publisher DESC, p.title ASC", False),
@@ -1610,6 +1613,7 @@ def store_products():
         noplayed = request.args.get("noplayed", "")
         noach = request.args.get("noach", "")
         phys_raw = request.args.get("phys", "")
+        mc_raw = request.args.get("mc", "")
 
         # Sort
         sort_sql, needs_us_price = _STORE_SORT_MAP.get(sort_key, _STORE_SORT_MAP["relDesc"])
@@ -2009,6 +2013,26 @@ def store_products():
                         "WHERE rpr.product_id = p.product_id AND rpr.market = ANY(%(notmy_regions)s))")
                     params["notmy_regions"] = user_regions
 
+        # Metacritic score filter
+        if mc_raw:
+            mc_parts = [x.strip() for x in mc_raw.split(",") if x.strip()]
+            mc_conds = []
+            for mc_val in mc_parts:
+                if mc_val == "mc90":
+                    mc_conds.append("p.metacritic_score >= 90")
+                elif mc_val == "mc75":
+                    mc_conds.append("(p.metacritic_score >= 75 AND p.metacritic_score < 90)")
+                elif mc_val == "mc50":
+                    mc_conds.append("(p.metacritic_score >= 50 AND p.metacritic_score < 75)")
+                elif mc_val == "mcLow":
+                    mc_conds.append("p.metacritic_score < 50")
+                elif mc_val == "mcAny":
+                    mc_conds.append("p.metacritic_score IS NOT NULL")
+                elif mc_val == "mcNone":
+                    mc_conds.append("p.metacritic_score IS NULL")
+            if mc_conds:
+                wheres.append("(" + " OR ".join(mc_conds) + ")")
+
         where_sql = " AND ".join(wheres)
 
         # Build main query
@@ -2029,6 +2053,7 @@ def store_products():
                        p.image_box_art, p.image_tile, p.image_hero,
                        p.average_rating, p.rating_count, p.best_gc_usd,
                        p.short_description, p.capabilities,
+                       p.metacritic_score,
                        pr_us.msrp AS price_usd,
                        CASE WHEN pr_us.sale_price > 0 AND pr_us.sale_price < pr_us.msrp
                             THEN pr_us.sale_price ELSE NULL END AS current_price_usd,
@@ -2075,6 +2100,7 @@ def store_products():
                        p.image_box_art, p.image_tile, p.image_hero,
                        p.average_rating, p.rating_count, p.best_gc_usd,
                        p.short_description, p.capabilities,
+                       p.metacritic_score,
                        pr_us.msrp AS price_usd,
                        CASE WHEN pr_us.sale_price > 0 AND pr_us.sale_price < pr_us.msrp
                             THEN pr_us.sale_price ELSE NULL END AS current_price_usd
@@ -2215,6 +2241,7 @@ def store_products():
                 "onGP": pid in _gp_pids,
                 "_onSale": is_on_sale,
                 "capabilities": r["capabilities"] or [],
+                "metacriticScore": r["metacritic_score"],
             }
             if do_group == "1":
                 item["altCount"] = r.get("alt_count", 0)
@@ -5831,6 +5858,150 @@ def admin_tag_xbox360(conn=None, cur=None, contributor=None, api_key=None):
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     return jsonify(status="ok", message="Xbox 360 TitleHub scan started")
+
+
+# ---------------------------------------------------------------------------
+# RAWG.io Metacritic Score Scraper (background job)
+# ---------------------------------------------------------------------------
+
+_rawg_active = False
+_rawg_progress = {"status": "idle", "matched": 0, "total": 0, "page": 0}
+RAWG_API_KEY = os.environ.get("RAWG_API_KEY", "")
+
+
+def _rawg_normalize(name):
+    """Normalize a game title for fuzzy matching."""
+    import unicodedata
+    name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    name = name.lower()
+    name = re.sub(r'[®™©]', '', name)
+    name = re.sub(r'\s*[\(\[].*?[\)\]]', '', name)
+    name = re.sub(r"[^a-z0-9 ]", "", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    return name
+
+
+def _bg_rawg_scrape():
+    """Background job: fetch Metacritic scores from RAWG.io and update DB."""
+    global _rawg_active, _rawg_progress
+    _rawg_active = True
+    _rawg_progress = {"status": "running", "matched": 0, "total": 0, "page": 0,
+                      "phase": "fetching"}
+
+    try:
+        conn = get_db()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Get all titles from our DB that don't have metacritic scores
+        cur.execute("""
+            SELECT product_id, title FROM marketplace_products
+            WHERE title != product_id AND product_kind = 'Game'
+        """)
+        all_games = {r["product_id"]: r["title"] for r in cur.fetchall()}
+        _rawg_progress["total"] = len(all_games)
+
+        # Build normalized title -> product_id lookup
+        title_lookup = {}
+        for pid, title in all_games.items():
+            norm = _rawg_normalize(title)
+            if norm and norm not in title_lookup:
+                title_lookup[norm] = pid
+
+        # Phase 1: Paginate all Xbox/PC games from RAWG
+        rawg_matches = {}  # product_id -> metacritic_score
+        platform_ids = "1,14,186,4,80"  # Xbox One, 360, Series X|S, PC, OG Xbox
+        url = f"https://api.rawg.io/api/games"
+        params = {
+            "key": RAWG_API_KEY,
+            "platforms": platform_ids,
+            "page_size": 40,
+            "ordering": "-metacritic",
+        }
+        page = 0
+
+        while url and page < 500:  # Safety cap at 500 pages
+            page += 1
+            _rawg_progress["page"] = page
+            _rawg_progress["phase"] = f"fetching page {page}"
+
+            try:
+                resp = _requests_lib.get(url, params=params if page == 1 else None,
+                                        timeout=30)
+                if resp.status_code == 429:
+                    time.sleep(5)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as e:
+                log.warning(f"[rawg] Page {page} failed: {e}")
+                time.sleep(2)
+                continue
+
+            for g in data.get("results", []):
+                mc = g.get("metacritic")
+                if not mc:
+                    continue
+                norm = _rawg_normalize(g.get("name", ""))
+                if norm in title_lookup:
+                    pid = title_lookup[norm]
+                    rawg_matches[pid] = mc
+                    _rawg_progress["matched"] = len(rawg_matches)
+
+            url = data.get("next")
+            if not url:
+                break
+            # next URL already has params
+            params = None
+            time.sleep(0.25)
+
+        # Phase 2: Update DB
+        _rawg_progress["phase"] = "updating database"
+        updated = 0
+        for pid, score in rawg_matches.items():
+            cur.execute(
+                "UPDATE marketplace_products SET metacritic_score = %s "
+                "WHERE product_id = %s AND (metacritic_score IS NULL OR metacritic_score != %s)",
+                (score, pid, score))
+            updated += cur.rowcount
+
+        conn.commit()
+        _rawg_progress = {
+            "status": "done", "matched": len(rawg_matches),
+            "updated": updated, "total": len(all_games), "page": page}
+        log.info(f"[rawg] Done: {len(rawg_matches)} matched, {updated} updated, {page} pages")
+
+    except Exception as e:
+        log.exception("[rawg] Scrape failed")
+        _rawg_progress = {"status": f"error: {e}", "matched": 0, "total": 0, "page": 0}
+    finally:
+        _rawg_active = False
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@app.route("/api/v1/admin/rawg-scrape", methods=["POST"])
+@require_auth
+def admin_rawg_scrape(conn=None, cur=None, contributor=None, api_key=None):
+    """Trigger RAWG Metacritic score scrape. Freshdex admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+    if _rawg_active:
+        return jsonify(error="Scrape already running", progress=_rawg_progress), 409
+    if not RAWG_API_KEY:
+        return jsonify(error="RAWG_API_KEY not set in environment"), 400
+    threading.Thread(target=_bg_rawg_scrape, daemon=True).start()
+    return jsonify(ok=True, message="RAWG scrape started")
+
+
+@app.route("/api/v1/admin/rawg-status", methods=["GET"])
+@require_auth
+def admin_rawg_status(conn=None, cur=None, contributor=None, api_key=None):
+    """Check RAWG scrape progress. Freshdex admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+    return jsonify(active=_rawg_active, progress=_rawg_progress)
 
 
 # ---------------------------------------------------------------------------
