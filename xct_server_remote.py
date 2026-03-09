@@ -167,7 +167,8 @@ def init_db():
                     ADD COLUMN IF NOT EXISTS x_url TEXT DEFAULT '',
                     ADD COLUMN IF NOT EXISTS x_verified BOOLEAN DEFAULT FALSE,
                     ADD COLUMN IF NOT EXISTS x_created_at TEXT DEFAULT '',
-                    ADD COLUMN IF NOT EXISTS x_updated_at TIMESTAMPTZ
+                    ADD COLUMN IF NOT EXISTS x_updated_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS x_list_url TEXT DEFAULT ''
             """)
             conn.commit()
         except Exception:
@@ -2798,6 +2799,7 @@ def _entity_listing(entity_type):
                 "xProfileImage": prof.get("x_profile_image", "") or "",
                 "xVerified": bool(prof.get("x_verified")),
                 "xBio": prof.get("x_bio", "") or "",
+                "xListUrl": prof.get("x_list_url", "") or "",
                 "repImage": rep_images.get(name, ""),
             })
 
@@ -6369,6 +6371,41 @@ def admin_entity_x_profile(conn=None, cur=None, contributor=None, api_key=None):
         return jsonify(error=str(e)), 500
 
 
+@app.route("/api/v1/admin/entity-x-list", methods=["PUT"])
+@require_auth
+def admin_entity_x_list(conn=None, cur=None, contributor=None, api_key=None):
+    """Save X list URL for a developer/publisher. Admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+    data = request.get_json(force=True)
+    entity_type = data.get("entityType", "")
+    entity_name = data.get("name", "").strip()
+    list_url = data.get("listUrl", "").strip()
+    if entity_type not in ("developer", "publisher"):
+        return jsonify(error="Invalid entityType"), 400
+    if not entity_name:
+        return jsonify(error="Missing name"), 400
+    if not list_url:
+        return jsonify(error="Missing listUrl"), 400
+    profile_table = "developer_profiles" if entity_type == "developer" else "publisher_profiles"
+    try:
+        cur.execute(f"""
+            UPDATE {profile_table} SET x_list_url = %(url)s, updated_at = NOW()
+            WHERE name = %(name)s
+        """, {"url": list_url, "name": entity_name})
+        if cur.rowcount == 0:
+            cur.execute(f"""
+                INSERT INTO {profile_table} (name, x_list_url, updated_at)
+                VALUES (%(name)s, %(url)s, NOW())
+            """, {"url": list_url, "name": entity_name})
+        conn.commit()
+        return jsonify(ok=True, listUrl=list_url)
+    except Exception as e:
+        conn.rollback()
+        log.exception("[x-list] DB error")
+        return jsonify(error=str(e)), 500
+
+
 @app.route("/api/v1/admin/tag-xbox360", methods=["POST"])
 @require_auth
 def admin_tag_xbox360(conn=None, cur=None, contributor=None, api_key=None):
@@ -6594,6 +6631,7 @@ def add_cors_headers(response):
 @app.route("/api/v1/admin/achievements-refresh", methods=["OPTIONS"])
 @app.route("/api/v1/admin/tag-xbox360", methods=["OPTIONS"])
 @app.route("/api/v1/admin/entity-x-profile", methods=["OPTIONS"])
+@app.route("/api/v1/admin/entity-x-list", methods=["OPTIONS"])
 def cors_preflight():
     return Response(status=204)
 
