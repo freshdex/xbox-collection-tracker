@@ -202,6 +202,11 @@ def init_db():
                 UNIQUE(entity_type, entity_name, x_handle)
             )
         """)
+        cur.execute("""
+            ALTER TABLE entity_x_accounts
+                ADD COLUMN IF NOT EXISTS is_employee BOOLEAN DEFAULT FALSE,
+                ADD COLUMN IF NOT EXISTS parent_x_handle TEXT DEFAULT ''
+        """)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -2795,10 +2800,11 @@ def _entity_listing(entity_type):
         if entity_names:
             cur.execute("""
                 SELECT entity_name, account_label, x_handle, x_followers,
-                       x_tweet_count, x_created_at, x_profile_image, x_verified, x_bio
+                       x_tweet_count, x_created_at, x_profile_image, x_verified, x_bio,
+                       is_employee, parent_x_handle
                 FROM entity_x_accounts
                 WHERE entity_type = %s AND entity_name = ANY(%s)
-                ORDER BY x_followers DESC
+                ORDER BY is_employee ASC, x_followers DESC
             """, (entity_type, entity_names))
             for xa in cur.fetchall():
                 x_accounts_map.setdefault(xa["entity_name"], []).append({
@@ -2810,6 +2816,8 @@ def _entity_listing(entity_type):
                     "profileImage": xa["x_profile_image"] or "",
                     "verified": bool(xa["x_verified"]),
                     "bio": xa["x_bio"] or "",
+                    "isEmployee": bool(xa.get("is_employee")),
+                    "parentHandle": xa.get("parent_x_handle") or "",
                 })
 
         # Fetch custom labels used so far
@@ -6536,10 +6544,11 @@ def admin_entity_x_account(conn=None, cur=None, contributor=None, api_key=None):
         # Fetch all accounts for this entity to return
         cur.execute("""
             SELECT account_label, x_handle, x_followers, x_tweet_count,
-                   x_created_at, x_profile_image, x_verified, x_bio
+                   x_created_at, x_profile_image, x_verified, x_bio,
+                   is_employee, parent_x_handle
             FROM entity_x_accounts
             WHERE entity_type = %s AND entity_name = %s
-            ORDER BY x_followers DESC
+            ORDER BY is_employee ASC, x_followers DESC
         """, (entity_type, entity_name))
         accounts = [dict(r) for r in cur.fetchall()]
 
@@ -6552,6 +6561,108 @@ def admin_entity_x_account(conn=None, cur=None, contributor=None, api_key=None):
     except Exception as e:
         conn.rollback()
         log.exception("[x-account] DB error")
+        return jsonify(error=str(e)), 500
+
+
+@app.route("/api/v1/admin/entity-x-employee", methods=["PUT"])
+@require_auth
+def admin_entity_x_employee(conn=None, cur=None, contributor=None, api_key=None):
+    """Save an employee X account under a parent company account. Admin only."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
+
+    data = request.get_json(force=True)
+    entity_type = data.get("entityType", "")
+    entity_name = data.get("name", "").strip()
+    parent_handle = data.get("parentXHandle", "").strip()
+    x_url = data.get("xUrl", "").strip()
+
+    if entity_type not in ("developer", "publisher"):
+        return jsonify(error="Invalid entity type"), 400
+    if not entity_name:
+        return jsonify(error="Missing entity name"), 400
+    if not parent_handle:
+        return jsonify(error="Missing parent handle"), 400
+    if not x_url:
+        return jsonify(error="Missing X URL"), 400
+
+    # Extract handle from URL or raw handle
+    handle = x_url.split("/")[-1].split("?")[0].lstrip("@").strip()
+    if not handle:
+        return jsonify(error="Invalid X URL/handle"), 400
+
+    x_data = _x_lookup_user(handle)
+    if not x_data:
+        return jsonify(error=f"X user @{handle} not found"), 404
+    if x_data.get("error") == "rate_limited":
+        return jsonify(error="X API rate limited. Try again later.",
+                       reset=x_data.get("reset")), 429
+
+    profile_table = "developer_profiles" if entity_type == "developer" else "publisher_profiles"
+    try:
+        # Upsert employee into entity_x_accounts
+        cur.execute("""
+            INSERT INTO entity_x_accounts
+                (entity_type, entity_name, account_label, is_employee, parent_x_handle,
+                 x_id, x_handle, x_name, x_bio, x_followers, x_following,
+                 x_tweet_count, x_listed_count, x_profile_image, x_banner_image,
+                 x_location, x_url, x_verified, x_created_at, x_updated_at)
+            VALUES (%(etype)s, %(ename)s, 'Employee', TRUE, %(parent)s,
+                    %(x_id)s, %(x_handle)s, %(x_name)s, %(x_bio)s, %(x_followers)s,
+                    %(x_following)s, %(x_tweet_count)s, %(x_listed_count)s,
+                    %(x_profile_image)s, %(x_banner_image)s, %(x_location)s,
+                    %(x_url)s, %(x_verified)s, %(x_created_at)s, NOW())
+            ON CONFLICT (entity_type, entity_name, x_handle) DO UPDATE SET
+                account_label = 'Employee',
+                is_employee = TRUE, parent_x_handle = EXCLUDED.parent_x_handle,
+                x_id = EXCLUDED.x_id, x_name = EXCLUDED.x_name,
+                x_bio = EXCLUDED.x_bio, x_followers = EXCLUDED.x_followers,
+                x_following = EXCLUDED.x_following,
+                x_tweet_count = EXCLUDED.x_tweet_count,
+                x_listed_count = EXCLUDED.x_listed_count,
+                x_profile_image = EXCLUDED.x_profile_image,
+                x_banner_image = EXCLUDED.x_banner_image,
+                x_location = EXCLUDED.x_location, x_url = EXCLUDED.x_url,
+                x_verified = EXCLUDED.x_verified,
+                x_created_at = EXCLUDED.x_created_at,
+                x_updated_at = NOW()
+        """, {**x_data, "etype": entity_type, "ename": entity_name, "parent": parent_handle})
+
+        # Update profile table totals (includes employees)
+        cur.execute("""
+            SELECT COALESCE(SUM(x_followers), 0) AS total_followers,
+                   COALESCE(SUM(x_tweet_count), 0) AS total_tweets
+            FROM entity_x_accounts
+            WHERE entity_type = %s AND entity_name = %s
+        """, (entity_type, entity_name))
+        totals = cur.fetchone()
+        total_followers = totals["total_followers"]
+        total_tweets = totals["total_tweets"]
+        cur.execute(f"""
+            UPDATE {profile_table} SET x_followers = %(followers)s, x_tweet_count = %(tweets)s, updated_at = NOW()
+            WHERE name = %(name)s
+        """, {"followers": total_followers, "tweets": total_tweets, "name": entity_name})
+
+        # Fetch all accounts for this entity to return
+        cur.execute("""
+            SELECT account_label, x_handle, x_followers, x_tweet_count,
+                   x_created_at, x_profile_image, x_verified, x_bio,
+                   is_employee, parent_x_handle
+            FROM entity_x_accounts
+            WHERE entity_type = %s AND entity_name = %s
+            ORDER BY is_employee ASC, x_followers DESC
+        """, (entity_type, entity_name))
+        accounts = [dict(r) for r in cur.fetchall()]
+
+        conn.commit()
+        log.info("[x-employee] Saved @%s under @%s for %s '%s' (%d followers)",
+                 handle, parent_handle, entity_type, entity_name, x_data.get("x_followers", 0))
+        return jsonify(ok=True, account=x_data,
+                       accounts=accounts, totalFollowers=total_followers,
+                       totalTweets=total_tweets)
+    except Exception as e:
+        conn.rollback()
+        log.exception("[x-employee] DB error")
         return jsonify(error=str(e)), 500
 
 
