@@ -3854,10 +3854,10 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '.rp-tbl td:first-child{text-align:left;color:#ccc}\n'
         '.rp-best td{color:#4caf50 !important;font-weight:bold}\n'
         '.entity-list{display:flex;flex-direction:column;gap:1px}\n'
-        '.entity-list .ent-head{display:grid;grid-template-columns:48px minmax(180px,1fr) minmax(200px,1fr) 70px 70px 70px 80px;gap:8px;padding:8px 12px;background:#161616;border-bottom:1px solid #333;font-size:11px;font-weight:600;color:#888;position:sticky;top:47px;z-index:20}\n'
+        '.entity-list .ent-head{display:grid;grid-template-columns:48px minmax(160px,1fr) minmax(180px,1fr) 70px 60px 70px 70px 80px;gap:8px;padding:8px 12px;background:#161616;border-bottom:1px solid #333;font-size:11px;font-weight:600;color:#888;position:sticky;top:47px;z-index:20}\n'
         '.entity-list .ent-head div[data-sort]{cursor:pointer;user-select:none}\n'
         '.entity-list .ent-head div[data-sort]:hover{color:#107c10}\n'
-        '.entity-list .ent-row{display:grid;grid-template-columns:48px minmax(180px,1fr) minmax(200px,1fr) 70px 70px 70px 80px;gap:8px;padding:8px 12px;background:#1a1a1a;border-bottom:1px solid #1e1e1e;align-items:center;cursor:pointer;font-size:12px;transition:background .15s}\n'
+        '.entity-list .ent-row{display:grid;grid-template-columns:48px minmax(160px,1fr) minmax(180px,1fr) 70px 60px 70px 70px 80px;gap:8px;padding:8px 12px;background:#1a1a1a;border-bottom:1px solid #1e1e1e;align-items:center;cursor:pointer;font-size:12px;transition:background .15s}\n'
         '.entity-list .ent-row:hover{background:#222}\n'
         '.entity-list .ent-row img{width:42px;height:42px;object-fit:cover;border-radius:6px;background:#222}\n'
         '.entity-list .ent-name{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#eee}\n'
@@ -4600,6 +4600,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<option value="metacritic">Metacritic (High-Low)</option><option value="metacriticAsc">Metacritic (Low-High)</option>\n'
         '<option value="newest">Newest Release</option><option value="oldest">Oldest Release</option>\n'
         '<option value="xFollowers">X Followers (High-Low)</option><option value="xFollowersAsc">X Followers (Low-High)</option>\n'
+        '<option value="xTweets">Tweets (High-Low)</option><option value="xTweetsAsc">Tweets (Low-High)</option>\n'
+        '<option value="xFrequency">Frequency (High-Low)</option><option value="xFrequencyAsc">Frequency (Low-High)</option>\n'
         '</select>\n'
         '</div>\n'
         '<div id="devs-list" class="entity-list"></div>\n'
@@ -4622,6 +4624,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<option value="metacritic">Metacritic (High-Low)</option><option value="metacriticAsc">Metacritic (Low-High)</option>\n'
         '<option value="newest">Newest Release</option><option value="oldest">Oldest Release</option>\n'
         '<option value="xFollowers">X Followers (High-Low)</option><option value="xFollowersAsc">X Followers (Low-High)</option>\n'
+        '<option value="xTweets">Tweets (High-Low)</option><option value="xTweetsAsc">Tweets (Low-High)</option>\n'
+        '<option value="xFrequency">Frequency (High-Low)</option><option value="xFrequencyAsc">Frequency (Low-High)</option>\n'
         '</select>\n'
         '</div>\n'
         '<div id="pubs-list" class="entity-list"></div>\n'
@@ -9215,7 +9219,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "function _isAdmin(){return(localStorage.getItem('xct_username')||'').toLowerCase()==='freshdex'}\n"
         "function _entSortCol(col,type){\n"
         "  var sel=document.getElementById((type==='developer'?'devs':'pubs')+'-sort');\n"
-        "  var pairs={games:['games','gamesAsc'],name:['name','nameDesc'],products:['products','productsAsc'],rating:['rating','ratingAsc'],metacritic:['metacritic','metacriticAsc'],newest:['newest','oldest'],xFollowers:['xFollowers','xFollowersAsc']};\n"
+        "  var pairs={games:['games','gamesAsc'],name:['name','nameDesc'],products:['products','productsAsc'],rating:['rating','ratingAsc'],metacritic:['metacritic','metacriticAsc'],newest:['newest','oldest'],xFollowers:['xFollowers','xFollowersAsc'],xTweets:['xTweets','xTweetsAsc'],xFrequency:['xFrequency','xFrequencyAsc']};\n"
         "  var p=pairs[col]||[col,col+'Asc'];\n"
         "  sel.value=sel.value===p[0]?p[1]:p[0];\n"
         "  if(type==='developer'){_devsPage=0;_devsFilter()}else{_pubsPage=0;_pubsFilter()}\n"
@@ -9236,8 +9240,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "<div></div>"
         "<div data-sort onclick=\"_entSortCol(\\'name\\',\\''+type+'\\')\" style=\"cursor:pointer\">Name</div>"
         "<div data-sort onclick=\"_entSortCol(\\'xFollowers\\',\\''+type+'\\')\" style=\"cursor:pointer\">X / Twitter</div>"
+        "<div data-sort onclick=\"_entSortCol(\\'xTweets\\',\\''+type+'\\')\" style=\"cursor:pointer;text-align:center\">Tweets</div>"
+        "<div data-sort onclick=\"_entSortCol(\\'xFrequency\\',\\''+type+'\\')\" style=\"cursor:pointer;text-align:center\">Freq</div>"
         "<div data-sort onclick=\"_entSortCol(\\'games\\',\\''+type+'\\')\" style=\"cursor:pointer;text-align:center\">Games</div>"
-        "<div data-sort onclick=\"_entSortCol(\\'games\\',\\''+type+'\\')\" style=\"cursor:pointer;text-align:center\">DLC</div>"
         "<div data-sort onclick=\"_entSortCol(\\'products\\',\\''+type+'\\')\" style=\"cursor:pointer;text-align:center\">Total</div>"
         "<div data-sort onclick=\"_entSortCol(\\'metacritic\\',\\''+type+'\\')\" style=\"cursor:pointer;text-align:center\">Metacritic</div>"
         "</div>';\n"
@@ -9276,8 +9281,21 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "        xCell=_xAddRow(e.name,type);\n"
         "      }\n"
         "      h+='<div>'+xCell+'</div>';\n"
+        # Tweets column — sum from multi-accounts if available, else profile total
+        "      var tc=0,oldestX='';\n"
+        "      if(xa.length){xa.forEach(function(a){tc+=a.tweetCount||0;if(a.createdAt&&(!oldestX||a.createdAt<oldestX))oldestX=a.createdAt})}else{tc=e.xTweetCount||0;oldestX=e.xCreatedAt||''}\n"
+        "      var fmtTc=tc>=1000000?(tc/1000000).toFixed(1)+'M':tc>=1000?(tc/1000).toFixed(1)+'K':String(tc);\n"
+        "      h+='<div style=\"text-align:center;color:'+(tc>0?'#1d9bf0':'#333')+'\">'+fmtTc+'</div>';\n"
+        # Frequency column (tweets per day from oldest account start)
+        "      var freq='';\n"
+        "      if(tc>0&&oldestX){\n"
+        "        var days=Math.max(1,Math.floor((Date.now()-new Date(oldestX).getTime())/86400000));\n"
+        "        var tpd=tc/days;\n"
+        "        freq=tpd>=10?tpd.toFixed(0):tpd>=1?tpd.toFixed(1):tpd.toFixed(2);\n"
+        "        freq+='/d';\n"
+        "      }\n"
+        "      h+='<div style=\"text-align:center;color:'+(freq?'#ab47bc':'#333')+'\">'+(freq||'-')+'</div>';\n"
         "      h+='<div style=\"text-align:center;font-weight:600;color:#4caf50\">'+e.gameCount+'</div>';\n"
-        "      h+='<div style=\"text-align:center;color:#888\">'+e.dlcCount+'</div>';\n"
         "      h+='<div style=\"text-align:center;color:#888\">'+e.productCount+'</div>';\n"
         "      h+='<div style=\"text-align:center\">'+mc+'</div>';\n"
         "      h+='</div>';\n"

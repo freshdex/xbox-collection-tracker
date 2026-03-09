@@ -2705,6 +2705,10 @@ _ENTITY_SORT_MAP = {
     "oldest": "oldest_release ASC NULLS LAST",
     "xFollowers": "x_followers DESC NULLS LAST",
     "xFollowersAsc": "x_followers ASC NULLS LAST",
+    "xTweets": "x_tweet_count DESC NULLS LAST",
+    "xTweetsAsc": "x_tweet_count ASC NULLS LAST",
+    "xFrequency": "CASE WHEN x_created_at != '' AND x_tweet_count > 0 THEN x_tweet_count::float / GREATEST(EXTRACT(EPOCH FROM (NOW() - x_created_at::timestamptz)) / 86400.0, 1) ELSE 0 END DESC NULLS LAST",
+    "xFrequencyAsc": "CASE WHEN x_created_at != '' AND x_tweet_count > 0 THEN x_tweet_count::float / GREATEST(EXTRACT(EPOCH FROM (NOW() - x_created_at::timestamptz)) / 86400.0, 1) ELSE 0 END ASC NULLS LAST",
 }
 
 
@@ -2750,7 +2754,9 @@ def _entity_listing(entity_type):
                    COUNT(*) FILTER (WHERE p.xcloud_streamable) AS xcloud_count,
                    COUNT(*) FILTER (WHERE p.has_achievements) AS ach_count,
                    ARRAY_AGG(DISTINCT unnest_plat) FILTER (WHERE unnest_plat IS NOT NULL) AS all_platforms,
-                   MAX(ep.x_followers) AS x_followers
+                   MAX(ep.x_followers) AS x_followers,
+                   MAX(ep.x_tweet_count) AS x_tweet_count,
+                   MIN(NULLIF(ep.x_created_at, '')) AS x_created_at
             FROM marketplace_products p
             LEFT JOIN LATERAL UNNEST(p.platforms) AS unnest_plat ON TRUE
             LEFT JOIN {profile_table} ep ON ep.name = p.{col}
@@ -2789,7 +2795,7 @@ def _entity_listing(entity_type):
         if entity_names:
             cur.execute("""
                 SELECT entity_name, account_label, x_handle, x_followers,
-                       x_profile_image, x_verified, x_bio
+                       x_tweet_count, x_created_at, x_profile_image, x_verified, x_bio
                 FROM entity_x_accounts
                 WHERE entity_type = %s AND entity_name = ANY(%s)
                 ORDER BY x_followers DESC
@@ -2799,6 +2805,8 @@ def _entity_listing(entity_type):
                     "label": xa["account_label"],
                     "handle": xa["x_handle"],
                     "followers": xa["x_followers"] or 0,
+                    "tweetCount": xa["x_tweet_count"] or 0,
+                    "createdAt": xa["x_created_at"] or "",
                     "profileImage": xa["x_profile_image"] or "",
                     "verified": bool(xa["x_verified"]),
                     "bio": xa["x_bio"] or "",
@@ -2858,6 +2866,8 @@ def _entity_listing(entity_type):
                 "discord": prof.get("discord", "") or "",
                 "xHandle": prof.get("x_handle", "") or "",
                 "xFollowers": prof.get("x_followers") or 0,
+                "xTweetCount": r["x_tweet_count"] or prof.get("x_tweet_count") or 0,
+                "xCreatedAt": r["x_created_at"] or prof.get("x_created_at", "") or "",
                 "xProfileImage": prof.get("x_profile_image", "") or "",
                 "xVerified": bool(prof.get("x_verified")),
                 "xBio": prof.get("x_bio", "") or "",
@@ -6502,27 +6512,31 @@ def admin_entity_x_account(conn=None, cur=None, contributor=None, api_key=None):
                 x_updated_at = NOW()
         """, {**x_data, "etype": entity_type, "ename": entity_name, "label": label})
 
-        # Update profile table x_followers with total across all accounts
+        # Update profile table x_followers and x_tweet_count with totals across all accounts
         profile_table = "developer_profiles" if entity_type == "developer" else "publisher_profiles"
         cur.execute("""
-            SELECT COALESCE(SUM(x_followers), 0) AS total
+            SELECT COALESCE(SUM(x_followers), 0) AS total_followers,
+                   COALESCE(SUM(x_tweet_count), 0) AS total_tweets
             FROM entity_x_accounts
             WHERE entity_type = %s AND entity_name = %s
         """, (entity_type, entity_name))
-        total_followers = cur.fetchone()["total"]
+        totals = cur.fetchone()
+        total_followers = totals["total_followers"]
+        total_tweets = totals["total_tweets"]
         cur.execute(f"""
-            UPDATE {profile_table} SET x_followers = %(total)s, updated_at = NOW()
+            UPDATE {profile_table} SET x_followers = %(followers)s, x_tweet_count = %(tweets)s, updated_at = NOW()
             WHERE name = %(name)s
-        """, {"total": total_followers, "name": entity_name})
+        """, {"followers": total_followers, "tweets": total_tweets, "name": entity_name})
         if cur.rowcount == 0:
             cur.execute(f"""
-                INSERT INTO {profile_table} (name, x_followers, updated_at)
-                VALUES (%(name)s, %(total)s, NOW())
-            """, {"total": total_followers, "name": entity_name})
+                INSERT INTO {profile_table} (name, x_followers, x_tweet_count, updated_at)
+                VALUES (%(name)s, %(followers)s, %(tweets)s, NOW())
+            """, {"followers": total_followers, "tweets": total_tweets, "name": entity_name})
 
         # Fetch all accounts for this entity to return
         cur.execute("""
-            SELECT account_label, x_handle, x_followers, x_profile_image, x_verified, x_bio
+            SELECT account_label, x_handle, x_followers, x_tweet_count,
+                   x_created_at, x_profile_image, x_verified, x_bio
             FROM entity_x_accounts
             WHERE entity_type = %s AND entity_name = %s
             ORDER BY x_followers DESC
@@ -6533,7 +6547,8 @@ def admin_entity_x_account(conn=None, cur=None, contributor=None, api_key=None):
         log.info("[x-account] Saved @%s (%s) for %s '%s' (%d followers)",
                  handle, label, entity_type, entity_name, x_data.get("x_followers", 0))
         return jsonify(ok=True, account=x_data, label=label,
-                       accounts=accounts, totalFollowers=total_followers)
+                       accounts=accounts, totalFollowers=total_followers,
+                       totalTweets=total_tweets)
     except Exception as e:
         conn.rollback()
         log.exception("[x-account] DB error")
