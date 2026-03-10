@@ -2799,7 +2799,7 @@ def _entity_listing(entity_type):
         x_accounts_map = {}
         if entity_names:
             cur.execute("""
-                SELECT entity_name, account_label, x_handle, x_followers,
+                SELECT entity_name, account_label, x_handle, x_name, x_followers,
                        x_tweet_count, x_created_at, x_profile_image, x_verified, x_bio,
                        is_employee, parent_x_handle
                 FROM entity_x_accounts
@@ -2810,6 +2810,7 @@ def _entity_listing(entity_type):
                 x_accounts_map.setdefault(xa["entity_name"], []).append({
                     "label": xa["account_label"],
                     "handle": xa["x_handle"],
+                    "name": xa["x_name"] or "",
                     "followers": xa["x_followers"] or 0,
                     "tweetCount": xa["x_tweet_count"] or 0,
                     "createdAt": xa["x_created_at"] or "",
@@ -2949,7 +2950,7 @@ def _entity_detail(entity_type, name):
         game_x_map = {}
         if pids:
             cur.execute("""
-                SELECT entity_name, account_label, x_handle, x_followers, x_tweet_count,
+                SELECT entity_name, account_label, x_handle, x_name, x_followers, x_tweet_count,
                        x_created_at, x_profile_image, x_verified, is_employee, parent_x_handle
                 FROM entity_x_accounts
                 WHERE entity_type = 'game' AND entity_name = ANY(%(pids)s)
@@ -6560,7 +6561,7 @@ def admin_entity_x_account(conn=None, cur=None, contributor=None, api_key=None):
 
         # Fetch all accounts for this entity to return
         cur.execute("""
-            SELECT account_label, x_handle, x_followers, x_tweet_count,
+            SELECT account_label, x_handle, x_name, x_followers, x_tweet_count,
                    x_created_at, x_profile_image, x_verified, x_bio,
                    is_employee, parent_x_handle
             FROM entity_x_accounts
@@ -6665,7 +6666,7 @@ def admin_entity_x_employee(conn=None, cur=None, contributor=None, api_key=None)
 
         # Fetch all accounts for this entity to return
         cur.execute("""
-            SELECT account_label, x_handle, x_followers, x_tweet_count,
+            SELECT account_label, x_handle, x_name, x_followers, x_tweet_count,
                    x_created_at, x_profile_image, x_verified, x_bio,
                    is_employee, parent_x_handle
             FROM entity_x_accounts
