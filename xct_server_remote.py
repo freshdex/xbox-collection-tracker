@@ -2945,6 +2945,19 @@ def _entity_detail(entity_type, name):
             for s in cur.fetchall():
                 subs_map.setdefault(s["product_id"], []).append(s["tier"])
 
+        # Fetch game-level X accounts
+        game_x_map = {}
+        if pids:
+            cur.execute("""
+                SELECT entity_name, account_label, x_handle, x_followers, x_tweet_count,
+                       x_created_at, x_profile_image, x_verified, is_employee, parent_x_handle
+                FROM entity_x_accounts
+                WHERE entity_type = 'game' AND entity_name = ANY(%(pids)s)
+                ORDER BY is_employee ASC, x_followers DESC
+            """, {"pids": pids})
+            for r2 in cur.fetchall():
+                game_x_map.setdefault(r2["entity_name"], []).append(dict(r2))
+
         products = []
         for r in rows:
             pid = r["product_id"]
@@ -2970,6 +2983,7 @@ def _entity_detail(entity_type, name):
                 "priceUSD": r["price_usd"] or 0,
                 "currentPriceUSD": r["current_price_usd"] or 0,
                 "subscriptions": subs_map.get(pid, []),
+                "xAccounts": game_x_map.get(pid, []),
             })
 
         result = {
@@ -6466,7 +6480,7 @@ def admin_entity_x_account(conn=None, cur=None, contributor=None, api_key=None):
     x_url = data.get("xUrl", "").strip()
     label = data.get("label", "Main").strip() or "Main"
 
-    if entity_type not in ("developer", "publisher"):
+    if entity_type not in ("developer", "publisher", "game"):
         return jsonify(error="Invalid entityType"), 400
     if not entity_name:
         return jsonify(error="name required"), 400
@@ -6521,25 +6535,28 @@ def admin_entity_x_account(conn=None, cur=None, contributor=None, api_key=None):
         """, {**x_data, "etype": entity_type, "ename": entity_name, "label": label})
 
         # Update profile table x_followers and x_tweet_count with totals across all accounts
-        profile_table = "developer_profiles" if entity_type == "developer" else "publisher_profiles"
-        cur.execute("""
-            SELECT COALESCE(SUM(x_followers), 0) AS total_followers,
-                   COALESCE(SUM(x_tweet_count), 0) AS total_tweets
-            FROM entity_x_accounts
-            WHERE entity_type = %s AND entity_name = %s
-        """, (entity_type, entity_name))
-        totals = cur.fetchone()
-        total_followers = totals["total_followers"]
-        total_tweets = totals["total_tweets"]
-        cur.execute(f"""
-            UPDATE {profile_table} SET x_followers = %(followers)s, x_tweet_count = %(tweets)s, updated_at = NOW()
-            WHERE name = %(name)s
-        """, {"followers": total_followers, "tweets": total_tweets, "name": entity_name})
-        if cur.rowcount == 0:
+        total_followers = 0
+        total_tweets = 0
+        if entity_type in ("developer", "publisher"):
+            profile_table = "developer_profiles" if entity_type == "developer" else "publisher_profiles"
+            cur.execute("""
+                SELECT COALESCE(SUM(x_followers), 0) AS total_followers,
+                       COALESCE(SUM(x_tweet_count), 0) AS total_tweets
+                FROM entity_x_accounts
+                WHERE entity_type = %s AND entity_name = %s
+            """, (entity_type, entity_name))
+            totals = cur.fetchone()
+            total_followers = totals["total_followers"]
+            total_tweets = totals["total_tweets"]
             cur.execute(f"""
-                INSERT INTO {profile_table} (name, x_followers, x_tweet_count, updated_at)
-                VALUES (%(name)s, %(followers)s, %(tweets)s, NOW())
+                UPDATE {profile_table} SET x_followers = %(followers)s, x_tweet_count = %(tweets)s, updated_at = NOW()
+                WHERE name = %(name)s
             """, {"followers": total_followers, "tweets": total_tweets, "name": entity_name})
+            if cur.rowcount == 0:
+                cur.execute(f"""
+                    INSERT INTO {profile_table} (name, x_followers, x_tweet_count, updated_at)
+                    VALUES (%(name)s, %(followers)s, %(tweets)s, NOW())
+                """, {"followers": total_followers, "tweets": total_tweets, "name": entity_name})
 
         # Fetch all accounts for this entity to return
         cur.execute("""
@@ -6577,7 +6594,7 @@ def admin_entity_x_employee(conn=None, cur=None, contributor=None, api_key=None)
     parent_handle = data.get("parentXHandle", "").strip()
     x_url = data.get("xUrl", "").strip()
 
-    if entity_type not in ("developer", "publisher"):
+    if entity_type not in ("developer", "publisher", "game"):
         return jsonify(error="Invalid entity type"), 400
     if not entity_name:
         return jsonify(error="Missing entity name"), 400
@@ -6598,7 +6615,6 @@ def admin_entity_x_employee(conn=None, cur=None, contributor=None, api_key=None)
         return jsonify(error="X API rate limited. Try again later.",
                        reset=x_data.get("reset")), 429
 
-    profile_table = "developer_profiles" if entity_type == "developer" else "publisher_profiles"
     try:
         # Upsert employee into entity_x_accounts
         cur.execute("""
@@ -6628,20 +6644,24 @@ def admin_entity_x_employee(conn=None, cur=None, contributor=None, api_key=None)
                 x_updated_at = NOW()
         """, {**x_data, "etype": entity_type, "ename": entity_name, "parent": parent_handle})
 
-        # Update profile table totals (includes employees)
-        cur.execute("""
-            SELECT COALESCE(SUM(x_followers), 0) AS total_followers,
-                   COALESCE(SUM(x_tweet_count), 0) AS total_tweets
-            FROM entity_x_accounts
-            WHERE entity_type = %s AND entity_name = %s
-        """, (entity_type, entity_name))
-        totals = cur.fetchone()
-        total_followers = totals["total_followers"]
-        total_tweets = totals["total_tweets"]
-        cur.execute(f"""
-            UPDATE {profile_table} SET x_followers = %(followers)s, x_tweet_count = %(tweets)s, updated_at = NOW()
-            WHERE name = %(name)s
-        """, {"followers": total_followers, "tweets": total_tweets, "name": entity_name})
+        # Update profile table totals (includes employees) — skip for game type
+        total_followers = 0
+        total_tweets = 0
+        if entity_type in ("developer", "publisher"):
+            profile_table = "developer_profiles" if entity_type == "developer" else "publisher_profiles"
+            cur.execute("""
+                SELECT COALESCE(SUM(x_followers), 0) AS total_followers,
+                       COALESCE(SUM(x_tweet_count), 0) AS total_tweets
+                FROM entity_x_accounts
+                WHERE entity_type = %s AND entity_name = %s
+            """, (entity_type, entity_name))
+            totals = cur.fetchone()
+            total_followers = totals["total_followers"]
+            total_tweets = totals["total_tweets"]
+            cur.execute(f"""
+                UPDATE {profile_table} SET x_followers = %(followers)s, x_tweet_count = %(tweets)s, updated_at = NOW()
+                WHERE name = %(name)s
+            """, {"followers": total_followers, "tweets": total_tweets, "name": entity_name})
 
         # Fetch all accounts for this entity to return
         cur.execute("""
