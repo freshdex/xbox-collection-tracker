@@ -1492,6 +1492,24 @@ def store_filters():
             GROUP BY u ORDER BY count DESC
         """)
         platforms = [dict(r) for r in cur.fetchall()]
+        # Replace "Xbox 360" with BC / non-BC split
+        x360_entry = next((p for p in platforms if p["value"] == "Xbox 360"), None)
+        if x360_entry:
+            platforms.remove(x360_entry)
+            cur.execute("""
+                SELECT
+                    COUNT(*) FILTER (WHERE 'Xbox One' = ANY(platforms)
+                        OR 'Xbox Series X|S' = ANY(platforms)) AS bc,
+                    COUNT(*) FILTER (WHERE NOT ('Xbox One' = ANY(platforms))
+                        AND NOT ('Xbox Series X|S' = ANY(platforms))) AS non_bc
+                FROM marketplace_products
+                WHERE title != product_id AND 'Xbox 360' = ANY(platforms)
+            """)
+            x360 = cur.fetchone()
+            if x360["bc"]:
+                platforms.append({"value": "Xbox 360 BC", "count": x360["bc"]})
+            if x360["non_bc"]:
+                platforms.append({"value": "Xbox 360 non-BC", "count": x360["non_bc"]})
         # Add virtual "Windows Only" platform (PC without any Xbox console)
         cur.execute("""
             SELECT COUNT(*) AS count FROM marketplace_products
@@ -1503,6 +1521,14 @@ def store_filters():
         winonly_cnt = cur.fetchone()["count"]
         if winonly_cnt:
             platforms.append({"value": "Windows Only", "count": winonly_cnt})
+        # Virtual "Win Shared List" — Windows games sharing Xbox achievement list
+        cur.execute("""
+            SELECT COUNT(*) AS count FROM marketplace_tags
+            WHERE tag_type = 'win_shared_ach' AND tag_value = 'true'
+        """)
+        ws_cnt = cur.fetchone()["count"]
+        if ws_cnt:
+            platforms.append({"value": "Win Shared List", "count": ws_cnt})
 
         # Categories
         cur.execute("""
@@ -1608,19 +1634,6 @@ def store_filters():
         release_counts = {"released": counts["released"], "preorder": counts["preorder"],
                           "noPrice": counts["no_price"]}
 
-        # Physical disc counts (separate table, tiny and fast)
-        cur.execute("""
-            SELECT
-                COUNT(*) FILTER (WHERE status IN ('uk','us','both','ta_physical')) AS physical,
-                COUNT(*) FILTER (WHERE status IN ('uk','both')) AS uk,
-                COUNT(*) FILTER (WHERE status IN ('us','both')) AS us,
-                COUNT(*) FILTER (WHERE status = 'digital') AS digital
-            FROM amazon_links
-        """)
-        pc = dict(cur.fetchone())
-        pc["notscanned"] = total - (pc["physical"] + pc["digital"])
-        phys_counts = pc
-
         # Last scan
         last_scan = None
         cur.execute("""
@@ -1641,7 +1654,7 @@ def store_filters():
             "channels": channels, "types": types, "platforms": platforms,
             "categories": categories, "subscriptions": subscriptions,
             "priceCounts": price_counts, "mpCounts": mp_counts,
-            "bundleCounts": bundle_counts, "physCounts": phys_counts,
+            "bundleCounts": bundle_counts,
             "releaseCounts": release_counts, "boolCounts": bool_counts,
             "totalProducts": total, "lastScan": last_scan,
         }
@@ -1700,8 +1713,9 @@ def store_products():
         nodemo = request.args.get("nodemo", "")
         noplayed = request.args.get("noplayed", "")
         noach = request.args.get("noach", "")
-        phys_raw = request.args.get("phys", "")
+        nowinshared = request.args.get("nowinshared", "")
         mc_raw = request.args.get("mc", "")
+        phys_raw = request.args.get("phys", "")
 
         # Sort
         sort_sql, needs_us_price = _STORE_SORT_MAP.get(sort_key, _STORE_SORT_MAP["relDesc"])
@@ -1714,8 +1728,9 @@ def store_products():
         join_us = True
 
         if q:
-            wheres.append("p.title ILIKE %(q)s")
+            wheres.append("(p.title ILIKE %(q)s OR p.product_id ILIKE %(q_exact)s)")
             params["q"] = f"%{q}%"
+            params["q_exact"] = q.strip().upper()
 
         # Channel filter
         if ch_raw:
@@ -1745,9 +1760,14 @@ def store_products():
         if plat_raw:
             p_list = [p.strip() for p in plat_raw.split(",") if p.strip()]
             if p_list:
-                # "Windows Only" is a virtual platform: PC present, no Xbox consoles
+                # Virtual platforms
                 has_winonly = "Windows Only" in p_list
-                real_plats = [p for p in p_list if p != "Windows Only"]
+                has_360bc = "Xbox 360 BC" in p_list
+                has_360nonbc = "Xbox 360 non-BC" in p_list
+                has_winshared = "Win Shared List" in p_list
+                real_plats = [p for p in p_list
+                              if p not in ("Windows Only", "Xbox 360 BC", "Xbox 360 non-BC",
+                                           "Win Shared List")]
                 plat_conds = []
                 if real_plats:
                     plat_conds.append("p.platforms && %(platforms)s")
@@ -1758,12 +1778,29 @@ def store_products():
                         "AND NOT ('Xbox One' = ANY(p.platforms)) "
                         "AND NOT ('Xbox Series X|S' = ANY(p.platforms)) "
                         "AND NOT ('Xbox 360' = ANY(p.platforms)))")
+                if has_360bc:
+                    plat_conds.append(
+                        "('Xbox 360' = ANY(p.platforms) "
+                        "AND ('Xbox One' = ANY(p.platforms) "
+                        "OR 'Xbox Series X|S' = ANY(p.platforms)))")
+                if has_360nonbc:
+                    plat_conds.append(
+                        "('Xbox 360' = ANY(p.platforms) "
+                        "AND NOT ('Xbox One' = ANY(p.platforms)) "
+                        "AND NOT ('Xbox Series X|S' = ANY(p.platforms)))")
+                if has_winshared:
+                    plat_conds.append(
+                        "EXISTS (SELECT 1 FROM marketplace_tags mt "
+                        "WHERE mt.product_id = p.product_id "
+                        "AND mt.tag_type = 'win_shared_ach' AND mt.tag_value = 'true')")
                 if plat_conds:
                     wheres.append("(" + " OR ".join(plat_conds) + ")")
-                # Xbox 360 BC games are tagged with Xbox One/Series by Microsoft.
-                # If Xbox 360 is NOT selected, explicitly exclude them.
-                if "Xbox 360" not in p_list and not has_winonly:
+                # If neither Xbox 360 variant is selected, exclude all 360 games
+                if not has_360bc and not has_360nonbc:
                     wheres.append("NOT ('Xbox 360' = ANY(p.platforms))")
+        else:
+            # No platform filter — still exclude Xbox 360 (opt-in only)
+            wheres.append("NOT ('Xbox 360' = ANY(p.platforms))")
 
         # Price filter
         if price_raw:
@@ -1984,7 +2021,7 @@ def store_products():
             if bundle_conds:
                 wheres.append("(" + " OR ".join(bundle_conds) + ")")
 
-        # Physical disc filter (amazon_links table)
+        # Physical disc filter (TA-sourced via amazon_links table)
         if phys_raw:
             ph_list = [v.strip() for v in phys_raw.split(",") if v.strip()]
             phys_conds = []
@@ -1993,28 +2030,21 @@ def store_products():
                     "EXISTS (SELECT 1 FROM amazon_links al "
                     "WHERE al.product_id = p.product_id "
                     "AND al.status IN ('uk','us','both','ta_physical'))")
-            if "uk" in ph_list:
+            if "xct_physical" in ph_list:
                 phys_conds.append(
-                    "EXISTS (SELECT 1 FROM amazon_links al "
-                    "WHERE al.product_id = p.product_id "
-                    "AND al.status IN ('uk','both'))")
-            if "us" in ph_list:
-                phys_conds.append(
-                    "EXISTS (SELECT 1 FROM amazon_links al "
-                    "WHERE al.product_id = p.product_id "
-                    "AND al.status IN ('us','both'))")
+                    "EXISTS (SELECT 1 FROM marketplace_tags mt "
+                    "WHERE mt.product_id = p.product_id "
+                    "AND mt.tag_type = 'has_physical_nonta' AND mt.tag_value = 'true')")
             if "digital" in ph_list:
                 phys_conds.append(
-                    "EXISTS (SELECT 1 FROM amazon_links al "
-                    "WHERE al.product_id = p.product_id "
-                    "AND al.status = 'digital')")
-            if "notscanned" in ph_list:
-                phys_conds.append(
                     "NOT EXISTS (SELECT 1 FROM amazon_links al "
-                    "WHERE al.product_id = p.product_id)")
+                    "WHERE al.product_id = p.product_id "
+                    "AND al.status IN ('uk','us','both','ta_physical'))"
+                    " AND NOT EXISTS (SELECT 1 FROM marketplace_tags mt "
+                    "WHERE mt.product_id = p.product_id "
+                    "AND mt.tag_type = 'has_physical_nonta' AND mt.tag_value = 'true')")
             if phys_conds:
                 wheres.append("(" + " OR ".join(phys_conds) + ")")
-
 
         # Boolean checkboxes
         if xcloud == "1":
@@ -2079,6 +2109,13 @@ def store_products():
                             parts.append("p.product_id != ALL(%(ach_pids)s)")
                             params["ach_pids"] = ach_pids
                         wheres.append("(" + " AND ".join(parts) + ")")
+
+        # Exclude Windows shared achievement list games
+        if nowinshared == "1":
+            wheres.append(
+                "NOT EXISTS (SELECT 1 FROM marketplace_tags mt "
+                "WHERE mt.product_id = p.product_id "
+                "AND mt.tag_type = 'win_shared_ach' AND mt.tag_value = 'true')")
 
         # Region availability filter
         if regions_raw and regions_raw in ("myregions", "notmy"):
@@ -2473,6 +2510,7 @@ def store_product_detail(product_id):
             "capabilities": p["capabilities"] or [],
             "subscriptions": subscriptions,
             "availableRegions": list(regional.keys()) if regional else [],
+            "tags": tags,
         }
         return _gzip_json_response(result)
     except Exception as e:
@@ -3395,17 +3433,11 @@ def marketplace():
 
 
 @app.route("/api/v1/marketplace/tags", methods=["POST"])
-def marketplace_tags_update():
-    """Admin endpoint: set manual tags on marketplace products.
-
-    Requires ADMIN_API_KEY env var. Body: {productId, tagType, tagValue}.
-    """
-    if not ADMIN_API_KEY:
-        return jsonify(error="Admin endpoint not configured"), 501
-
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer ") or auth[7:].strip() != ADMIN_API_KEY:
-        return jsonify(error="Invalid admin key"), 403
+@require_auth
+def marketplace_tags_update(conn=None, cur=None, contributor=None, api_key=None):
+    """Admin endpoint: set manual tags on marketplace products."""
+    if contributor["username"].lower() != "freshdex":
+        return jsonify(error="Admin access required"), 403
 
     data = request.get_json(silent=True)
     if not data:
@@ -3418,29 +3450,21 @@ def marketplace_tags_update():
     if not product_id or not tag_type:
         return jsonify(error="productId and tagType are required"), 400
 
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        if tag_value:
-            cur.execute("""
-                INSERT INTO marketplace_tags (product_id, tag_type, tag_value, created_at)
-                VALUES (%s, %s, %s, NOW())
-                ON CONFLICT (product_id, tag_type) DO UPDATE SET
-                    tag_value = EXCLUDED.tag_value, created_at = NOW()
-            """, (product_id, tag_type, tag_value))
-        else:
-            # Empty value = delete the tag
-            cur.execute("DELETE FROM marketplace_tags WHERE product_id = %s AND tag_type = %s",
-                        (product_id, tag_type))
-        conn.commit()
-        # Invalidate marketplace cache
-        _shared_cache.pop("marketplace_full", None)
-        return jsonify(status="ok", productId=product_id, tagType=tag_type, tagValue=tag_value)
-    except Exception as e:
-        conn.rollback()
-        return jsonify(error=str(e)), 500
-    finally:
-        conn.close()
+    if tag_value:
+        cur.execute("""
+            INSERT INTO marketplace_tags (product_id, tag_type, tag_value, created_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT (product_id, tag_type) DO UPDATE SET
+                tag_value = EXCLUDED.tag_value, created_at = NOW()
+        """, (product_id, tag_type, tag_value))
+    else:
+        # Empty value = delete the tag
+        cur.execute("DELETE FROM marketplace_tags WHERE product_id = %s AND tag_type = %s",
+                    (product_id, tag_type))
+    conn.commit()
+    # Invalidate marketplace cache
+    _shared_cache.pop("marketplace_full", None)
+    return jsonify(status="ok", productId=product_id, tagType=tag_type, tagValue=tag_value)
 
 
 @app.route("/api/v1/marketplace/tags", methods=["OPTIONS"])
@@ -4867,9 +4891,13 @@ def xbox_achievements_detail(xbox_title_id, conn=None, cur=None, contributor=Non
             ORDER BY unlocked DESC, unlock_time DESC NULLS LAST, name
         """, (contributor["id"], xbox_title_id))
 
-        # Also get the title name
+        # Also get the title summary info
         cur.execute("""
-            SELECT title_name FROM xbox_achievement_summaries
+            SELECT title_name, product_id, platforms, display_image,
+                   current_gamerscore, total_gamerscore,
+                   current_achievements, total_achievements,
+                   last_time_played
+            FROM xbox_achievement_summaries
             WHERE contributor_id = %s AND xbox_title_id = %s
         """, (contributor["id"], xbox_title_id))
         title_row = cur.fetchone()
@@ -4900,11 +4928,21 @@ def xbox_achievements_detail(xbox_title_id, conn=None, cur=None, contributor=Non
                 "mediaUrl": row["media_url"],
             })
 
-        return jsonify(
-            xboxTitleId=xbox_title_id,
-            title=title_name,
-            achievements=achievements,
-        )
+        result = {
+            "xboxTitleId": xbox_title_id,
+            "title": title_name,
+            "achievements": achievements,
+        }
+        if title_row:
+            result["productId"] = title_row["product_id"] or ""
+            result["platforms"] = title_row["platforms"] or []
+            result["displayImage"] = title_row["display_image"] or ""
+            result["currentGS"] = title_row["current_gamerscore"]
+            result["totalGS"] = title_row["total_gamerscore"]
+            result["currentAch"] = title_row["current_achievements"]
+            result["totalAch"] = title_row["total_achievements"]
+            result["lastPlayed"] = title_row["last_time_played"].isoformat() if title_row["last_time_played"] else ""
+        return jsonify(**result)
     except Exception as e:
         return jsonify(error=str(e)), 500
 

@@ -671,6 +671,7 @@ def msa_request(url, params):
         debug(f"msa_request: HTTP {e.code} body={error_body[:1000]}")
         print(f"[!] HTTP {e.code} from {url}")
         print(f"    {error_body[:500]}")
+        e.error_body = error_body  # attach for callers
         raise
 
 
@@ -1526,15 +1527,29 @@ def _get_update_xsts_token():
         if not signer:
             raise RuntimeError("Could not restore EC P-256 key from auth state.")
 
-        # Refresh MSA token
+        # Refresh MSA token (auto re-auth on expired grant)
         print("[*] Refreshing MSA token...")
-        msa_resp = msa_request("https://login.live.com/oauth20_token.srf", {
-            "client_id": CLIENT_ID,
-            "scope": SCOPE,
-            "grant_type": "refresh_token",
-            "refresh_token": auth_state["refresh_token"],
-        })
-        msa_token = msa_resp["access_token"]
+        try:
+            msa_resp = msa_request("https://login.live.com/oauth20_token.srf", {
+                "client_id": CLIENT_ID,
+                "scope": SCOPE,
+                "grant_type": "refresh_token",
+                "refresh_token": auth_state["refresh_token"],
+            })
+            msa_token = msa_resp["access_token"]
+            new_refresh = msa_resp.get("refresh_token", auth_state["refresh_token"])
+        except urllib.error.HTTPError as e:
+            error_body = getattr(e, "error_body", "")
+            if "invalid_grant" in error_body:
+                print("[!] Refresh token expired — starting device code re-auth...")
+                msa_token, new_refresh = device_code_auth()
+            else:
+                raise
+        # Update auth state with new refresh token
+        if new_refresh and new_refresh != auth_state.get("refresh_token"):
+            auth_state["refresh_token"] = new_refresh
+            state_path = account_path(chosen_gt, "xbox_auth_state.json")
+            save_json(state_path, auth_state)
         print("[+] MSA token refreshed")
 
         # Device token
@@ -4057,7 +4072,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<h2>Game Pass Catalog</h2>\n'
         '<p class="sub" id="gp-sub"></p>\n'
         '<div class="filters">\n'
-        '<input type="text" id="gp-search" placeholder="Search Game Pass..." oninput="gpPage=0;filterGP()">\n'
+        '<input type="text" id="gp-search" autocomplete="one-time-code" placeholder="Search Game Pass..." oninput="gpPage=0;filterGP()">\n'
         '<div class="pill active" onclick="setGPFilter(\'all\',this)">All</div>\n'
         '<div class="pill" onclick="setGPFilter(\'notOwned\',this)">Not Owned</div>\n'
         '<div class="pill" onclick="setGPFilter(\'owned\',this)">Owned</div>\n'
@@ -4084,7 +4099,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Saved Filters
         '<div class="mkt-sf"><select id="lib-saved" onchange="_libLoadSaved(this.value)" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px"><option value="">Saved Filters</option><option value="__save__">Save Current Filter...</option></select></div>\n'
         # Search
-        '<div class="mkt-sf"><input type="text" id="lib-search" placeholder="Search..." oninput="libPage=0;filterLib()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px;box-sizing:border-box"></div>\n'
+        '<div class="mkt-sf"><input type="text" id="lib-search" autocomplete="one-time-code" placeholder="Search..." oninput="libPage=0;filterLib()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px;box-sizing:border-box"></div>\n'
         # Sort
         '<div class="mkt-sf"><div class="mkt-sf-label">Sort By</div>'
         '<select id="lib-sort" onchange="libSortCol=null;libPage=0;filterLib()"><option value="name">Name</option>'
@@ -4219,7 +4234,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="section" id="playhistory">\n'
         '<h2>Play History</h2>\n'
         '<p class="sub" id="ph-sub">Games from TitleHub not in your Collections (disc, trials, rentals, etc.)</p>\n'
-        '<div class="search-row"><input type="text" id="ph-search" placeholder="Search play history..." oninput="phPage=0;filterPH()"></div>\n'
+        '<div class="search-row"><input type="text" id="ph-search" autocomplete="one-time-code" placeholder="Search play history..." oninput="phPage=0;filterPH()"></div>\n'
         '<div class="filters">\n'
         '<div class="filter-group" id="ph-gt-wrap" style="display:none"><div class="filter-label">Gamertag</div>'
         '<select id="ph-gt" onchange="phPage=0;filterPH()"><option value="">All Gamertags</option></select></div>\n'
@@ -4315,7 +4330,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Saved Filters
         '<div class="mkt-sf"><select id="mkt-saved" onchange="_mktLoadSaved(this.value)" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px"><option value="">Saved Filters</option><option value="__save__">Save Current Filter...</option></select></div>\n'
         # Search (compact, in sidebar)
-        '<div class="mkt-sf"><input type="text" id="mkt-search" placeholder="Search..." oninput="mktPage=0;if(window._xctHosted){clearTimeout(_mktDebounce);_mktDebounce=setTimeout(filterMKT,300)}else{filterMKT()}" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px;box-sizing:border-box"></div>\n'
+        '<div class="mkt-sf"><input type="text" id="mkt-search" autocomplete="one-time-code" placeholder="Search..." oninput="mktPage=0;if(window._xctHosted){clearTimeout(_mktDebounce);_mktDebounce=setTimeout(filterMKT,300)}else{filterMKT()}" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px;box-sizing:border-box"></div>\n'
         # Sort
         '<div class="mkt-sf"><div class="mkt-sf-label">Sort By</div>'
         '<select id="mkt-sort" onchange="mktPage=0;filterMKT()">'
@@ -4374,9 +4389,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Bundles (cb-drop)
         '<div class="mkt-sf"><div class="mkt-sf-label">Bundles</div>'
         '<div class="cb-drop mkt-cb-full" id="mkt-bundle"><div class="cb-btn" onclick="toggleCB(this)">All Bundles &#9662;</div><div class="cb-panel"></div></div></div>\n'
-        # Physical Disc (cb-drop)
+        # Physical Disc (select dropdown, TA-sourced)
         '<div class="mkt-sf"><div class="mkt-sf-label">Physical Disc</div>'
-        '<div class="cb-drop mkt-cb-full" id="mkt-phys"><div class="cb-btn" onclick="toggleCB(this)">All Physical &#9662;</div><div class="cb-panel"></div></div></div>\n'
+        '<select id="mkt-phys-sel" onchange="mktPage=0;filterMKT()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px">'
+        '<option value="">All</option>'
+        '<option value="physical">TA Physical</option>'
+        '<option value="xct_physical">XCT Physical</option>'
+        '<option value="digital">Digital Only</option>'
+        '</select></div>\n'
         # Region Availability (select dropdown)
         '<div class="mkt-sf"><div class="mkt-sf-label">Region Availability</div>'
         '<select id="mkt-region-sel" onchange="mktPage=0;filterMKT()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px">'
@@ -4398,6 +4418,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<label class="mkt-tick"><input type="checkbox" id="mkt-nodemo" onchange="mktPage=0;filterMKT()"> Hide demos</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-noplayed" onchange="mktPage=0;filterMKT()"> Hide played games</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-noach" onchange="mktPage=0;filterMKT()"> Hide games I have achievements in</label>\n'
+        '<label class="mkt-tick"><input type="checkbox" id="mkt-nowinshared" onchange="mktPage=0;filterMKT()"> Exclude Windows shared</label>\n'
         '</div>\n'
         # Last scan info (moved from top)
         '<div id="mkt-scan-banner" style="font-size:11px;color:#666;margin-top:14px;padding-top:10px;border-top:1px solid #222"></div>\n'
@@ -4471,7 +4492,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<span class="pill" onclick="clearPurchFilters()" style="font-size:11px;padding:3px 8px;margin:0" title="Reset all filters">Clear All</span>'
         '</div>\n'
         # Search
-        '<div class="mkt-sf"><input type="text" id="purch-search" placeholder="Search..." oninput="purchPage=0;filterPurchases()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px;box-sizing:border-box"></div>\n'
+        '<div class="mkt-sf"><input type="text" id="purch-search" autocomplete="one-time-code" placeholder="Search..." oninput="purchPage=0;filterPurchases()" style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px;box-sizing:border-box"></div>\n'
         # Sort
         '<div class="mkt-sf"><div class="mkt-sf-label">Sort By</div>'
         '<select id="purch-sort" onchange="purchPage=0;filterPurchases()">'
@@ -4544,7 +4565,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<div class="section" id="gfwl">\n'
         '<h2>Games for Windows - LIVE</h2>\n'
         '<p class="sub" id="gfwl-sub"></p>\n'
-        '<div class="search-row"><input type="text" id="gfwl-search" placeholder="Search GFWL games..." oninput="filterGFWL()"></div>\n'
+        '<div class="search-row"><input type="text" id="gfwl-search" autocomplete="one-time-code" placeholder="Search GFWL games..." oninput="filterGFWL()"></div>\n'
         '<div id="gfwl-list"></div>\n'
         '<div class="pagination" id="gfwl-pager" style="display:flex;justify-content:center;align-items:center;gap:8px;padding:16px 0;flex-wrap:wrap"></div>\n'
         '</div>\n'
@@ -5363,7 +5384,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=false;"
         "if(document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=false;"
         "if(document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=false;"
+        "if(document.getElementById('mkt-nowinshared'))document.getElementById('mkt-nowinshared').checked=false;"
         "if(document.getElementById('mkt-region-sel'))document.getElementById('mkt-region-sel').value='';"
+        "if(document.getElementById('mkt-phys-sel'))document.getElementById('mkt-phys-sel').value='';"
         "document.getElementById('mkt-sort').value='relDesc';"
         "document.getElementById('mkt-channel').value='';"
         "document.getElementById('mkt-search').value='';"
@@ -5407,8 +5430,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
-        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-phys','phys'],['mkt-mc','mc']];"
+        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-mc','mc']];"
         "cbMap.forEach(([id,key])=>{const v=_mktGetCBChecked(id);if(v!==null){p.set(key,v.length?v.join(','):'_none_')}});"
+        "var _physV=(document.getElementById('mkt-phys-sel')||{}).value;if(_physV)p.set('phys',_physV);"
         # binary checkboxes
         "if(document.getElementById('mkt-xcloud').checked)p.set('xcloud','1');"
         "if(document.getElementById('mkt-trial').checked)p.set('trial','1');"
@@ -5419,6 +5443,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');"
         "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');"
         "if(document.getElementById('mkt-noach')&&document.getElementById('mkt-noach').checked)p.set('noach','1');"
+        "if(document.getElementById('mkt-nowinshared')&&document.getElementById('mkt-nowinshared').checked)p.set('nowinshared','1');"
         "_setRoute('store',p.toString())}\n"
 
         "function _mktDeserializeFilters(qsArg){"
@@ -5434,8 +5459,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
-        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-phys','phys'],['mkt-mc','mc']];"
+        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-mc','mc']];"
         "cbMap.forEach(([id,key])=>{if(p.has(key))_mktSetCBChecked(id,p.get(key).split(','))});"
+        "if(p.has('phys'))document.getElementById('mkt-phys-sel').value=p.get('phys');"
         "if(p.get('xcloud')==='1')document.getElementById('mkt-xcloud').checked=true;"
         "if(p.get('trial')==='1')document.getElementById('mkt-trial').checked=true;"
         "if(p.get('ach')==='1')document.getElementById('mkt-ach').checked=true;"
@@ -5445,6 +5471,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('nodemo')==='1'&&document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=true;"
         "if(p.get('noplayed')==='1'&&document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=true;"
         "if(p.get('noach')==='1'&&document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=true;"
+        "if(p.get('nowinshared')==='1'&&document.getElementById('mkt-nowinshared'))document.getElementById('mkt-nowinshared').checked=true;"
         "if(p.has('region'))document.getElementById('mkt-region-sel').value=p.get('region');"
         "return true}\n"
 
@@ -5632,7 +5659,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=false;"
         "if(document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=false;"
         "if(document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=false;"
+        "if(document.getElementById('mkt-nowinshared'))document.getElementById('mkt-nowinshared').checked=false;"
         "if(document.getElementById('mkt-region-sel'))document.getElementById('mkt-region-sel').value='';"
+        "if(document.getElementById('mkt-phys-sel'))document.getElementById('mkt-phys-sel').value='';"
         "document.getElementById('mkt-search').value='';"
         # Apply saved params
         "const p=new URLSearchParams(found.params);"
@@ -5642,8 +5671,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
-        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-phys','phys'],['mkt-mc','mc']];"
+        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-mc','mc']];"
         "cbMap.forEach(([id,key])=>{if(p.has(key))_mktSetCBChecked(id,p.get(key).split(','))});"
+        "if(p.has('phys'))document.getElementById('mkt-phys-sel').value=p.get('phys');"
         "if(p.get('xcloud')==='1')document.getElementById('mkt-xcloud').checked=true;"
         "if(p.get('trial')==='1')document.getElementById('mkt-trial').checked=true;"
         "if(p.get('ach')==='1')document.getElementById('mkt-ach').checked=true;"
@@ -5653,6 +5683,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('nodemo')==='1'&&document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=true;"
         "if(p.get('noplayed')==='1'&&document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=true;"
         "if(p.get('noach')==='1'&&document.getElementById('mkt-noach'))document.getElementById('mkt-noach').checked=true;"
+        "if(p.get('nowinshared')==='1'&&document.getElementById('mkt-nowinshared'))document.getElementById('mkt-nowinshared').checked=true;"
         "if(p.has('region'))document.getElementById('mkt-region-sel').value=p.get('region');"
         "_mktActiveSaved=val;_mktInitSaved();mktPage=0;filterMKT()}\n"
 
@@ -5666,8 +5697,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
-        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-phys','phys']];"
+        "['mkt-preorder','rel'],['mkt-bundle','bundle']];"
         "cbMap.forEach(([id,key])=>{const v=_mktGetCBChecked(id);if(v!==null){p.set(key,v.length?v.join(','):'_none_')}});"
+        "var _physV=(document.getElementById('mkt-phys-sel')||{}).value;if(_physV)p.set('phys',_physV);"
         "if(document.getElementById('mkt-xcloud').checked)p.set('xcloud','1');"
         "if(document.getElementById('mkt-trial').checked)p.set('trial','1');"
         "if(document.getElementById('mkt-ach').checked)p.set('ach','1');"
@@ -5677,6 +5709,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');"
         "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');"
         "if(document.getElementById('mkt-noach')&&document.getElementById('mkt-noach').checked)p.set('noach','1');"
+        "if(document.getElementById('mkt-nowinshared')&&document.getElementById('mkt-nowinshared').checked)p.set('nowinshared','1');"
         "var _rg=(document.getElementById('mkt-region-sel')||{}).value;if(_rg)p.set('region',_rg);"
         "return p.toString()}\n"
 
@@ -5898,7 +5931,6 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "fillStatic('mkt-owned',[['owned','Owned on Digital'],['notowned_digital','Not Owned on Digital'],['discowned','Owned on Disc'],['notowned_disc','Not Owned on Disc']],'filterMKT');\n"
         "fillStatic('mkt-preorder',[['released','Released'],['preorder','Pre-Order'],['noPrice','No Price']],'filterMKT',['released']);\n"
         "fillStatic('mkt-bundle',[['bundles','Bundles'],['notbundle','Not Bundles']],'filterMKT');\n"
-        "fillStatic('mkt-phys',[['physical','Has Physical Disc'],['uk','UK Only'],['us','US Only'],['digital','Digital Only'],['notscanned','Not Scanned']],'filterMKT');\n"
         "fillStatic('mkt-mc',[['mc90','90+ (Universal Acclaim)'],['mc75','75-89 (Favorable)'],['mc50','50-74 (Mixed)'],['mcLow','Under 50'],['mcAny','Has Score'],['mcNone','No Score']],'filterMKT');\n"
         ""
         # Fetch dynamic dropdowns from API
@@ -5919,7 +5951,6 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(data.priceCounts)_updateCBCounts('mkt-price',data.priceCounts);\n"
         "if(data.mpCounts)_updateCBCounts('mkt-mp',data.mpCounts);\n"
         "if(data.bundleCounts)_updateCBCounts('mkt-bundle',data.bundleCounts);\n"
-        "if(data.physCounts)_updateCBCounts('mkt-phys',data.physCounts);\n"
         "if(data.releaseCounts)_updateCBCounts('mkt-preorder',data.releaseCounts);\n"
         "if(data.boolCounts){"
         "document.querySelectorAll('#mkt-xcloud,#mkt-trial,#mkt-ach').forEach(cb=>{"
@@ -6024,7 +6055,6 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "fillStatic('mkt-owned',[['owned','Owned on Digital'],['notowned_digital','Not Owned on Digital'],['discowned','Owned on Disc'],['notowned_disc','Not Owned on Disc']],'filterMKT');\n"
         "fillStatic('mkt-preorder',[['released','Released'],['preorder','Pre-Order'],['noPrice','No Price']],'filterMKT',['released']);\n"
         "fillStatic('mkt-bundle',[['bundles','Bundles'],['notbundle','Not Bundles']],'filterMKT');\n"
-        "fillStatic('mkt-phys',[['physical','Has Physical Disc'],['uk','UK Only'],['us','US Only'],['digital','Digital Only'],['notscanned','Not Scanned']],'filterMKT');\n"
         "fillStatic('mkt-mc',[['mc90','90+ (Universal Acclaim)'],['mc75','75-89 (Favorable)'],['mc50','50-74 (Mixed)'],['mcLow','Under 50'],['mcAny','Has Score'],['mcNone','No Score']],'filterMKT');\n"
         ""
         "}\n"
@@ -6672,7 +6702,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('library').classList.contains('active'))_libSerializeFilters()}\n"
         '\n'
 
-        "function closeModal(){document.getElementById('modal').classList.remove('active')}\n"
+        "function closeModal(){document.getElementById('modal').classList.remove('active');"
+        "if(window._mktTagsSaved){window._mktTagsSaved=false;if(typeof filterMKT==='function')filterMKT()}}\n"
         "document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});\n"
         "function showGTList(el,gts){document.querySelectorAll('.gt-popup').forEach(p=>p.remove());"
         "const pop=document.createElement('div');pop.className='gt-popup';"
@@ -7468,8 +7499,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const cbMap=[['mkt-type','type'],['mkt-plat','plat'],"
         "['mkt-price','price'],['mkt-cat','cat'],['mkt-subs','subs'],['mkt-mp','mp'],"
         "['mkt-pub','pub'],['mkt-dev','dev'],['mkt-owned','own'],"
-        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-phys','phys'],['mkt-mc','mc']];\n"
+        "['mkt-preorder','rel'],['mkt-bundle','bundle'],['mkt-mc','mc']];\n"
         "cbMap.forEach(function(pair){var v=_mktGetCBChecked(pair[0]);if(v!==null){if(v.length)p.set(pair[1],v.join(','));else p.set(pair[1],'_none_')}});\n"
+        "var _physV=(document.getElementById('mkt-phys-sel')||{}).value;if(_physV)p.set('phys',_physV);\n"
         "var _rgSel=(document.getElementById('mkt-region-sel')||{}).value;"
         "if(_rgSel)p.set('regions',_rgSel);\n"
         # binary checkboxes
@@ -7483,6 +7515,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');\n"
         "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');\n"
         "if(document.getElementById('mkt-noach')&&document.getElementById('mkt-noach').checked)p.set('noach','1');\n"
+        "if(document.getElementById('mkt-nowinshared')&&document.getElementById('mkt-nowinshared').checked)p.set('nowinshared','1');\n"
         # Fetch
         "var h={};if(window._xctApiKey)h['Authorization']='Bearer '+window._xctApiKey;\n"
         "fetch('/api/v1/store/products?'+p.toString(),{headers:h,signal:ac.signal})"
@@ -7730,8 +7763,55 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "${_amazonDetailHtml(pid,item.title)}`;\n"
         "document.getElementById('modal').classList.add('active');\n"
         "_initPhysicalLinks(pid);\n"
+        # Admin tag: Windows shared achievement list
+        "const _tagUser=(localStorage.getItem('xct_username')||'').toLowerCase();"
+        "if(_tagUser==='freshdex'){"
+        "const _tgs=item.tags||{};"
+        "const _tagDiv=document.createElement('div');"
+        "_tagDiv.style.cssText='margin-top:12px;padding-top:10px;border-top:1px solid #333';"
+        "_tagDiv.innerHTML='<div style=\"font-weight:600;margin-bottom:6px;color:#ccc\">Admin Tags</div>';"
+        "var _tagCBs=[];"
+        "function _addTagCB(label,tagType,checked,color){"
+        "const lbl=document.createElement('label');"
+        "lbl.style.cssText='display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:#ccc;margin-bottom:4px';"
+        "const cb=document.createElement('input');cb.type='checkbox';cb.checked=checked;"
+        "cb.dataset.tagType=tagType;cb.dataset.orig=checked?'true':'';"
+        "cb.style.cssText='accent-color:'+color+';width:16px;height:16px;cursor:pointer';"
+        "cb.addEventListener('change',function(){_tagSaveBtn.disabled=false;_tagSaveBtn.style.opacity='1'});"
+        "lbl.appendChild(cb);lbl.appendChild(document.createTextNode(' '+label));"
+        "_tagDiv.appendChild(lbl);_tagCBs.push(cb)}"
+        "_addTagCB('Windows shared achievement list','win_shared_ach',_tgs.win_shared_ach==='true','#42a5f5');"
+        "_addTagCB('Has Physical non-TA','has_physical_nonta',_tgs.has_physical_nonta==='true','#4caf50');"
+        "var _tagSaveBtn=document.createElement('button');"
+        "_tagSaveBtn.textContent='Save Tags';"
+        "_tagSaveBtn.disabled=true;"
+        "_tagSaveBtn.style.cssText='margin-top:8px;padding:5px 16px;background:#333;color:#ccc;border:1px solid #555;border-radius:4px;cursor:pointer;font-size:12px;opacity:0.5';"
+        "_tagSaveBtn.addEventListener('click',function(){"
+        "_tagSaveBtn.disabled=true;_tagSaveBtn.textContent='Saving...';"
+        "var proms=[];"
+        "_tagCBs.forEach(function(cb){"
+        "var val=cb.checked?'true':'';"
+        "if(val!==cb.dataset.orig){proms.push(_mktSetTag(pid,cb.dataset.tagType,val).then(function(d){"
+        "if(d&&!d.error){cb.dataset.orig=val}else{throw d.error||'Error'}}))}"
+        "});"
+        "Promise.all(proms).then(function(){"
+        "_tagSaveBtn.textContent='Saved!';_tagSaveBtn.style.opacity='0.5';"
+        "window._mktTagsSaved=true"
+        "}).catch(function(e){alert('Error saving tags: '+e);_tagSaveBtn.disabled=false;_tagSaveBtn.textContent='Save Tags';_tagSaveBtn.style.opacity='1'})"
+        "});"
+        "_tagDiv.appendChild(_tagSaveBtn);"
+        "document.getElementById('modal-body').appendChild(_tagDiv)}\n"
         "}).catch(function(e){console.error('[store] detail error:',e)})}\n"
         '\n'
+
+        # -- Admin tag toggle (win_shared_ach) --
+        "function _mktSetTag(pid,tagType,tagValue){"
+        "if(!window._xctApiKey)return Promise.reject('No API key');"
+        "return fetch('/api/v1/marketplace/tags',{method:'POST',"
+        "headers:{'Content-Type':'application/json','Authorization':'Bearer '+window._xctApiKey},"
+        "body:JSON.stringify({productId:pid,tagType:tagType,tagValue:tagValue})})"
+        ".then(r=>r.json())}\n"
+        ""
 
         # -- renderHistory --
         'function renderHistory(){\n'
@@ -8463,17 +8543,36 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Achievement detail modal
         "function _achShowDetail(tid){\n"
         "  var modal=document.getElementById('ach-detail-modal');\n"
-        "  modal.innerHTML='<div style=\"position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:10000\" onclick=\"if(event.target===this)this.remove()\"><div style=\"background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:24px;max-width:700px;width:90%;max-height:80vh;overflow-y:auto\"><div style=\"color:#888;text-align:center\">Loading achievements...</div></div></div>';\n"
+        "  modal.innerHTML='<div style=\"position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:10000\" onclick=\"if(event.target===this)this.remove()\"><div style=\"background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:24px;max-width:700px;width:90%;max-height:85vh;overflow-y:auto\"><div style=\"color:#888;text-align:center\">Loading achievements...</div></div></div>';\n"
         "  fetch('/api/v1/xbox/achievements/'+tid,{headers:{'Authorization':'Bearer '+window._xctApiKey}})\n"
         "  .then(r=>r.json()).then(data=>{\n"
         "    var achs=data.achievements||[];\n"
         "    var unlocked=achs.filter(a=>a.unlocked);\n"
         "    var locked=achs.filter(a=>!a.unlocked);\n"
-        "    var html='<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:16px\"><h3 style=\"margin:0;color:#fff\">'+_esc(data.title||'')+'</h3><span style=\"color:#888\">'+unlocked.length+'/'+achs.length+' achievements</span></div>';\n"
+        # Header with image and title
+        "    var heroImg=data.displayImage?'<img src=\"'+data.displayImage+'\" style=\"width:64px;height:64px;border-radius:6px;object-fit:cover\" onerror=\"this.style.display=\\'none\\'\">':'';\n"
+        "    var html='<div style=\"display:flex;gap:16px;align-items:center;margin-bottom:16px\">';\n"
+        "    html+=heroImg;\n"
+        "    html+='<div style=\"flex:1\"><h3 style=\"margin:0 0 4px;color:#fff\">'+_esc(data.title||'')+'</h3>';\n"
+        # Info row
+        "    var infoParts=[];\n"
+        "    if(data.xboxTitleId)infoParts.push('<span style=\"color:#888\">Title ID: <span style=\"color:#ccc\">'+data.xboxTitleId+'</span></span>');\n"
+        "    if(data.productId)infoParts.push('<span style=\"color:#888\">Product: <span style=\"color:#ccc\">'+data.productId+'</span></span>');\n"
+        "    if(infoParts.length)html+='<div style=\"font-size:12px;margin-bottom:4px\">'+infoParts.join(' &nbsp;|&nbsp; ')+'</div>';\n"
+        # Platforms
+        "    if(data.platforms&&data.platforms.length){html+='<div style=\"margin-bottom:4px\">';data.platforms.forEach(function(p){var cls=p.includes('Series')?'series':p.includes('360')?'x360':p==='PC'?'pc':p.includes('One')?'one':'mobile';html+='<span class=\"badge '+cls+'\" style=\"font-size:10px;padding:1px 6px\">'+p+'</span> '});html+='</div>'}\n"
+        # Progress summary
+        "    var pct=data.totalGS?Math.round(data.currentGS/data.totalGS*100):0;\n"
+        "    html+='<div style=\"font-size:13px\"><span style=\"color:#107c10;font-weight:700\">'+((data.currentGS||0)).toLocaleString()+' / '+(data.totalGS||0).toLocaleString()+' G</span>';\n"
+        "    html+=' &nbsp; <span style=\"color:#888\">'+unlocked.length+' / '+achs.length+' achievements ('+pct+'%)</span></div>';\n"
+        # Last played
+        "    if(data.lastPlayed){html+='<div style=\"font-size:11px;color:#666;margin-top:2px\">Last played: '+(data.lastPlayed||'').replace('T',' ').slice(0,16)+'</div>'}\n"
+        "    html+='</div></div>';\n"
+        # Achievement list
         "    function renderAch(a){\n"
         "      var icon=a.mediaUrl?'<img src=\"'+a.mediaUrl+'\" style=\"width:40px;height:40px;border-radius:4px;object-fit:cover\" onerror=\"this.style.visibility=\\'hidden\\'\">':'<div style=\"width:40px;height:40px;background:#333;border-radius:4px\"></div>';\n"
         "      var time=a.unlockTime?(a.unlockTime||'').replace('T',' ').slice(0,16):'';\n"
-        "      var rare=a.rarityPct?'<span style=\"color:#888;font-size:11px\">'+a.rarityPct.toFixed(1)+'% of players</span>':'';\n"
+        "      var rare=a.rarityPct?'<span style=\"color:#888;font-size:11px\">'+a.rarityPct.toFixed(1)+'%</span>':'';\n"
         "      var desc=a.isSecret&&!a.unlocked?'<em style=\"color:#555\">Secret achievement</em>':_esc(a.description||'');\n"
         "      return '<div style=\"display:flex;gap:12px;padding:8px 0;border-bottom:1px solid #222;align-items:center\">'+icon+'<div style=\"flex:1;min-width:0\"><div style=\"color:#ccc;font-weight:500\">'+_esc(a.name)+'</div><div style=\"color:#888;font-size:12px\">'+desc+'</div></div><div style=\"text-align:right;white-space:nowrap\"><div style=\"color:#107c10;font-weight:600\">'+a.gamerscore+' G</div>'+(time?'<div style=\"color:#666;font-size:11px\">'+time+'</div>':'')+''+rare+'</div></div>';\n"
         "    }\n"
@@ -9253,6 +9352,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "</div>';\n"
         "    entities.forEach(function(e){\n"
         "      var img=e.repImage?(e.repImage+'?w=84&h=84'):'';var imgTag=img?'<img src=\"'+img+'\" loading=\"lazy\" onerror=\"this.style.visibility=\\'hidden\\'\">':'<div style=\"width:42px;height:42px;background:#222;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#444;font-size:18px\">'+(e.name||'?')[0]+'</div>';\n"
+        "      var rating=e.avgRating?'<span style=\"color:#ffa726\">'+e.avgRating.toFixed(1)+'</span>':'<span style=\"color:#333\">-</span>';\n"
         "      var mc=e.avgMetacritic?'<span style=\"color:'+(e.avgMetacritic>=75?'#66bb6a':e.avgMetacritic>=50?'#ffa726':'#ef5350')+'\">'+e.avgMetacritic+'</span>':'<span style=\"color:#333\">-</span>';\n"
         "      h+='<div class=\"ent-row\" data-ent-type=\"'+type+'\" data-ent-name=\"'+_esc(e.name).replace(/'/g,'&#39;')+'\" onclick=\"_entToggleGames(this)\">';\n"
         "      h+='<div>'+imgTag+'</div>';\n"
@@ -16602,6 +16702,171 @@ def _download_with_progress(url, dest_file, expected_size=0, timeout=120):
         return -1
 
 
+def _phf_load(phf_path):
+    """Load a PHF (Piece Hash File) from disk. Returns parsed dict or None."""
+    try:
+        with open(phf_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("Pieces") and data.get("PieceSize"):
+            return data
+    except Exception:
+        pass
+    return None
+
+
+def _phf_verify(file_path, phf_data, verbose=True):
+    """Verify a file against PHF piece hashes.
+
+    Returns (total_pieces, good_pieces, bad_piece_indices).
+    """
+    piece_size = phf_data["PieceSize"]
+    pieces = phf_data["Pieces"]
+    total = len(pieces)
+    bad = []
+    good = 0
+
+    if not os.path.exists(file_path):
+        return total, 0, list(range(total))
+
+    file_size = os.path.getsize(file_path)
+    label = os.path.basename(file_path)[:38]
+
+    with open(file_path, "rb") as f:
+        for i, expected_hash in enumerate(pieces):
+            data = f.read(piece_size)
+            if not data:
+                bad.extend(range(i, total))
+                break
+            actual = base64.b64encode(hashlib.sha256(data).digest()).decode("ascii")
+            if actual == expected_hash:
+                good += 1
+            else:
+                bad.append(i)
+            if verbose and (i + 1) % 500 == 0:
+                pct = (i + 1) * 100 // total
+                print(f"\r    Verifying: {pct:3d}% ({i + 1}/{total} pieces)  {label:<38}",
+                      end="", flush=True)
+
+    if verbose:
+        print(f"\r    Verified: {good}/{total} pieces OK" + " " * 30)
+    return total, good, bad
+
+
+def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
+    """Download with PHF verification: stream, verify, repair bad pieces.
+
+    Phase 1: If file exists at full size, verify only — skip if clean.
+    Phase 2: Stream download (or resume) via normal downloader.
+    Phase 3: Verify all pieces against PHF hashes.
+    Phase 4: Repair bad pieces via HTTP Range requests.
+
+    Returns bytes downloaded, or -1 on error.
+    """
+    piece_size = phf_data.get("PieceSize", 1048576)
+    pieces = phf_data.get("Pieces", [])
+    content_length = phf_data.get("ContentLength", 0)
+    if not expected_size:
+        expected_size = content_length
+    MAX_RETRIES = 3
+
+    if not pieces:
+        print("    [!] PHF has no piece hashes — falling back to normal download")
+        return _download_with_progress(url, dest_file, expected_size, timeout)
+
+    # Phase 1: existing complete file — verify only
+    if os.path.exists(dest_file) and expected_size and os.path.getsize(dest_file) == expected_size:
+        print("    PHF: verifying existing file...")
+        _total, _good, _bad = _phf_verify(dest_file, phf_data)
+        if not _bad:
+            print(f"    All {_total} pieces verified OK — skipping download.")
+            return 0
+        print(f"    {len(_bad)}/{_total} pieces bad — will repair")
+    else:
+        _bad = None
+
+    # Phase 2: stream download (or resume) if file is missing or mostly bad
+    if _bad is None or len(_bad) > len(pieces) // 2:
+        result = _download_with_progress(url, dest_file, expected_size, timeout)
+        if result < 0:
+            return result
+
+        # Phase 3: verify after stream download
+        print("    PHF: verifying download...")
+        _total, _good, _bad = _phf_verify(dest_file, phf_data)
+        if not _bad:
+            print(f"    All {_total} pieces verified OK.")
+            return result
+        print(f"    {len(_bad)} piece(s) failed verification — repairing")
+
+    # Phase 4: repair bad pieces via Range requests
+    repaired = 0
+    failed = 0
+    label = os.path.basename(dest_file)[:38]
+    with open(dest_file, "r+b") as f:
+        for pi, piece_idx in enumerate(_bad):
+            piece_start = piece_idx * piece_size
+            piece_end = min(piece_start + piece_size, expected_size) - 1 if expected_size else piece_start + piece_size - 1
+
+            success = False
+            for attempt in range(MAX_RETRIES):
+                try:
+                    req = urllib.request.Request(url, headers={
+                        "Range": f"bytes={piece_start}-{piece_end}"
+                    })
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        data = resp.read()
+                    actual = base64.b64encode(hashlib.sha256(data).digest()).decode("ascii")
+                    if actual != pieces[piece_idx]:
+                        if attempt < MAX_RETRIES - 1:
+                            continue
+                        failed += 1
+                        break
+                    f.seek(piece_start)
+                    f.write(data)
+                    f.flush()
+                    repaired += 1
+                    success = True
+                    break
+                except Exception:
+                    if attempt < MAX_RETRIES - 1:
+                        time.sleep(2 ** attempt)
+                        continue
+                    failed += 1
+                    break
+
+            pct = (pi + 1) * 100 // len(_bad)
+            filled = 30 * (pi + 1) // len(_bad)
+            bar = "#" * filled + "-" * (30 - filled)
+            print(f"\r    [{bar}] {pct:3d}%  repairing {pi + 1}/{len(_bad)} pieces  {label:<38}",
+                  end="", flush=True)
+
+    print()
+    if failed:
+        print(f"    [!] Repaired {repaired}, {failed} piece(s) still bad")
+        return -1
+    print(f"    Repaired {repaired} piece(s) — file verified OK.")
+    return repaired * piece_size
+
+
+def _phf_fetch_and_save(phf_url, dest_dir, pkg_filename, timeout=30):
+    """Fetch a PHF from URL and save next to the package. Returns parsed dict or None."""
+    if not phf_url:
+        return None
+    phf_path = os.path.join(dest_dir, pkg_filename + ".phf")
+    try:
+        req = urllib.request.Request(phf_url)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+        data = json.loads(raw.decode("utf-8"))
+        if data.get("Pieces") and data.get("PieceSize"):
+            with open(phf_path, "wb") as f:
+                f.write(raw)
+            return data
+    except Exception as e:
+        debug(f"PHF fetch failed: {e}")
+    return None
+
+
 def download_from_cdn(enriched, dest_path, indices=None):
     """
     Download Xbox game packages from CDN using URLs extracted from .xvs files.
@@ -19948,7 +20213,10 @@ def _fe3_sync_updates(cookie, cat_id, ring="Retail", timeout=30):
 
 
 def _fe3_get_url(update_id, revision, ring="Retail", timeout=30):
-    """Get CDN download URL for a single package via GetExtendedUpdateInfo2."""
+    """Get CDN download URL + PHF URL for a package via GetExtendedUpdateInfo2.
+
+    Returns (content_url, phf_url) — either may be None.
+    """
     from xml.dom import minidom
 
     body = _FE3_FILEURL_XML.format(
@@ -19959,18 +20227,20 @@ def _fe3_get_url(update_id, revision, ring="Retail", timeout=30):
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         doc = minidom.parseString(resp.read())
 
+    content_url = None
+    phf_url = None
     for loc in doc.getElementsByTagName("FileLocation"):
         url_els = loc.getElementsByTagName("Url")
         if url_els and url_els[0].firstChild:
             dl_url = url_els[0].firstChild.nodeValue
             if len(dl_url) == 99:   # skip blockmap URLs (always 99 chars)
                 continue
-            # skip PHF (Piece Hash File) URLs — want actual content
             dl_path = dl_url.split("?")[0].lower()
             if dl_path.endswith(".phf"):
-                continue
-            return dl_url
-    return None
+                phf_url = dl_url
+            elif not content_url:
+                content_url = dl_url
+    return content_url, phf_url
 
 
 def _detect_arch():
@@ -20143,11 +20413,12 @@ def _fe3_get_links(value, input_type="ProductId", ring="Retail"):
     # --- Step 4: Resolve download URLs ---
     results = []
     for fname, info in updates.items():
-        dl_url = _fe3_get_url(info["update_id"], info["revision"], ring)
+        dl_url, phf_url = _fe3_get_url(info["update_id"], info["revision"], ring)
         if dl_url:
             results.append({
                 "filename": fname,
                 "url":      dl_url,
+                "phf_url":  phf_url,
                 "size":     info.get("size", 0),
             })
 
@@ -20614,7 +20885,13 @@ def process_store_packages():
         fname = lnk["filename"]
         out_path = os.path.join(dest, fname)
         print(f"  ▸ {fname}")
-        _download_with_progress(lnk["url"], out_path, expected_size=lnk.get("size", 0))
+        phf_data = _phf_load(os.path.join(dest, fname + ".phf"))
+        if not phf_data and lnk.get("phf_url"):
+            phf_data = _phf_fetch_and_save(lnk["phf_url"], dest, fname)
+        if phf_data:
+            _phf_download(lnk["url"], out_path, phf_data, expected_size=lnk.get("size", 0))
+        else:
+            _download_with_progress(lnk["url"], out_path, expected_size=lnk.get("size", 0))
         downloaded.append(fname)
     print(f"\n[+] Done. Files in: {dest}")
 
@@ -21438,17 +21715,19 @@ def _downgrader_recover_purged(purged, content_id, xbl3_token, cdn_info, store_i
                 # Resolve download URLs for matches
                 all_urls = []
                 best_url = None
+                best_phf_url = None
                 best_size = 0
                 best_ring = "?"
                 for mfname, minfo in matches:
                     ring = minfo.get("_ring", "Retail")
                     try:
-                        dl_url = _fe3_get_url(
+                        dl_url, phf_url = _fe3_get_url(
                             minfo["update_id"], minfo["revision"], ring)
                         if dl_url:
                             all_urls.append(dl_url)
                             if not best_url:
                                 best_url = dl_url
+                                best_phf_url = phf_url
                                 best_size = minfo.get("size", 0)
                                 best_ring = ring
                     except Exception:
@@ -21458,6 +21737,7 @@ def _downgrader_recover_purged(purged, content_id, xbl3_token, cdn_info, store_i
                     v["size"] = best_size
                     v["available"] = True
                     v["recovery_method"] = "wu_delivery"
+                    v["_phf_url"] = best_phf_url
                     if len(all_urls) > 1:
                         v["wu_links"] = all_urls
                     recovered += 1
@@ -22036,10 +22316,13 @@ def process_game_downgrader():
                 for fname, info in fe3_all_data.items():
                     ring = info.get("_ring", "Retail")
                     try:
-                        info["_dl_url"] = _fe3_get_url(info["update_id"], info["revision"],
+                        dl_url, phf_url = _fe3_get_url(info["update_id"], info["revision"],
                                                        ring, timeout=15)
+                        info["_dl_url"] = dl_url
+                        info["_phf_url"] = phf_url
                     except Exception:
                         info["_dl_url"] = None
+                        info["_phf_url"] = None
         except Exception as e:
             print(f"[!] FE3 query failed: {e}")
 
@@ -22140,6 +22423,7 @@ def process_game_downgrader():
                 "available": bool(dl_url), "size": info.get("size", 0),
                 "latest": False, "filename": fname, "date": "",
                 "_source": "fe3", "_ring": info.get("_ring", "Retail"),
+                "_phf_url": info.get("_phf_url"),
             })
 
         # Source 3: WU Catalog versions (shared, already built above)
@@ -22319,7 +22603,17 @@ def process_game_downgrader():
         print(f"\n  Downloading v{chosen['version']} ({chosen['size'] / 1e9:.2f} GB)...")
         print(f"  Folder:   {game_folder}")
         print(f"  Filename: {final_name}")
-        result = _download_with_progress(chosen["url"], out_path, expected_size=chosen["size"])
+
+        # Try PHF-verified download: check for existing .phf or fetch from FE3
+        phf_data = _phf_load(os.path.join(game_folder, final_name + ".phf"))
+        if not phf_data and chosen.get("_phf_url"):
+            print("  Fetching PHF for verified download...")
+            phf_data = _phf_fetch_and_save(chosen["_phf_url"], game_folder, final_name)
+        if phf_data:
+            print(f"  PHF: {len(phf_data['Pieces'])} pieces × {phf_data['PieceSize'] // 1024}KB")
+            result = _phf_download(chosen["url"], out_path, phf_data, expected_size=chosen["size"])
+        else:
+            result = _download_with_progress(chosen["url"], out_path, expected_size=chosen["size"])
         if result >= 0:
             print(f"\n[+] Downloaded: {out_path}")
             # Offer to install via PowerShell for MSIXVC/MSIX packages
@@ -22587,6 +22881,20 @@ def _batch_download_worker(task):
             backoff = min(backoff * 2, RETRY_CAP)
             continue
 
+    # Post-download PHF verification (if PHF available)
+    if task.get("error") is None and not task.get("skipped"):
+        phf_url = task.get("_phf_url")
+        game_folder = os.path.dirname(dest_file)
+        pkg_name = os.path.basename(dest_file)
+        phf_data = _phf_load(os.path.join(game_folder, pkg_name + ".phf"))
+        if not phf_data and phf_url:
+            phf_data = _phf_fetch_and_save(phf_url, game_folder, pkg_name, timeout=30)
+        if phf_data:
+            _total, _good, _bad = _phf_verify(dest_file, phf_data, verbose=False)
+            task["phf_total"] = _total
+            task["phf_good"] = _good
+            task["phf_bad"] = len(_bad)
+
     with _batch_progress_lock:
         _batch_progress[idx]["done"] = True
         _batch_progress[idx]["retry_wait"] = 0
@@ -22797,6 +23105,7 @@ def process_batch_downgrader():
                     "version": v["version"],
                     "filename": final_name,
                     "game_entry": game_entry,
+                    "_phf_url": v.get("_phf_url"),
                 })
                 queued += 1
 
@@ -22875,8 +23184,14 @@ def process_batch_downgrader():
                         file_started = info.get("started", t_start)
                         file_elapsed = time.time() - file_started
                         speed = actual_size / file_elapsed if file_elapsed > 0.5 else 0
+                        phf_note = ""
+                        if "phf_total" in task:
+                            if task["phf_bad"] == 0:
+                                phf_note = f"  PHF:{task['phf_total']}ok"
+                            else:
+                                phf_note = f"  PHF:{task['phf_bad']}BAD"
                         print(f"  [{done_count}/{total_q}]  {title} v{ver}"
-                              f"  {sz_str}  done ({speed / 1e6:.1f} MB/s)")
+                              f"  {sz_str}  done ({speed / 1e6:.1f} MB/s){phf_note}")
                         task["game_entry"]["downloaded"].append({
                             "version": ver,
                             "size": actual_size,
@@ -23237,10 +23552,13 @@ def process_purge_recovery():
                 for fname, info in fe3_all_data.items():
                     ring = info.get("_ring", "Retail")
                     try:
-                        info["_dl_url"] = _fe3_get_url(info["update_id"], info["revision"],
+                        dl_url, phf_url = _fe3_get_url(info["update_id"], info["revision"],
                                                        ring, timeout=15)
+                        info["_dl_url"] = dl_url
+                        info["_phf_url"] = phf_url
                     except Exception:
                         info["_dl_url"] = None
+                        info["_phf_url"] = None
         except Exception as e:
             print(f"[!] FE3 query failed: {e}")
 
@@ -23276,6 +23594,7 @@ def process_purge_recovery():
                 "available": bool(dl_url), "size": info.get("size", 0),
                 "latest": False, "filename": fname, "date": "",
                 "_source": "fe3", "_ring": info.get("_ring", "Retail"),
+                "_phf_url": info.get("_phf_url"),
             })
 
         # Merge CDN + FE3 results
@@ -23465,7 +23784,17 @@ def process_purge_recovery():
         print(f"\n  Downloading v{chosen['version']} ({chosen['size'] / 1e9:.2f} GB)...")
         print(f"  Folder:   {game_folder}")
         print(f"  Filename: {final_name}")
-        result = _download_with_progress(chosen["url"], out_path, expected_size=chosen["size"])
+
+        # Try PHF-verified download
+        phf_data = _phf_load(os.path.join(game_folder, final_name + ".phf"))
+        if not phf_data and chosen.get("_phf_url"):
+            print("  Fetching PHF for verified download...")
+            phf_data = _phf_fetch_and_save(chosen["_phf_url"], game_folder, final_name)
+        if phf_data:
+            print(f"  PHF: {len(phf_data['Pieces'])} pieces × {phf_data['PieceSize'] // 1024}KB")
+            result = _phf_download(chosen["url"], out_path, phf_data, expected_size=chosen["size"])
+        else:
+            result = _download_with_progress(chosen["url"], out_path, expected_size=chosen["size"])
         if result >= 0:
             print(f"\n[+] Downloaded: {out_path}")
             # Offer to install via PowerShell for MSIXVC/MSIX packages
