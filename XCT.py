@@ -16753,12 +16753,14 @@ def _phf_verify(file_path, phf_data, verbose=True):
 
 
 def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
-    """Download with PHF verification: stream, verify, repair bad pieces.
+    """Download a file piece-by-piece using PHF hashes for verification.
 
-    Phase 1: If file exists at full size, verify only — skip if clean.
-    Phase 2: Stream download (or resume) via normal downloader.
-    Phase 3: Verify all pieces against PHF hashes.
-    Phase 4: Repair bad pieces via HTTP Range requests.
+    Supports two modes:
+    - Stream mode: if the content URL supports full download, stream it then verify.
+    - Piece mode: download each piece individually via Range requests, verify hash.
+
+    Automatically falls back to piece mode if streaming fails (404/403).
+    Resumes: checks existing pieces on disk, skips verified ones.
 
     Returns bytes downloaded, or -1 on error.
     """
@@ -16773,45 +16775,149 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
         print("    [!] PHF has no piece hashes — falling back to normal download")
         return _download_with_progress(url, dest_file, expected_size, timeout)
 
-    # Phase 1: existing complete file — verify only
-    if os.path.exists(dest_file) and expected_size and os.path.getsize(dest_file) == expected_size:
-        print("    PHF: verifying existing file...")
-        _total, _good, _bad = _phf_verify(dest_file, phf_data)
-        if not _bad:
-            print(f"    All {_total} pieces verified OK — skipping download.")
-            return 0
-        print(f"    {len(_bad)}/{_total} pieces bad — will repair")
-    else:
-        _bad = None
-
-    # Phase 2: stream download (or resume) if file is missing or mostly bad
-    if _bad is None or len(_bad) > len(pieces) // 2:
-        result = _download_with_progress(url, dest_file, expected_size, timeout)
-        if result < 0:
-            return result
-
-        # Phase 3: verify after stream download
-        print("    PHF: verifying download...")
-        _total, _good, _bad = _phf_verify(dest_file, phf_data)
-        if not _bad:
-            print(f"    All {_total} pieces verified OK.")
-            return result
-        print(f"    {len(_bad)} piece(s) failed verification — repairing")
-
-    # Phase 4: repair bad pieces via Range requests
-    repaired = 0
-    failed = 0
+    total_pieces = len(pieces)
     label = os.path.basename(dest_file)[:38]
-    with open(dest_file, "r+b") as f:
-        for pi, piece_idx in enumerate(_bad):
-            piece_start = piece_idx * piece_size
+
+    # Check which pieces we already have (resume support)
+    start_piece = 0
+    if os.path.exists(dest_file):
+        existing_size = os.path.getsize(dest_file)
+        if expected_size and existing_size == expected_size:
+            # Full file exists — verify
+            print("    PHF: verifying existing file...")
+            _total, _good, _bad = _phf_verify(dest_file, phf_data)
+            if not _bad:
+                print(f"    All {_total} pieces verified OK — skipping download.")
+                return 0
+            print(f"    {len(_bad)}/{_total} pieces bad — will re-download those pieces")
+            return _phf_repair_pieces(url, dest_file, phf_data, _bad, expected_size, timeout)
+        elif existing_size > 0:
+            # Partial file — find last verified piece to resume from
+            full_pieces_on_disk = existing_size // piece_size
+            if full_pieces_on_disk > 0:
+                print(f"    Resuming: checking {full_pieces_on_disk} existing pieces...")
+                _total, _good, _bad = _phf_verify(dest_file, phf_data, verbose=False)
+                if _bad:
+                    start_piece = _bad[0]  # start from first bad piece
+                else:
+                    start_piece = full_pieces_on_disk
+                print(f"    {start_piece}/{total_pieces} pieces verified, resuming from piece {start_piece}")
+
+    # Try streaming first (fast path) — if the content URL works
+    if start_piece == 0:
+        try:
+            test_req = urllib.request.Request(url, method="HEAD")
+            test_req.add_header("User-Agent", "Microsoft-Delivery-Optimization/10.0")
+            with urllib.request.urlopen(test_req, timeout=15) as resp:
+                if resp.status == 200:
+                    cl = int(resp.headers.get("Content-Length", 0))
+                    if cl > 10_000_000:  # Real content, not a PHF
+                        print(f"    Streaming {cl / 1e9:.2f} GB + PHF verification...")
+                        result = _download_with_progress(url, dest_file, expected_size, timeout)
+                        if result >= 0:
+                            print("    PHF: verifying download...")
+                            _total, _good, _bad = _phf_verify(dest_file, phf_data)
+                            if not _bad:
+                                print(f"    All {_total} pieces verified OK.")
+                                return result
+                            print(f"    {len(_bad)} piece(s) failed — repairing")
+                            return _phf_repair_pieces(url, dest_file, phf_data, _bad, expected_size, timeout)
+        except Exception:
+            pass  # HEAD failed or URL doesn't serve content — fall through to piece mode
+
+    # Piece-by-piece download via Range requests
+    print(f"    Downloading piece-by-piece ({total_pieces} × {piece_size // 1024}KB = {expected_size / 1e9:.2f} GB)")
+    downloaded_bytes = 0
+    failed = 0
+    t_start = time.time()
+
+    # Open file for writing (resume-aware)
+    mode = "r+b" if (start_piece > 0 and os.path.exists(dest_file)) else "wb"
+    with open(dest_file, mode) as f:
+        if start_piece > 0:
+            f.seek(start_piece * piece_size)
+        elif mode == "wb":
+            pass  # fresh file
+
+        for pi in range(start_piece, total_pieces):
+            piece_start = pi * piece_size
             piece_end = min(piece_start + piece_size, expected_size) - 1 if expected_size else piece_start + piece_size - 1
+            expected_hash = pieces[pi]
 
             success = False
             for attempt in range(MAX_RETRIES):
                 try:
                     req = urllib.request.Request(url, headers={
-                        "Range": f"bytes={piece_start}-{piece_end}"
+                        "Range": f"bytes={piece_start}-{piece_end}",
+                        "User-Agent": "Microsoft-Delivery-Optimization/10.0",
+                    })
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        data = resp.read()
+                    actual_hash = base64.b64encode(hashlib.sha256(data).digest()).decode("ascii")
+                    if actual_hash != expected_hash:
+                        if attempt < MAX_RETRIES - 1:
+                            time.sleep(1)
+                            continue
+                        failed += 1
+                        # Write anyway to keep file aligned
+                        f.write(data)
+                        break
+                    f.write(data)
+                    downloaded_bytes += len(data)
+                    success = True
+                    break
+                except Exception as e:
+                    if attempt < MAX_RETRIES - 1:
+                        time.sleep(2 ** (attempt + 1))
+                        continue
+                    debug(f"PHF piece {pi} failed: {e}")
+                    failed += 1
+                    # Write zeros to keep alignment
+                    fill_size = piece_end - piece_start + 1 if expected_size else piece_size
+                    f.write(b'\x00' * fill_size)
+                    break
+
+            # Progress display
+            done = pi - start_piece + 1
+            total_todo = total_pieces - start_piece
+            pct = done * 100 // total_todo
+            filled = 30 * done // total_todo
+            bar = "#" * filled + "-" * (30 - filled)
+            elapsed = time.time() - t_start
+            speed = downloaded_bytes / elapsed if elapsed > 0.5 else 0
+            eta_s = (expected_size - (pi + 1) * piece_size) / speed if speed > 0 else 0
+            eta = f"{eta_s / 60:.0f}m" if eta_s >= 60 else f"{eta_s:.0f}s"
+            print(f"\r    [{bar}] {pct:3d}%  {downloaded_bytes / 1e9:.2f}/{expected_size / 1e9:.2f} GB"
+                  f"  {speed / 1e6:.1f} MB/s  ETA {eta}  {label}",
+                  end="", flush=True)
+
+    print()
+    if failed:
+        print(f"    [!] {failed} piece(s) failed verification")
+        return -1
+    print(f"    Download complete — {total_pieces} pieces verified OK.")
+    return downloaded_bytes
+
+
+def _phf_repair_pieces(url, dest_file, phf_data, bad_indices, expected_size, timeout=120):
+    """Repair specific bad pieces in an existing file via Range requests."""
+    piece_size = phf_data["PieceSize"]
+    pieces = phf_data["Pieces"]
+    MAX_RETRIES = 3
+    repaired = 0
+    failed = 0
+    label = os.path.basename(dest_file)[:38]
+
+    with open(dest_file, "r+b") as f:
+        for pi, piece_idx in enumerate(bad_indices):
+            piece_start = piece_idx * piece_size
+            piece_end = min(piece_start + piece_size, expected_size) - 1 if expected_size else piece_start + piece_size - 1
+
+            for attempt in range(MAX_RETRIES):
+                try:
+                    req = urllib.request.Request(url, headers={
+                        "Range": f"bytes={piece_start}-{piece_end}",
+                        "User-Agent": "Microsoft-Delivery-Optimization/10.0",
                     })
                     with urllib.request.urlopen(req, timeout=timeout) as resp:
                         data = resp.read()
@@ -16825,7 +16931,6 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
                     f.write(data)
                     f.flush()
                     repaired += 1
-                    success = True
                     break
                 except Exception:
                     if attempt < MAX_RETRIES - 1:
@@ -16834,10 +16939,10 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
                     failed += 1
                     break
 
-            pct = (pi + 1) * 100 // len(_bad)
-            filled = 30 * (pi + 1) // len(_bad)
+            pct = (pi + 1) * 100 // len(bad_indices)
+            filled = 30 * (pi + 1) // len(bad_indices)
             bar = "#" * filled + "-" * (30 - filled)
-            print(f"\r    [{bar}] {pct:3d}%  repairing {pi + 1}/{len(_bad)} pieces  {label:<38}",
+            print(f"\r    [{bar}] {pct:3d}%  repairing {pi + 1}/{len(bad_indices)} pieces  {label:<38}",
                   end="", flush=True)
 
     print()
@@ -21197,6 +21302,31 @@ def _downgrader_discover_versions(content_id, xbl3_token):
     latest_cdn_roots = base_pkg.get("CdnRootPaths", [])
     latest_rel = base_pkg.get("RelativeUrl", "")
     latest_url = (latest_cdn_roots[0] + latest_rel) if latest_cdn_roots and latest_rel else ""
+    latest_phf_url = None
+    latest_filename = base_pkg.get("FileName", "")
+
+    # Detect PHF: API sometimes returns the .phf URL instead of the content URL
+    # The PHF contains piece hashes; actual content must be downloaded piece-by-piece
+    if latest_url.split("?")[0].lower().endswith(".phf"):
+        latest_phf_url = latest_url
+        # Content URL is same path without .phf suffix
+        q = ("?" + latest_phf_url.split("?", 1)[1]) if "?" in latest_phf_url else ""
+        latest_url = latest_phf_url.split("?")[0][:-4] + q
+        if latest_filename.lower().endswith(".phf"):
+            latest_filename = latest_filename[:-4]
+        # Download and parse the PHF to get actual content size
+        try:
+            phf_req = urllib.request.Request(latest_phf_url)
+            phf_req.add_header("User-Agent", "Microsoft-Delivery-Optimization/10.0")
+            with urllib.request.urlopen(phf_req, timeout=30) as phf_resp:
+                phf_raw = phf_resp.read()
+            phf_parsed = json.loads(phf_raw.decode("utf-8"))
+            if phf_parsed.get("ContentLength"):
+                latest_size = phf_parsed["ContentLength"]
+                print(f"    PHF: {len(phf_parsed.get('Pieces', []))} pieces,"
+                      f" {latest_size / 1e9:.2f} GB actual content")
+        except Exception as e:
+            debug(f"PHF fetch failed for latest: {e}")
 
     # Parse latest versionId: "1.0.0.8.423dc5b4-e829-4700-ba11-5c2ae78a57fe"
     vid_parts = latest_vid.rsplit(".", 1) if latest_vid.count(".") >= 4 else None
@@ -21217,7 +21347,7 @@ def _downgrader_discover_versions(content_id, xbl3_token):
     cdn_info = {
         "cdn_roots": latest_cdn_roots,
         "rel_url": latest_rel,
-        "filename": base_pkg.get("FileName", ""),
+        "filename": latest_filename,
         "latest_ver": latest_ver,
         "latest_bid": latest_bid,
     }
@@ -21230,8 +21360,9 @@ def _downgrader_discover_versions(content_id, xbl3_token):
         "available": True,
         "size": latest_size,
         "latest": True,
-        "filename": base_pkg.get("FileName", ""),
+        "filename": latest_filename,
         "date": base_pkg.get("ModifiedDate", ""),
+        "_phf_url": latest_phf_url,
     })
 
     # Parse XSP filenames to find older version IDs
@@ -21368,6 +21499,25 @@ def _downgrader_discover_versions(content_id, xbl3_token):
                 rel = vpkg.get("RelativeUrl", "")
                 dl_url = (cdn_roots[0] + rel) if cdn_roots and rel else ""
                 sz = vpkg.get("FileSize", 0)
+                v_phf_url = None
+                v_filename = vpkg.get("FileName", "")
+                # Detect PHF URL for older versions too
+                if dl_url.split("?")[0].lower().endswith(".phf"):
+                    v_phf_url = dl_url
+                    q = ("?" + v_phf_url.split("?", 1)[1]) if "?" in v_phf_url else ""
+                    dl_url = v_phf_url.split("?")[0][:-4] + q
+                    if v_filename.lower().endswith(".phf"):
+                        v_filename = v_filename[:-4]
+                    # Try to get real size from PHF
+                    try:
+                        phf_req = urllib.request.Request(v_phf_url)
+                        phf_req.add_header("User-Agent", "Microsoft-Delivery-Optimization/10.0")
+                        with urllib.request.urlopen(phf_req, timeout=15) as phf_resp:
+                            v_phf = json.loads(phf_resp.read().decode("utf-8"))
+                        if v_phf.get("ContentLength"):
+                            sz = v_phf["ContentLength"]
+                    except Exception:
+                        pass
                 print(f"available ({sz / 1e9:.2f} GB)")
                 versions.append({
                     "version": ov["version"],
@@ -21377,8 +21527,9 @@ def _downgrader_discover_versions(content_id, xbl3_token):
                     "available": True,
                     "size": sz,
                     "latest": False,
-                    "filename": vpkg.get("FileName", ""),
+                    "filename": v_filename,
                     "date": vdata.get("AvailabilityDate", ""),
+                    "_phf_url": v_phf_url,
                 })
             else:
                 print("no base package")
