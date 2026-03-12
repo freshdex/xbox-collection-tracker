@@ -16757,21 +16757,21 @@ def _phf_verify(file_path, phf_data, verbose=True):
 def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
     """Download a file piece-by-piece using PHF hashes for verification.
 
-    Supports two modes:
-    - Stream mode: if the content URL supports full download, stream it then verify.
-    - Piece mode: download each piece individually via Range requests, verify hash.
-
-    Automatically falls back to piece mode if streaming fails (404/403).
-    Resumes: checks existing pieces on disk, skips verified ones.
+    Uses 10 parallel threads with per-thread progress bars showing each chunk.
+    Supports streaming fast-path and piece-by-piece with resume.
 
     Returns bytes downloaded, or -1 on error.
     """
+    import threading as _thr
+    import queue as _queue
+
     piece_size = phf_data.get("PieceSize", 1048576)
     pieces = phf_data.get("Pieces", [])
     content_length = phf_data.get("ContentLength", 0)
     if not expected_size:
         expected_size = content_length
     MAX_RETRIES = 3
+    NUM_THREADS = 10
 
     if not pieces:
         print("    [!] PHF has no piece hashes — falling back to normal download")
@@ -16785,7 +16785,6 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
     if os.path.exists(dest_file):
         existing_size = os.path.getsize(dest_file)
         if expected_size and existing_size == expected_size:
-            # Full file exists — verify
             print("    PHF: verifying existing file...")
             _total, _good, _bad = _phf_verify(dest_file, phf_data)
             if not _bad:
@@ -16794,18 +16793,17 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
             print(f"    {len(_bad)}/{_total} pieces bad — will re-download those pieces")
             return _phf_repair_pieces(url, dest_file, phf_data, _bad, expected_size, timeout)
         elif existing_size > 0:
-            # Partial file — find last verified piece to resume from
             full_pieces_on_disk = existing_size // piece_size
             if full_pieces_on_disk > 0:
                 print(f"    Resuming: checking {full_pieces_on_disk} existing pieces...")
                 _total, _good, _bad = _phf_verify(dest_file, phf_data, verbose=False)
                 if _bad:
-                    start_piece = _bad[0]  # start from first bad piece
+                    start_piece = _bad[0]
                 else:
                     start_piece = full_pieces_on_disk
                 print(f"    {start_piece}/{total_pieces} pieces verified, resuming from piece {start_piece}")
 
-    # Try streaming first (fast path) — if the content URL works
+    # Try streaming first (fast path)
     if start_piece == 0:
         try:
             test_req = urllib.request.Request(url, method="HEAD")
@@ -16813,7 +16811,7 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
             with urllib.request.urlopen(test_req, timeout=15) as resp:
                 if resp.status == 200:
                     cl = int(resp.headers.get("Content-Length", 0))
-                    if cl > 10_000_000:  # Real content, not a PHF
+                    if cl > 10_000_000:
                         print(f"    Streaming {cl / 1e9:.2f} GB + PHF verification...")
                         result = _download_with_progress(url, dest_file, expected_size, timeout)
                         if result >= 0:
@@ -16825,80 +16823,170 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
                             print(f"    {len(_bad)} piece(s) failed — repairing")
                             return _phf_repair_pieces(url, dest_file, phf_data, _bad, expected_size, timeout)
         except Exception:
-            pass  # HEAD failed or URL doesn't serve content — fall through to piece mode
+            pass
 
-    # Piece-by-piece download via Range requests
+    # --- Parallel piece-by-piece download with per-thread progress ---
+    total_todo = total_pieces - start_piece
     print(f"    Downloading piece-by-piece ({total_pieces} × {piece_size // 1024}KB = {expected_size / 1e9:.2f} GB)")
-    downloaded_bytes = 0
-    failed = 0
+    print(f"    {NUM_THREADS} threads")
+
+    piece_q = _queue.Queue()
+    for pi in range(start_piece, total_pieces):
+        piece_q.put(pi)
+
+    lock = _thr.Lock()
+    file_lock = _thr.Lock()
+    completed_count = [0]
+    downloaded_bytes = [0]
+    failed_pieces = []
     t_start = time.time()
+    # Per-thread status: {tid: {"state","piece","bytes","total"}}
+    tstat = {tid: {"state": "idle", "piece": -1, "bytes": 0, "total": 0} for tid in range(NUM_THREADS)}
+    display_init = [False]
 
-    # Open file for writing (resume-aware)
-    mode = "r+b" if (start_piece > 0 and os.path.exists(dest_file)) else "wb"
-    with open(dest_file, mode) as f:
-        if start_piece > 0:
-            f.seek(start_piece * piece_size)
-        elif mode == "wb":
-            pass  # fresh file
+    def display():
+        lines = []
+        for tid in range(NUM_THREADS):
+            ts = tstat[tid]
+            pi = ts["piece"]
+            byt = ts["bytes"]
+            tot = ts["total"]
+            st = ts["state"]
+            if st == "idle":
+                lines.append(f"    T{tid+1:02d}: {'':>10s} idle")
+            elif st == "done":
+                lines.append(f"    T{tid+1:02d}: [\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588] Piece {pi+1:>5d}/{total_pieces}  1.0/1.0 MB  \u2713")
+            elif st == "verify":
+                lines.append(f"    T{tid+1:02d}: [\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588] Piece {pi+1:>5d}/{total_pieces}  verifying")
+            else:
+                pct = min(100, byt * 100 // tot) if tot > 0 else 0
+                filled = 10 * pct // 100
+                bar = "\u2588" * filled + "\u2591" * (10 - filled)
+                lines.append(f"    T{tid+1:02d}: [{bar}] Piece {pi+1:>5d}/{total_pieces}  {byt/1048576:.1f}/{tot/1048576:.1f} MB")
+        # Overall
+        with lock:
+            done_cnt = completed_count[0]
+            dl_b = downloaded_bytes[0]
+        pct = done_cnt * 100 // total_todo if total_todo > 0 else 100
+        filled = 30 * done_cnt // total_todo if total_todo > 0 else 30
+        bar = "#" * filled + "-" * (30 - filled)
+        elapsed = time.time() - t_start
+        speed = dl_b / elapsed if elapsed > 0.5 else 0
+        remaining_bytes = max(0, expected_size - (start_piece + done_cnt) * piece_size)
+        eta_s = remaining_bytes / speed if speed > 0 else 0
+        eta = f"{eta_s / 60:.0f}m" if eta_s >= 60 else f"{eta_s:.0f}s"
+        lines.append(f"    [{bar}] {pct:3d}%  {dl_b/1e9:.2f}/{expected_size/1e9:.2f} GB  {speed/1e6:.1f} MB/s  ETA {eta}  {label}")
 
-        for pi in range(start_piece, total_pieces):
-            piece_start = pi * piece_size
-            piece_end = min(piece_start + piece_size, expected_size) - 1 if expected_size else piece_start + piece_size - 1
-            expected_hash = pieces[pi]
+        n = len(lines)
+        if display_init[0]:
+            sys.stdout.write(f"\033[{n}A")
+        display_init[0] = True
+        for line in lines:
+            sys.stdout.write(f"\r\033[K{line}\n")
+        sys.stdout.flush()
+
+    # Pre-allocate file for random-access writes
+    if start_piece == 0 or not os.path.exists(dest_file):
+        with open(dest_file, "wb") as f:
+            f.truncate(expected_size)
+    else:
+        # Extend to full size for resume if needed
+        with open(dest_file, "r+b") as f:
+            f.seek(0, 2)
+            cur = f.tell()
+            if cur < expected_size:
+                f.truncate(expected_size)
+
+    fh = open(dest_file, "r+b")
+
+    def worker(tid):
+        while True:
+            try:
+                pi = piece_q.get_nowait()
+            except _queue.Empty:
+                tstat[tid] = {"state": "idle", "piece": -1, "bytes": 0, "total": 0}
+                return
+
+            p_start = pi * piece_size
+            p_end = min(p_start + piece_size, expected_size) - 1 if expected_size else p_start + piece_size - 1
+            p_total = p_end - p_start + 1
+            exp_hash = pieces[pi]
+            tstat[tid] = {"state": "dl", "piece": pi, "bytes": 0, "total": p_total}
 
             success = False
             for attempt in range(MAX_RETRIES):
                 try:
                     req = urllib.request.Request(url, headers={
-                        "Range": f"bytes={piece_start}-{piece_end}",
+                        "Range": f"bytes={p_start}-{p_end}",
                         "User-Agent": "Microsoft-Delivery-Optimization/10.0",
                     })
                     with urllib.request.urlopen(req, timeout=timeout) as resp:
-                        data = resp.read()
+                        chunks = []
+                        received = 0
+                        while True:
+                            chunk = resp.read(65536)
+                            if not chunk:
+                                break
+                            chunks.append(chunk)
+                            received += len(chunk)
+                            tstat[tid] = {"state": "dl", "piece": pi, "bytes": received, "total": p_total}
+                        data = b"".join(chunks)
+
+                    tstat[tid] = {"state": "verify", "piece": pi, "bytes": p_total, "total": p_total}
                     actual_hash = base64.b64encode(hashlib.sha256(data).digest()).decode("ascii")
-                    if actual_hash != expected_hash:
+                    if actual_hash != exp_hash:
                         if attempt < MAX_RETRIES - 1:
                             time.sleep(1)
+                            tstat[tid] = {"state": "dl", "piece": pi, "bytes": 0, "total": p_total}
                             continue
-                        failed += 1
-                        # Write anyway to keep file aligned
-                        f.write(data)
+                        with lock:
+                            failed_pieces.append(pi)
+                        with file_lock:
+                            fh.seek(p_start)
+                            fh.write(data)
                         break
-                    f.write(data)
-                    downloaded_bytes += len(data)
+
+                    with file_lock:
+                        fh.seek(p_start)
+                        fh.write(data)
+                    with lock:
+                        completed_count[0] += 1
+                        downloaded_bytes[0] += len(data)
+                    tstat[tid] = {"state": "done", "piece": pi, "bytes": p_total, "total": p_total}
                     success = True
                     break
                 except Exception as e:
                     if attempt < MAX_RETRIES - 1:
                         time.sleep(2 ** (attempt + 1))
+                        tstat[tid] = {"state": "dl", "piece": pi, "bytes": 0, "total": p_total}
                         continue
                     debug(f"PHF piece {pi} failed: {e}")
-                    failed += 1
-                    # Write zeros to keep alignment
-                    fill_size = piece_end - piece_start + 1 if expected_size else piece_size
-                    f.write(b'\x00' * fill_size)
+                    with lock:
+                        failed_pieces.append(pi)
+                    with file_lock:
+                        fh.seek(p_start)
+                        fh.write(b'\x00' * p_total)
                     break
 
-            # Progress display
-            done = pi - start_piece + 1
-            total_todo = total_pieces - start_piece
-            pct = done * 100 // total_todo
-            filled = 30 * done // total_todo
-            bar = "#" * filled + "-" * (30 - filled)
-            elapsed = time.time() - t_start
-            speed = downloaded_bytes / elapsed if elapsed > 0.5 else 0
-            eta_s = (expected_size - (pi + 1) * piece_size) / speed if speed > 0 else 0
-            eta = f"{eta_s / 60:.0f}m" if eta_s >= 60 else f"{eta_s:.0f}s"
-            print(f"\r    [{bar}] {pct:3d}%  {downloaded_bytes / 1e9:.2f}/{expected_size / 1e9:.2f} GB"
-                  f"  {speed / 1e6:.1f} MB/s  ETA {eta}  {label}",
-                  end="", flush=True)
+    threads = []
+    for tid in range(NUM_THREADS):
+        t = _thr.Thread(target=worker, args=(tid,), daemon=True)
+        threads.append(t)
+        t.start()
 
+    # Display loop — refresh ~10 times/sec
+    while any(t.is_alive() for t in threads):
+        display()
+        time.sleep(0.1)
+    display()  # final
+
+    fh.close()
     print()
-    if failed:
-        print(f"    [!] {failed} piece(s) failed verification")
+    if failed_pieces:
+        print(f"    [!] {len(failed_pieces)} piece(s) failed verification")
         return -1
     print(f"    Download complete — {total_pieces} pieces verified OK.")
-    return downloaded_bytes
+    return downloaded_bytes[0]
 
 
 def _phf_repair_pieces(url, dest_file, phf_data, bad_indices, expected_size, timeout=120):
