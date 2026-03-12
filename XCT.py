@@ -21545,17 +21545,82 @@ def _downgrader_discover_versions(content_id, xbl3_token):
                     "date": "",
                 })
         else:
-            print("purged")
+            # Purged — try to probe PHF on CDN using latest version's URL pattern
+            purged_url = ""
+            purged_phf_url = None
+            purged_size = 0
+            purged_filename = ""
+            purged_available = False
+
+            if cdn_info.get("cdn_roots") and cdn_info.get("rel_url") and ov.get("buildId"):
+                # Construct URL by swapping version.buildId in the latest URL path
+                latest_seg = f"{cdn_info['latest_ver']}.{cdn_info['latest_bid']}" if cdn_info.get("latest_bid") else ""
+                purged_seg = f"{ov['version']}.{ov['buildId']}"
+                if latest_seg:
+                    for root in cdn_info["cdn_roots"]:
+                        rel = cdn_info["rel_url"]
+                        # Replace version segment in relative URL
+                        purged_rel = rel.replace(latest_seg, purged_seg)
+                        if purged_rel == rel:
+                            continue  # pattern didn't match
+                        # Try PHF URL first
+                        phf_probe = root + purged_rel + ".phf"
+                        try:
+                            phf_req = urllib.request.Request(phf_probe, method="HEAD")
+                            phf_req.add_header("User-Agent", "Microsoft-Delivery-Optimization/10.0")
+                            with urllib.request.urlopen(phf_req, timeout=10) as phf_resp:
+                                if phf_resp.status == 200:
+                                    # PHF exists! Download it for content size
+                                    phf_req2 = urllib.request.Request(phf_probe)
+                                    phf_req2.add_header("User-Agent", "Microsoft-Delivery-Optimization/10.0")
+                                    with urllib.request.urlopen(phf_req2, timeout=15) as phf_resp2:
+                                        phf_parsed = json.loads(phf_resp2.read().decode("utf-8"))
+                                    if phf_parsed.get("ContentLength") and phf_parsed.get("Pieces"):
+                                        purged_url = root + purged_rel
+                                        purged_phf_url = phf_probe
+                                        purged_size = phf_parsed["ContentLength"]
+                                        purged_filename = cdn_info.get("filename", "").replace(
+                                            cdn_info["latest_ver"], ov["version"])
+                                        purged_available = True
+                                        print(f"PHF recovered! ({purged_size / 1e9:.2f} GB)")
+                                        break
+                        except Exception:
+                            pass
+                        # Also try content URL directly
+                        if not purged_available:
+                            content_probe = root + purged_rel
+                            try:
+                                h_req = urllib.request.Request(content_probe, method="HEAD")
+                                h_req.add_header("User-Agent", "Microsoft-Delivery-Optimization/10.0")
+                                with urllib.request.urlopen(h_req, timeout=10) as h_resp:
+                                    cl = int(h_resp.headers.get("Content-Length", 0))
+                                    if cl > 10_000_000:
+                                        purged_url = content_probe
+                                        purged_size = cl
+                                        purged_filename = cdn_info.get("filename", "").replace(
+                                            cdn_info["latest_ver"], ov["version"])
+                                        purged_available = True
+                                        print(f"CDN recovered! ({purged_size / 1e9:.2f} GB)")
+                                        break
+                            except Exception:
+                                pass
+
+            if not purged_available:
+                print("purged")
+
             versions.append({
                 "version": ov["version"],
                 "buildId": ov["buildId"],
                 "versionId": vid,
-                "url": cdn_url_hint if cdn_url_hint and not cdn_url_hint.endswith(".xsp") else "",
-                "available": False,
-                "size": 0,
+                "url": purged_url or (cdn_url_hint if cdn_url_hint and not cdn_url_hint.endswith(".xsp") else ""),
+                "available": purged_available,
+                "size": purged_size,
                 "latest": False,
-                "filename": "",
+                "filename": purged_filename,
                 "date": "",
+                "_phf_url": purged_phf_url,
+                "recovery_method": "phf_probe" if purged_available and purged_phf_url else
+                                   "cdn_probe" if purged_available else None,
             })
 
     # Sort newest-first by version string (lexicographic works for dotted versions with same depth)
