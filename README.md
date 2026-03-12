@@ -2,6 +2,27 @@
 
 Track your Xbox game library across multiple accounts. See every game you own, what it's worth, what's on Game Pass, compare regional prices, and browse the full Xbox Marketplace — all in one page you can open in your browser.
 
+## What's New in v2.3
+
+### PHF-Verified Downloads & Purge Recovery
+- **Piece Hash File (PHF) download system** — Game packages are now downloaded and verified piece-by-piece using Microsoft's Piece Hash File format. Each 1 MB chunk is verified against its SHA-256 hash during download. Corrupted pieces are automatically re-downloaded via HTTP Range requests. Full resume support — interrupted downloads restart from the last verified piece, not from scratch.
+- **Purged version recovery via PHF link reconstruction** — When the Xbox CDN API reports a game version as "purged", XCT now reconstructs the CDN URL by pattern-matching against the latest version's URL structure and probing for the PHF on the CDN. If the PHF still exists, the version is recovered and downloadable piece-by-piece even though the API says it's gone. This recovers versions that were previously unrecoverable by any other method.
+- **PHF auto-detection from CDN API** — The `packagespc.xboxlive.com` API sometimes returns PHF URLs instead of direct content URLs. XCT now detects this, downloads the PHF to determine the real content size, and uses piece-by-piece downloading automatically.
+- **FE3 PHF capture** — The Windows Update delivery API (FE3) now captures PHF URLs alongside content URLs. PHF files are saved next to downloaded packages for future verification and repair.
+- **Post-download verification** — Batch downloader verifies completed downloads against PHF hashes and reports verification status (e.g. `PHF:23197ok`) in the download report.
+
+### Auth Improvements
+- **Auto re-auth on expired refresh token** — When the MSA refresh token is expired (`invalid_grant`), XCT automatically starts device code flow re-authentication instead of failing. The new refresh token is saved back to the auth state file. Works across all auth flows including CDN tools.
+
+### Store & Marketplace Fixes
+- **Xbox 360 platform filter fix** — Xbox 360 games no longer appear when all platform checkboxes are checked (previously leaked through because the exclusion logic was skipped when no filter was active).
+- **Product ID search** — The marketplace search box now accepts Microsoft Store product IDs (e.g. `9P0W2F9SVGDS`) in addition to game titles.
+- **Admin tag save button** — Manual tag checkboxes now use an explicit Save button with dirty-state tracking instead of auto-saving on checkbox change. Closing the tag modal refreshes the current marketplace filter so tag changes take effect immediately.
+- **Search autofill prevention** — All search inputs use `autocomplete="one-time-code"` to prevent browsers from autofilling usernames into search boxes.
+
+### DLC Discovery
+- **Addon scan** (`addon_scan.py`) — Discovers DLC/add-on products from user collection uploads (Durable productKind), enriches via Catalog v3 API, and inserts into the marketplace database. First run discovered 8,430 DLC products.
+
 ## What's New in v2.2
 
 ### Purchase History (New Tab)
