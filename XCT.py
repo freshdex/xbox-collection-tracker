@@ -4420,6 +4420,14 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<label class="mkt-tick"><input type="checkbox" id="mkt-noach" onchange="mktPage=0;filterMKT()"> Hide games I have achievements in</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-nowinshared" onchange="mktPage=0;filterMKT()"> Exclude Windows shared</label>\n'
         '</div>\n'
+        # Add Game
+        '<div style="margin-top:10px;padding-top:8px;border-top:1px solid #333">'
+        '<div style="font-size:11px;color:#888;margin-bottom:4px;font-weight:600">Add Game</div>'
+        '<input type="text" id="mkt-add-pid" placeholder="Product ID or URL" '
+        'style="width:100%;padding:4px 6px;border:1px solid #333;background:#1a1a1a;color:#e0e0e0;border-radius:4px;font-size:11px;box-sizing:border-box;margin-bottom:4px">'
+        '<button class="xct-iobtn" onclick="_adminAddGame()" style="width:100%;font-size:11px;padding:4px 0">Scan &amp; Add</button>'
+        '<div id="mkt-add-status" style="font-size:11px;color:#888;margin-top:6px;word-break:break-word"></div>'
+        '</div>\n'
         # Last scan info (moved from top)
         '<div id="mkt-scan-banner" style="font-size:11px;color:#666;margin-top:14px;padding-top:10px;border-top:1px solid #222"></div>\n'
         '</div>\n'
@@ -7237,7 +7245,12 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(tVals){const tk=item.productKind==='Durable'?'DLC':item.productKind;if(!tVals.includes(tk))return false}\n"
         "if(platVals){var _pp=item.platforms||[];var _pm=_pp.some(p=>platVals.includes(p));"
         "if(!_pm&&platVals.includes('Windows Only')&&_pp.includes('PC')&&!_pp.includes('Xbox One')&&!_pp.includes('Xbox Series X|S')&&!_pp.includes('Xbox 360'))_pm=true;"
-        "if(!_pm)return false}\n"
+        "if(!_pm&&platVals.includes('Xbox 360 BC')&&_pp.includes('Xbox 360')&&(_pp.includes('Xbox One')||_pp.includes('Xbox Series X|S')))_pm=true;"
+        "if(!_pm&&platVals.includes('Xbox 360 non-BC')&&_pp.includes('Xbox 360')&&!_pp.includes('Xbox One')&&!_pp.includes('Xbox Series X|S'))_pm=true;"
+        "if(!_pm&&platVals.includes('Win Shared List')&&(item._winSharedAch))_pm=true;"
+        "if(!_pm)return false;"
+        "if(!platVals.includes('Xbox 360 BC')&&!platVals.includes('Xbox 360 non-BC')&&_pp.includes('Xbox 360'))return false}\n"
+        "else{if((item.platforms||[]).includes('Xbox 360'))return false}\n"
         "if(pubVals&&!pubVals.includes(item.publisher||''))return false;\n"
         "if(devVals&&!devVals.includes(item.developer||''))return false;\n"
         "if(catVals&&!catVals.includes(item.category||''))return false;\n"
@@ -7520,7 +7533,8 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-nowinshared')&&document.getElementById('mkt-nowinshared').checked)p.set('nowinshared','1');\n"
         # Fetch
         "var h={};if(window._xctApiKey)h['Authorization']='Bearer '+window._xctApiKey;\n"
-        "fetch('/api/v1/store/products?'+p.toString(),{headers:h,signal:ac.signal})"
+        "var _fetchOpts={headers:h,signal:ac.signal};if(window._mktCacheBust){p.set('_t',window._mktCacheBust);delete window._mktCacheBust}\n"
+        "fetch('/api/v1/store/products?'+p.toString(),_fetchOpts)"
         ".then(function(r){if(!r.ok)throw new Error(r.status);return r.json()})"
         ".then(function(data){\n"
         "if(loadEl)loadEl.style.display='none';\n"
@@ -7711,7 +7725,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # -- showMKTDetail API mode --
         "function _showMKTDetailApi(pid){\n"
         "var h={};if(window._xctApiKey)h['Authorization']='Bearer '+window._xctApiKey;\n"
-        "fetch('/api/v1/store/product/'+encodeURIComponent(pid),{headers:h})"
+        "fetch('/api/v1/store/product/'+encodeURIComponent(pid),{headers:h,cache:'no-store'})"
         ".then(function(r){return r.json()}).then(function(item){\n"
         "if(!item||item.error)return;\n"
         # Pre-process
@@ -7939,7 +7953,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const rows=ACCOUNTS.map(a=>{\n"
         "const s=gtStats[a.gamertag]||{items:0,games:0,dlc:0,gameVal:0,dlcVal:0,value:0};\n"
         "const info=gi[a.gamertag]||{};\n"
-        "return{...a,...s,region:info.region||'',email:info.email||'',col1:!!info.col1,col2:!!info.col2,regionLock:!!info.regionLock,notes:info.notes||'',changesLeft:info.changesLeft||''}});\n"
+        "return{...a,...s,region:info.region||'',email:info.email||'',col1:!!info.col1,col1Console:info.col1Console||'',col2:!!info.col2,col2Console:info.col2Console||'',regionLock:!!info.regionLock,notes:info.notes||'',changesLeft:info.changesLeft||''}});\n"
         # Sort
         "const col=_acctSort.col,dir=_acctSort.dir==='asc'?1:-1;\n"
         "rows.sort((a,b)=>{\n"
@@ -7953,7 +7967,9 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "{key:'region',label:'Region'},\n"
         "{key:'email',label:'Email'},\n"
         "{key:'col1',label:'_custom_'},\n"
+        "{key:'col1Console',label:'Console'},\n"
         "{key:'col2',label:'_custom_'},\n"
+        "{key:'col2Console',label:'Console'},\n"
         "{key:'regionLock',label:'Region Lock'},\n"
         "{key:'changesLeft',label:'Changes Left'},\n"
         "{key:'notes',label:'Notes'},\n"
@@ -8002,8 +8018,24 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # Custom checkbox columns
         "h+='<td style=\"text-align:center\"><input type=\"checkbox\"'+(r.col1?' checked':'')+' style=\"accent-color:#107c10\" "
         "onchange=\"_acctSaveField(\\''+gt+'\\',\\'col1\\',this.checked)\"></td>';\n"
+        # Col1 Console dropdown
+        "h+='<td style=\"text-align:center\"><select style=\"background:#222;color:#e0e0e0;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:12px;width:70px\" "
+        "onchange=\"_acctSaveField(\\''+gt+'\\',\\'col1Console\\',this.value)\">';\n"
+        "h+='<option value=\"\"></option>';\n"
+        "[1,2,3,4,5,6,7,8].forEach(n=>{h+=`<option value=\"${n}\"${r.col1Console==n?' selected':''}>${n}</option>`});\n"
+        "h+=`<option value=\"Instant sign in\"${r.col1Console==='Instant sign in'?' selected':''}>Instant sign in</option>`;\n"
+        "h+=`<option value=\"Manual\"${r.col1Console==='Manual'?' selected':''}>Manual</option>`;\n"
+        "h+='</select></td>';\n"
         "h+='<td style=\"text-align:center\"><input type=\"checkbox\"'+(r.col2?' checked':'')+' style=\"accent-color:#107c10\" "
         "onchange=\"_acctSaveField(\\''+gt+'\\',\\'col2\\',this.checked)\"></td>';\n"
+        # Col2 Console dropdown
+        "h+='<td style=\"text-align:center\"><select style=\"background:#222;color:#e0e0e0;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:12px;width:70px\" "
+        "onchange=\"_acctSaveField(\\''+gt+'\\',\\'col2Console\\',this.value)\">';\n"
+        "h+='<option value=\"\"></option>';\n"
+        "[1,2,3,4,5,6,7,8].forEach(n=>{h+=`<option value=\"${n}\"${r.col2Console==n?' selected':''}>${n}</option>`});\n"
+        "h+=`<option value=\"Instant sign in\"${r.col2Console==='Instant sign in'?' selected':''}>Instant sign in</option>`;\n"
+        "h+=`<option value=\"Manual\"${r.col2Console==='Manual'?' selected':''}>Manual</option>`;\n"
+        "h+='</select></td>';\n"
         # Region Lock checkbox
         "h+='<td style=\"text-align:center\"><input type=\"checkbox\"'+(r.regionLock?' checked':'')+' style=\"accent-color:#f44336\" "
         "onchange=\"_acctSaveField(\\''+gt+'\\',\\'regionLock\\',this.checked)\"></td>';\n"
@@ -8644,6 +8676,45 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(d.ok){s.textContent='Scan triggered: '+d.type;s.style.color='#4caf50'}"
         "else{s.textContent='Error: '+(d.error||'unknown');s.style.color='#f44'}\n"
         "}).catch(function(e){s.textContent='Error: '+e.message;s.style.color='#f44'})}\n"
+
+        "function _adminAddGame(){\n"
+        "var raw=document.getElementById('mkt-add-pid').value.trim();\n"
+        "if(!raw)return;\n"
+        "if(!window._xctApiKey){document.getElementById('mkt-add-status').innerHTML='<span style=\"color:#f44\">Log in first</span>';return}\n"
+        "var pid=raw;\n"
+        "var m=raw.match(/\\/([A-Z0-9]{12})(?:[\\/?#]|$)/i);\n"
+        "if(m)pid=m[1];\n"
+        "var s=document.getElementById('mkt-add-status');\n"
+        "s.innerHTML='<span style=\"color:#ff0\">Scanning '+pid+'... (fetching 11 regions)</span>';\n"
+        "var _addBtn=s.previousElementSibling;if(_addBtn)_addBtn.disabled=true;\n"
+        "fetch('/api/v1/admin/add-product',{method:'POST',headers:{'Authorization':'Bearer '+window._xctApiKey,'Content-Type':'application/json'},body:JSON.stringify({product_id:pid})})"
+        ".then(function(r){return r.json()}).then(function(d){\n"
+        "if(_addBtn)_addBtn.disabled=false;\n"
+        "if(d.error){s.innerHTML='<span style=\"color:#f44\">'+d.error+'</span>';return}\n"
+        "document.getElementById('mkt-add-pid').value='';\n"
+        "var h='<span style=\"color:#4caf50\">Added!</span><br>';\n"
+        "if(d.title)h+='<b>'+d.title+'</b><br>';\n"
+        "if(d.publisher)h+='<span style=\"color:#888\">'+d.publisher+'</span><br>';\n"
+        "if(d.developer&&d.developer!==d.publisher)h+='<span style=\"color:#777\">Dev: '+d.developer+'</span><br>';\n"
+        "if(d.platforms)h+='<span style=\"color:#aaa\">'+d.platforms+'</span><br>';\n"
+        "if(d.release_date)h+='<span style=\"color:#888\">Release: '+d.release_date+'</span><br>';\n"
+        "if(d.product_kind)h+='<span style=\"color:#888\">Kind: '+d.product_kind+'</span><br>';\n"
+        "if(d.prices&&Object.keys(d.prices).length){\n"
+        "h+='<div style=\"margin-top:4px;font-size:10px\">';\n"
+        "Object.keys(d.prices).sort().forEach(function(mk){\n"
+        "var p=d.prices[mk];\n"
+        "var pr=p.currency+' '+p.msrp;\n"
+        "if(p.sale&&p.sale<p.msrp)pr+=' <span style=\"color:#4caf50\">(sale: '+p.sale+')</span>';\n"
+        "h+='<div>'+mk+': '+pr+'</div>'});\n"
+        "h+='</div>'}\n"
+        "else{h+='<span style=\"color:#ff9800\">No prices found</span><br>'}\n"
+        "if(d.has_trial)h+='<span style=\"color:#2196f3\">Has free trial</span><br>';\n"
+        "if(d.xcloud)h+='<span style=\"color:#9c27b0\">Streamable</span><br>';\n"
+        "if(d.is_new)h+='<span style=\"color:#4caf50\">New product added</span>';else h+='<span style=\"color:#ff9800\">Updated existing product</span>';\n"
+        "s.innerHTML=h;\n"
+        "if(typeof filterMKT==='function')setTimeout(function(){window._mktCacheBust=Date.now();filterMKT()},500);\n"
+        "}).catch(function(e){if(_addBtn)_addBtn.disabled=false;s.innerHTML='<span style=\"color:#f44\">Error: '+e.message+'</span>'})}\n"
+        "\n"
 
         "function _adminSubsUpdate(tier){\n"
         "var s=document.getElementById('admin-subs-status');\n"
@@ -14604,11 +14675,7 @@ def _hd_install_xvc(disk_num=None, drv_info=None):
         return
 
     total_bytes = sum(t["size"] for t in targets)
-    free_bytes = (vol_info.get("FreeGB") or 0) * 1e9
     print(f"\n  Will download {len(targets)} package(s), {total_bytes/1e9:.2f} GB total")
-    print(f"  Free space on {drive_letter}: {free_gb} GB")
-    if total_bytes > free_bytes:
-        print("  [!] WARNING: Not enough free space!")
     print()
 
     confirm = input(f"  Proceed with download to {drive_letter}:\\? [Y/n]: ").strip().lower()
@@ -16590,19 +16657,7 @@ def backup_usb_games(enriched, drive_path, dest_path, indices=None):
     total_bytes = sum(item.get("sizeBytes", 0) for item in to_copy)
     print(f"\n[*] Backing up {len(to_copy)} package(s) — approx {total_bytes / 1e9:.1f} GB")
 
-    # Check destination free space
-    try:
-        os.makedirs(dest_path, exist_ok=True)
-        free = shutil.disk_usage(dest_path).free
-        if total_bytes > 0 and free < total_bytes:
-            print(f"[!] Warning: destination has {free/1e9:.1f} GB free but ~{total_bytes/1e9:.1f} GB needed")
-            ans = input("    Continue anyway? [y/N]: ").strip().lower()
-            if ans != "y":
-                print("    Cancelled.")
-                return
-    except Exception as e:
-        print(f"[!] Could not check destination: {e}")
-        return
+    os.makedirs(dest_path, exist_ok=True)
 
     COMPANIONS = ["", ".xct", ".xvi", ".xvs"]
     total_copied = 0
@@ -16771,7 +16826,7 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
     if not expected_size:
         expected_size = content_length
     MAX_RETRIES = 3
-    NUM_THREADS = 10
+    NUM_THREADS = 20
 
     if not pieces:
         print("    [!] PHF has no piece hashes — falling back to normal download")
@@ -16837,10 +16892,10 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
     lock = _thr.Lock()
     file_lock = _thr.Lock()
     completed_count = [0]
-    downloaded_bytes = [0]
+    received_bytes = [0]  # every byte from network — for speed display
+    downloaded_bytes = [0]  # verified bytes — for final return
     failed_pieces = []
     t_start = time.time()
-    # Per-thread status: {tid: {"state","piece","bytes","total"}}
     tstat = {tid: {"state": "idle", "piece": -1, "bytes": 0, "total": 0} for tid in range(NUM_THREADS)}
     display_init = [False]
 
@@ -16863,19 +16918,20 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
                 filled = 10 * pct // 100
                 bar = "\u2588" * filled + "\u2591" * (10 - filled)
                 lines.append(f"    T{tid+1:02d}: [{bar}] Piece {pi+1:>5d}/{total_pieces}  {byt/1048576:.1f}/{tot/1048576:.1f} MB")
-        # Overall
+        # Overall — use received_bytes for real-time speed
         with lock:
             done_cnt = completed_count[0]
-            dl_b = downloaded_bytes[0]
+            rx_b = received_bytes[0]
         pct = done_cnt * 100 // total_todo if total_todo > 0 else 100
         filled = 30 * done_cnt // total_todo if total_todo > 0 else 30
         bar = "#" * filled + "-" * (30 - filled)
         elapsed = time.time() - t_start
-        speed = dl_b / elapsed if elapsed > 0.5 else 0
-        remaining_bytes = max(0, expected_size - (start_piece + done_cnt) * piece_size)
+        speed = rx_b / elapsed if elapsed > 1 else 0
+        done_bytes = (start_piece * piece_size) + rx_b
+        remaining_bytes = max(0, expected_size - done_bytes)
         eta_s = remaining_bytes / speed if speed > 0 else 0
-        eta = f"{eta_s / 60:.0f}m" if eta_s >= 60 else f"{eta_s:.0f}s"
-        lines.append(f"    [{bar}] {pct:3d}%  {dl_b/1e9:.2f}/{expected_size/1e9:.2f} GB  {speed/1e6:.1f} MB/s  ETA {eta}  {label}")
+        eta = f"{eta_s / 3600:.1f}h" if eta_s >= 3600 else (f"{eta_s / 60:.0f}m" if eta_s >= 60 else f"{eta_s:.0f}s")
+        lines.append(f"    [{bar}] {pct:3d}%  {done_bytes/1e9:.2f}/{expected_size/1e9:.2f} GB  {speed/1e6:.1f} MB/s  ETA {eta}  {label}")
 
         n = len(lines)
         if display_init[0]:
@@ -16885,17 +16941,17 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
             sys.stdout.write(f"\r\033[K{line}\n")
         sys.stdout.flush()
 
-    # Pre-allocate file for random-access writes
+    # Create/extend file to expected size for random-access writes
+    # Use seek+write instead of truncate (truncate fills zeros on Windows = very slow for large files)
     if start_piece == 0 or not os.path.exists(dest_file):
         with open(dest_file, "wb") as f:
-            f.truncate(expected_size)
-    else:
-        # Extend to full size for resume if needed
+            if expected_size > 0:
+                f.seek(expected_size - 1)
+                f.write(b'\x00')
+    elif os.path.getsize(dest_file) < expected_size:
         with open(dest_file, "r+b") as f:
-            f.seek(0, 2)
-            cur = f.tell()
-            if cur < expected_size:
-                f.truncate(expected_size)
+            f.seek(expected_size - 1)
+            f.write(b'\x00')
 
     fh = open(dest_file, "r+b")
 
@@ -16913,7 +16969,6 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
             exp_hash = pieces[pi]
             tstat[tid] = {"state": "dl", "piece": pi, "bytes": 0, "total": p_total}
 
-            success = False
             for attempt in range(MAX_RETRIES):
                 try:
                     req = urllib.request.Request(url, headers={
@@ -16922,14 +16977,16 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
                     })
                     with urllib.request.urlopen(req, timeout=timeout) as resp:
                         chunks = []
-                        received = 0
+                        chunk_received = 0
                         while True:
-                            chunk = resp.read(65536)
+                            chunk = resp.read(262144)  # 256KB
                             if not chunk:
                                 break
                             chunks.append(chunk)
-                            received += len(chunk)
-                            tstat[tid] = {"state": "dl", "piece": pi, "bytes": received, "total": p_total}
+                            chunk_received += len(chunk)
+                            with lock:
+                                received_bytes[0] += len(chunk)
+                            tstat[tid] = {"state": "dl", "piece": pi, "bytes": chunk_received, "total": p_total}
                         data = b"".join(chunks)
 
                     tstat[tid] = {"state": "verify", "piece": pi, "bytes": p_total, "total": p_total}
@@ -16937,6 +16994,8 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
                     if actual_hash != exp_hash:
                         if attempt < MAX_RETRIES - 1:
                             time.sleep(1)
+                            with lock:
+                                received_bytes[0] -= chunk_received
                             tstat[tid] = {"state": "dl", "piece": pi, "bytes": 0, "total": p_total}
                             continue
                         with lock:
@@ -16953,7 +17012,6 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
                         completed_count[0] += 1
                         downloaded_bytes[0] += len(data)
                     tstat[tid] = {"state": "done", "piece": pi, "bytes": p_total, "total": p_total}
-                    success = True
                     break
                 except Exception as e:
                     if attempt < MAX_RETRIES - 1:
@@ -16974,10 +17032,10 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
         threads.append(t)
         t.start()
 
-    # Display loop — refresh ~10 times/sec
+    # Display loop
     while any(t.is_alive() for t in threads):
         display()
-        time.sleep(0.1)
+        time.sleep(0.25)
     display()  # final
 
     fh.close()
@@ -17085,17 +17143,7 @@ def download_from_cdn(enriched, dest_path, indices=None):
     total_bytes = sum(x.get("sizeBytes", 0) for x in to_dl)
     print(f"\n[*] Downloading {len(to_dl)} package(s) — approx {total_bytes / 1e9:.1f} GB")
 
-    try:
-        os.makedirs(dest_path, exist_ok=True)
-        free = shutil.disk_usage(dest_path).free
-        if total_bytes > 0 and free < total_bytes:
-            print(f"[!] Warning: destination has {free/1e9:.1f} GB free but ~{total_bytes/1e9:.1f} GB needed")
-            if input("    Continue anyway? [y/N]: ").strip().lower() != "y":
-                print("    Cancelled.")
-                return
-    except Exception as e:
-        print(f"[!] Could not check destination: {e}")
-        return
+    os.makedirs(dest_path, exist_ok=True)
 
     total_downloaded = 0
     errors = 0
