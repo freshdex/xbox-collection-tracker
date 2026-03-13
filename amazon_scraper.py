@@ -278,9 +278,147 @@ def upload_result(api_key, product_id, status, url_uk="", url_us=""):
     return r.json()
 
 
+DIGITAL_CODE_WORDS = [
+    "digital code", "download code", "digital download", "digital key",
+    "cd key", "activation code", "product key", "online code",
+    "email delivery", "no disc", "instant delivery", "digital version",
+    "digital edition",
+]
+
+
+def _safe(s):
+    """Make a string safe for Windows console output."""
+    return s.encode("ascii", "replace").decode("ascii") if s else ""
+
+
+def rescan_hits(api_key, delay=1.0, headed=False):
+    """Rescan positive hits: visit each URL, pull page title,
+    auto-mark digital codes, output report for manual review."""
+    print("[*] Fetching positive hits from xct.live...")
+    r = requests.get(
+        f"{API_BASE}/api/v1/store/amazon/hits",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    r.raise_for_status()
+    hits = r.json()
+    print(f"[*] {len(hits)} positive hits to rescan\n")
+
+    digital_removed = []
+    confirmed = []
+    errors = []
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=not headed)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800},
+            locale="en-US",
+        )
+        page = context.new_page()
+
+        for i, hit in enumerate(hits):
+            pid = hit["productId"]
+            game = hit["title"]
+            status = hit["status"]
+            urls = []
+            if hit["urlUK"]:
+                urls.append(("UK", hit["urlUK"]))
+            if hit["urlUS"]:
+                urls.append(("US", hit["urlUS"]))
+
+            print(f"  [{i+1}/{len(hits)}] {_safe(game)} ({pid}) [{status}]")
+
+            is_digital = False
+            page_titles = {}
+
+            for mkt, url in urls:
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                    # Get the product title from the page
+                    title_text = ""
+                    try:
+                        title_el = page.wait_for_selector("#productTitle", timeout=5000)
+                        if title_el:
+                            title_text = title_el.text_content().strip()
+                    except Exception:
+                        # Fallback: try the page <title> tag
+                        title_text = page.title() or ""
+
+                    page_titles[mkt] = title_text
+                    print(f"    {mkt}: {_safe(title_text[:100])}")
+
+                    # Check for digital code keywords
+                    title_lower = title_text.lower()
+                    if any(w in title_lower for w in DIGITAL_CODE_WORDS):
+                        is_digital = True
+                        print(f"    >>> DIGITAL CODE detected in {mkt} title")
+
+                except Exception as e:
+                    page_titles[mkt] = f"ERROR: {e}"
+                    print(f"    {mkt}: ERROR -- {_safe(str(e))}")
+                    errors.append({"game": game, "pid": pid, "market": mkt, "error": str(e)})
+
+                time.sleep(delay)
+
+            if is_digital:
+                # Auto-mark as digital
+                try:
+                    upload_result(api_key, pid, "digital", "", "")
+                    print(f"    -> Auto-marked as DIGITAL")
+                    digital_removed.append({
+                        "game": game, "pid": pid,
+                        "titles": page_titles,
+                    })
+                except Exception as e:
+                    print(f"    -> Upload error: {e}")
+            else:
+                confirmed.append({
+                    "game": game, "pid": pid, "status": status,
+                    "urlUK": hit["urlUK"], "urlUS": hit["urlUS"],
+                    "titles": page_titles,
+                })
+
+        browser.close()
+
+    # Save report
+    report = {
+        "confirmed": confirmed,
+        "digital_removed": digital_removed,
+        "errors": errors,
+    }
+    report_file = "amazon_rescan_report.json"
+    with open(report_file, "w") as f:
+        json.dump(report, f, indent=2)
+
+    print(f"\n{'='*60}")
+    print(f"RESCAN COMPLETE")
+    print(f"{'='*60}")
+    print(f"  Confirmed physical: {len(confirmed)}")
+    print(f"  Auto-removed (digital code): {len(digital_removed)}")
+    print(f"  Errors: {len(errors)}")
+    print(f"\n  Full report saved to: {report_file}")
+
+    if digital_removed:
+        print(f"\n--- Digital codes removed ({len(digital_removed)}) ---")
+        for d in digital_removed:
+            print(f"  {_safe(d['game'])}")
+            for mkt, t in d["titles"].items():
+                print(f"    {mkt}: {_safe(t[:100])}")
+
+    if confirmed:
+        print(f"\n--- Confirmed physical ({len(confirmed)}) ---")
+        for c in confirmed:
+            print(f"  {_safe(c['game'])} [{c['status']}]")
+            for mkt, t in c["titles"].items():
+                print(f"    {mkt}: {_safe(t[:100])}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Amazon Physical Disc Scraper")
     parser.add_argument("--api-key", help="XCT API key (or set XCT_API_KEY env var)")
+    parser.add_argument("--rescan", action="store_true",
+                        help="Rescan positive hits: pull page titles, filter digital codes")
     parser.add_argument("--resume", action="store_true", help="Resume from last position")
     parser.add_argument("--limit", type=int, default=0, help="Max games to scan")
     parser.add_argument("--market", choices=["uk", "us", "both"], default="both",
@@ -304,6 +442,10 @@ def main():
     if not api_key:
         print("[!] API key required")
         sys.exit(1)
+
+    if args.rescan:
+        rescan_hits(api_key, delay=args.delay, headed=args.headed)
+        return
 
     markets = ["uk", "us"] if args.market == "both" else [args.market]
 

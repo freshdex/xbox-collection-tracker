@@ -2662,7 +2662,178 @@ def extract_catalog_data(product, market="GB"):
     result["alternateIds"] = [{"idType": a.get("IdType", ""), "id": a.get("Value", "")}
                               for a in alt_ids]
 
+    # Bundle contents: RelatedProducts with type "Parent" are the items in the bundle
+    bundle_pids = []
+    for mp in product.get("MarketProperties", []):
+        for rp in mp.get("RelatedProducts", []):
+            if rp.get("RelationshipType") == "Parent":
+                rpid = rp.get("RelatedProductId", "")
+                if rpid and rpid not in bundle_pids:
+                    bundle_pids.append(rpid)
+    if bundle_pids:
+        result["bundleProductIds"] = bundle_pids
+
     return pid, result
+
+
+def _fix_fake_release_dates(catalog):
+    """Fix placeholder release dates (>= 2100) by querying JP/TW markets.
+
+    Some Japanese-region games have OriginalReleaseDate set to 9998-12-30 in
+    the US/GB Display Catalog, but the real date is available when querying
+    from the game's actual market (JP or TW).  The Xbox.com store page shows
+    the correct date because it reads from MarketProperties for the matching
+    locale.
+
+    Modifies *catalog* dict in-place.  Returns count of dates fixed.
+    """
+    fake_pids = [pid for pid, info in catalog.items()
+                 if isinstance(info, dict)
+                 and (info.get("releaseDate") or "")[:4] >= "2100"]
+    if not fake_pids:
+        return 0
+
+    debug(f"_fix_fake_release_dates: {len(fake_pids)} products with placeholder dates")
+    print(f"[*] Fixing {len(fake_pids)} placeholder release date(s) via JP/TW catalog...")
+
+    # Query Display Catalog v7 from JP market (most JP-region games appear here)
+    # Then TW for any remaining unfixed
+    fixed = 0
+    remaining = list(fake_pids)
+
+    for fix_market, fix_lang in [("JP", "ja-JP"), ("TW", "zh-TW")]:
+        if not remaining:
+            break
+        BATCH = 20
+        still_fake = []
+        for i in range(0, len(remaining), BATCH):
+            batch = remaining[i:i + BATCH]
+            ids_str = ",".join(batch)
+            url = (f"https://displaycatalog.md.mp.microsoft.com/v7.0/products"
+                   f"?bigIds={ids_str}&market={fix_market}&languages={fix_lang}")
+            try:
+                req = urllib.request.Request(url, headers={
+                    "User-Agent": "okhttp/4.12.0",
+                    "Accept": "application/json",
+                })
+                with urllib.request.urlopen(req, context=SSL_CTX, timeout=20) as resp:
+                    data = json.loads(resp.read())
+            except Exception as e:
+                debug(f"_fix_fake_release_dates {fix_market} batch error: {e}")
+                still_fake.extend(batch)
+                continue
+
+            found_pids = set()
+            for product in data.get("Products", []):
+                pid = product.get("ProductId", "")
+                if pid not in catalog:
+                    continue
+                found_pids.add(pid)
+
+                # Try MarketProperties first
+                real_date = ""
+                for mp in product.get("MarketProperties", []):
+                    d = mp.get("OriginalReleaseDate", "")
+                    if d and d[:4] < "2100":
+                        real_date = d[:10]
+                        break
+
+                # Fallback: SKU availability dates
+                if not real_date:
+                    for sku in product.get("DisplaySkuAvailabilities", []):
+                        for avail in sku.get("Availabilities", []):
+                            d = avail.get("Properties", {}).get("OriginalReleaseDate", "")
+                            if d and d[:4] < "2100":
+                                real_date = d[:10]
+                                break
+                        if real_date:
+                            break
+
+                if real_date:
+                    catalog[pid]["releaseDate"] = real_date
+                    fixed += 1
+                else:
+                    still_fake.append(pid)
+
+            # Products not returned by this market
+            for pid in batch:
+                if pid not in found_pids:
+                    still_fake.append(pid)
+
+        remaining = still_fake
+
+    if fixed:
+        print(f"[+] Fixed {fixed} release date(s)"
+              f"{f' ({len(remaining)} still placeholder)' if remaining else ''}")
+    return fixed
+
+
+def _fix_fake_release_dates_list(items):
+    """Fix placeholder release dates on a list of marketplace items (in-place).
+
+    Wraps _fix_fake_release_dates by building a temporary pid→item dict.
+    """
+    tmp = {}
+    for item in items:
+        pid = item.get("productId", "")
+        if pid and (item.get("releaseDate") or "")[:4] >= "2100":
+            tmp[pid] = item
+    if tmp:
+        _fix_fake_release_dates(tmp)
+
+
+def _resolve_bundle_contents(catalog):
+    """Fetch bundleProductIds for bundles that don't already have them.
+
+    Uses Display Catalog v7 (US market) to read RelatedProducts with type
+    "Parent" — these are the products contained in the bundle.
+    Modifies *catalog* dict in-place.
+    """
+    need = [pid for pid, info in catalog.items()
+            if isinstance(info, dict) and info.get("isBundle")
+            and not info.get("bundleProductIds")]
+    if not need:
+        return 0
+
+    debug(f"_resolve_bundle_contents: {len(need)} bundles need content resolution")
+    print(f"[*] Resolving bundle contents for {len(need)} bundle(s)...")
+
+    resolved = 0
+    BATCH = 20
+    for i in range(0, len(need), BATCH):
+        batch = need[i:i + BATCH]
+        ids_str = ",".join(batch)
+        url = (f"https://displaycatalog.md.mp.microsoft.com/v7.0/products"
+               f"?bigIds={ids_str}&market=US&languages=en-US")
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "okhttp/4.12.0",
+                "Accept": "application/json",
+            })
+            with urllib.request.urlopen(req, context=SSL_CTX, timeout=20) as resp:
+                data = json.loads(resp.read())
+        except Exception as e:
+            debug(f"_resolve_bundle_contents batch error: {e}")
+            continue
+
+        for product in data.get("Products", []):
+            pid = product.get("ProductId", "")
+            if pid not in catalog:
+                continue
+            bundle_pids = []
+            for mp in product.get("MarketProperties", []):
+                for rp in mp.get("RelatedProducts", []):
+                    if rp.get("RelationshipType") == "Parent":
+                        rpid = rp.get("RelatedProductId", "")
+                        if rpid and rpid not in bundle_pids:
+                            bundle_pids.append(rpid)
+            if bundle_pids:
+                catalog[pid]["bundleProductIds"] = bundle_pids
+                resolved += 1
+
+    if resolved:
+        print(f"[+] Resolved contents for {resolved} bundle(s)")
+    return resolved
 
 
 def fetch_catalog_batch(product_ids, market, lang):
@@ -2728,6 +2899,7 @@ def fetch_display_catalog(product_ids, market, lang, cache_file, label):
                 print(f"  {label}: {completed}/{total} batches done ({len(catalog)} products)")
 
     print(f"[+] {label}: {len(catalog)} products resolved")
+    _fix_fake_release_dates(catalog)
     save_json(cache_file, catalog)
     return catalog
 
@@ -3069,6 +3241,9 @@ def fetch_catalog_v3(product_ids, auth_token_xl, market="GB", lang="en-GB",
 
     print(f"[+] {label}: {len(catalog) - len(invalid)} products resolved"
           f"{f', {len(invalid)} invalid' if invalid else ''}")
+
+    _fix_fake_release_dates(catalog)
+    _resolve_bundle_contents(catalog)
 
     if cache_file:
         save_json(cache_file, catalog)
@@ -4413,6 +4588,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         '<label class="mkt-tick"><input type="checkbox" id="mkt-ach" checked onchange="mktPage=0;filterMKT()"> Has Achievements</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-group" onchange="mktPage=0;filterMKT()"> Group editions</label>\n'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-hideowned-ed" onchange="mktPage=0;filterMKT()"> Hide owned editions</label>\n'
+        '<label class="mkt-tick"><input type="checkbox" id="mkt-hideowned-bun" onchange="mktPage=0;filterMKT()"> Hide owned bundles</label>\n'
         '<div style="border-top:1px solid #333;margin:8px 0;padding-top:8px">'
         '<div style="font-size:11px;color:#888;margin-bottom:4px">Exclusions</div>'
         '<label class="mkt-tick"><input type="checkbox" id="mkt-nodemo" onchange="mktPage=0;filterMKT()"> Hide demos</label>\n'
@@ -5388,6 +5564,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('mkt-ach').checked=true;"
         "document.getElementById('mkt-group').checked=false;"
         "document.getElementById('mkt-hideowned-ed').checked=false;"
+        "if(document.getElementById('mkt-hideowned-bun'))document.getElementById('mkt-hideowned-bun').checked=false;"
         "if(document.getElementById('mkt-nosub'))document.getElementById('mkt-nosub').checked=false;"
         "if(document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=false;"
         "if(document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=false;"
@@ -5447,6 +5624,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-ach').checked)p.set('ach','1');"
         "if(document.getElementById('mkt-group').checked)p.set('group','1');"
         "if(document.getElementById('mkt-hideowned-ed').checked)p.set('hoe','1');"
+        "if(document.getElementById('mkt-hideowned-bun')&&document.getElementById('mkt-hideowned-bun').checked)p.set('hob','1');"
         "if(document.getElementById('mkt-nosub')&&document.getElementById('mkt-nosub').checked)p.set('nosub','1');"
         "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');"
         "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');"
@@ -5475,6 +5653,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('ach')==='1')document.getElementById('mkt-ach').checked=true;"
         "if(p.get('group')==='1')document.getElementById('mkt-group').checked=true;"
         "if(p.get('hoe')==='1')document.getElementById('mkt-hideowned-ed').checked=true;"
+        "if(p.get('hob')==='1'&&document.getElementById('mkt-hideowned-bun'))document.getElementById('mkt-hideowned-bun').checked=true;"
         "if(p.get('nosub')==='1'&&document.getElementById('mkt-nosub'))document.getElementById('mkt-nosub').checked=true;"
         "if(p.get('nodemo')==='1'&&document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=true;"
         "if(p.get('noplayed')==='1'&&document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=true;"
@@ -5663,6 +5842,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "document.getElementById('mkt-ach').checked=true;"
         "document.getElementById('mkt-group').checked=false;"
         "document.getElementById('mkt-hideowned-ed').checked=false;"
+        "if(document.getElementById('mkt-hideowned-bun'))document.getElementById('mkt-hideowned-bun').checked=false;"
         "if(document.getElementById('mkt-nosub'))document.getElementById('mkt-nosub').checked=false;"
         "if(document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=false;"
         "if(document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=false;"
@@ -5687,6 +5867,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(p.get('ach')==='1')document.getElementById('mkt-ach').checked=true;"
         "if(p.get('group')==='1')document.getElementById('mkt-group').checked=true;"
         "if(p.get('hoe')==='1')document.getElementById('mkt-hideowned-ed').checked=true;"
+        "if(p.get('hob')==='1'&&document.getElementById('mkt-hideowned-bun'))document.getElementById('mkt-hideowned-bun').checked=true;"
         "if(p.get('nosub')==='1'&&document.getElementById('mkt-nosub'))document.getElementById('mkt-nosub').checked=true;"
         "if(p.get('nodemo')==='1'&&document.getElementById('mkt-nodemo'))document.getElementById('mkt-nodemo').checked=true;"
         "if(p.get('noplayed')==='1'&&document.getElementById('mkt-noplayed'))document.getElementById('mkt-noplayed').checked=true;"
@@ -5713,6 +5894,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-ach').checked)p.set('ach','1');"
         "if(document.getElementById('mkt-group')&&document.getElementById('mkt-group').checked)p.set('group','1');"
         "if(document.getElementById('mkt-hideowned-ed')&&document.getElementById('mkt-hideowned-ed').checked)p.set('hoe','1');"
+        "if(document.getElementById('mkt-hideowned-bun')&&document.getElementById('mkt-hideowned-bun').checked)p.set('hob','1');"
         "if(document.getElementById('mkt-nosub')&&document.getElementById('mkt-nosub').checked)p.set('nosub','1');"
         "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');"
         "if(document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked)p.set('noplayed','1');"
@@ -7229,6 +7411,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "const so=document.getElementById('mkt-sort').value;\n"
         "const doGroup=document.getElementById('mkt-group')&&document.getElementById('mkt-group').checked;\n"
         "const hideOwnedEd=document.getElementById('mkt-hideowned-ed')&&document.getElementById('mkt-hideowned-ed').checked;\n"
+        "const hideOwnedBun=document.getElementById('mkt-hideowned-bun')&&document.getElementById('mkt-hideowned-bun').checked;\n"
         "const nosubF=false;\n"
         "const nodemoF=document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked;\n"
         "const noplayedF=document.getElementById('mkt-noplayed')&&document.getElementById('mkt-noplayed').checked;\n"
@@ -7262,6 +7445,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(ownVals.includes('notowned_disc')&&!_discOwned.has(item.productId))op=true;"
         "if(!op)return false}\n"
         "if(hideOwnedEd&&!item.owned&&item.xboxTitleId&&_ownedTids.has(item.xboxTitleId))return false;\n"
+        "if(hideOwnedBun&&item._isBundle&&(item.bundleProductIds||[]).some(bp=>_ownedPids.has(bp)))return false;\n"
         # Price cb-drop
         "if(priceVals){let pp=false;const pr=item.priceUSD||0;"
         "if(priceVals.includes('free')&&pr===0)pp=true;"
@@ -7525,6 +7709,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "if(document.getElementById('mkt-ach').checked)p.set('ach','1');\n"
         "if(document.getElementById('mkt-group')&&document.getElementById('mkt-group').checked)p.set('group','1');\n"
         "if(document.getElementById('mkt-hideowned-ed')&&document.getElementById('mkt-hideowned-ed').checked)p.set('hoe','1');\n"
+        "if(document.getElementById('mkt-hideowned-bun')&&document.getElementById('mkt-hideowned-bun').checked)p.set('hob','1');\n"
         # Exclusion checkboxes
         "if(document.getElementById('mkt-nosub')&&document.getElementById('mkt-nosub').checked)p.set('nosub','1');\n"
         "if(document.getElementById('mkt-nodemo')&&document.getElementById('mkt-nodemo').checked)p.set('nodemo','1');\n"
@@ -11147,6 +11332,8 @@ def process_marketplace(gamertag, channels=None):
             "subscriptions": item_subs,
             "owned": pid in owned_pids,
             "hasTrialSku": cat.get("hasTrialSku", False),
+            "isBundle": cat.get("isBundle", False),
+            "bundleProductIds": cat.get("bundleProductIds", []),
             "hasAchievements": any(c.get("id") == "XblAchievements" for c in cat.get("capabilities", []) if isinstance(c, dict)),
             "xboxTitleId": next((a["id"] for a in cat.get("alternateIds", [])
                                  if a.get("idType") == "XBOXTITLEID"), ""),
@@ -11155,6 +11342,9 @@ def process_marketplace(gamertag, channels=None):
     # Remove items with no catalog data (no title)
     mkt_items = [x for x in mkt_items if x.get("title")]
     print(f"  Marketplace items: {len(mkt_items)} with catalog data")
+
+    # Fix placeholder release dates (9998-12-30 → real date from JP/TW markets)
+    _fix_fake_release_dates_list(mkt_items)
 
     # Regional pricing enrichment
     mkt_items = enrich_regional_prices(mkt_items, auth_token_xl)
@@ -11366,6 +11556,8 @@ def process_marketplace_all_regions(gamertag):
             "subscriptions": item_subs,
             "regions": sorted(meta["regions"]),
             "owned": pid in owned_pids,
+            "isBundle": cat.get("isBundle", False),
+            "bundleProductIds": cat.get("bundleProductIds", []),
             "xboxTitleId": next((a["id"] for a in cat.get("alternateIds", [])
                                  if a.get("idType") == "XBOXTITLEID"), ""),
         })
@@ -11373,6 +11565,9 @@ def process_marketplace_all_regions(gamertag):
     # Remove items with no catalog data
     mkt_items = [x for x in mkt_items if x.get("title")]
     print(f"  All-regions marketplace items: {len(mkt_items)} with catalog data")
+
+    # Fix placeholder release dates (9998-12-30 → real date from JP/TW markets)
+    _fix_fake_release_dates_list(mkt_items)
 
     # Regional pricing enrichment
     mkt_items = enrich_regional_prices(mkt_items, auth_token_xl)
@@ -16877,8 +17072,59 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
                                 return result
                             print(f"    {len(_bad)} piece(s) failed — repairing")
                             return _phf_repair_pieces(url, dest_file, phf_data, _bad, expected_size, timeout)
-        except Exception:
-            pass
+        except urllib.error.HTTPError as e:
+            debug(f"PHF streaming HEAD failed: HTTP {e.code}")
+            if e.code in (403, 404, 410):
+                print(f"    [!] CDN returned HTTP {e.code} — URL may be expired.")
+                return -1
+        except Exception as e:
+            debug(f"PHF streaming HEAD failed: {e}")
+
+    # --- Probe first piece to detect CDN errors before full download ---
+    probe_start = start_piece * piece_size
+    probe_end = min(probe_start + piece_size, expected_size) - 1 if expected_size else probe_start + piece_size - 1
+    probe_expected = probe_end - probe_start + 1
+    try:
+        probe_req = urllib.request.Request(url, headers={
+            "Range": f"bytes={probe_start}-{probe_end}",
+            "User-Agent": "Microsoft-Delivery-Optimization/10.0",
+        })
+        with urllib.request.urlopen(probe_req, timeout=timeout) as probe_resp:
+            probe_status = probe_resp.status
+            probe_cl = int(probe_resp.headers.get("Content-Length", 0))
+            probe_ct = probe_resp.headers.get("Content-Type", "")
+            probe_data = probe_resp.read()
+        # Check for problems
+        if probe_status == 200 and expected_size and probe_cl > probe_expected * 2:
+            # Server ignoring Range header — returning full content or something else
+            print(f"    [!] CDN does not support Range requests (HTTP {probe_status}, got {probe_cl} bytes instead of {probe_expected})")
+            print(f"    [!] Falling back to streaming download...")
+            return _download_with_progress(url, dest_file, expected_size, timeout)
+        if len(probe_data) < probe_expected * 0.5 and start_piece < total_pieces - 1:
+            # Got much less data than expected — likely an error page
+            snippet = probe_data[:200].decode("utf-8", errors="replace")
+            if "<" in snippet or "error" in snippet.lower() or "denied" in snippet.lower():
+                print(f"    [!] CDN returned error response ({len(probe_data)} bytes instead of {probe_expected})")
+                debug(f"PHF probe response: {snippet[:500]}")
+                print(f"    [!] Download URL may be expired or invalid.")
+                return -1
+            # Small response but not HTML — might be legit for a tiny piece, continue
+        # Verify the probe piece hash
+        probe_hash = base64.b64encode(hashlib.sha256(probe_data).digest()).decode("ascii")
+        if probe_hash != pieces[start_piece] and len(probe_data) != probe_expected:
+            print(f"    [!] CDN returned wrong data for piece {start_piece} ({len(probe_data)} bytes, expected {probe_expected})")
+            debug(f"PHF probe: got {len(probe_data)}B, expected {probe_expected}B, hash mismatch")
+            print(f"    [!] Download URL may be expired or invalid.")
+            return -1
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 404, 410):
+            print(f"    [!] CDN returned HTTP {e.code} — URL is expired or invalid.")
+            return -1
+        # Other HTTP errors — let the piece-by-piece download handle retries
+        debug(f"PHF probe HTTP {e.code}: {e.reason}")
+    except Exception as e:
+        debug(f"PHF probe failed: {e}")
+        # Non-fatal — let piece-by-piece try
 
     # --- Parallel piece-by-piece download with per-thread progress ---
     total_todo = total_pieces - start_piece
@@ -16895,6 +17141,8 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
     received_bytes = [0]  # every byte from network — for speed display
     downloaded_bytes = [0]  # verified bytes — for final return
     failed_pieces = []
+    abort_flag = [False]  # early abort if CDN is clearly broken
+    consecutive_fails = [0]  # track consecutive failures for early abort
     t_start = time.time()
     tstat = {tid: {"state": "idle", "piece": -1, "bytes": 0, "total": 0} for tid in range(NUM_THREADS)}
     display_init = [False]
@@ -16957,6 +17205,9 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
 
     def worker(tid):
         while True:
+            if abort_flag[0]:
+                tstat[tid] = {"state": "idle", "piece": -1, "bytes": 0, "total": 0}
+                return
             try:
                 pi = piece_q.get_nowait()
             except _queue.Empty:
@@ -16970,6 +17221,8 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
             tstat[tid] = {"state": "dl", "piece": pi, "bytes": 0, "total": p_total}
 
             for attempt in range(MAX_RETRIES):
+                if abort_flag[0]:
+                    break
                 try:
                     req = urllib.request.Request(url, headers={
                         "Range": f"bytes={p_start}-{p_end}",
@@ -17000,6 +17253,16 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
                             continue
                         with lock:
                             failed_pieces.append(pi)
+                            consecutive_fails[0] += 1
+                            # Early abort: if first 20 pieces all fail, CDN is broken
+                            if consecutive_fails[0] >= 20 and completed_count[0] == 0:
+                                abort_flag[0] = True
+                                # Drain the queue
+                                while not piece_q.empty():
+                                    try:
+                                        piece_q.get_nowait()
+                                    except _queue.Empty:
+                                        break
                         with file_lock:
                             fh.seek(p_start)
                             fh.write(data)
@@ -17011,6 +17274,7 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
                     with lock:
                         completed_count[0] += 1
                         downloaded_bytes[0] += len(data)
+                        consecutive_fails[0] = 0  # reset on success
                     tstat[tid] = {"state": "done", "piece": pi, "bytes": p_total, "total": p_total}
                     break
                 except Exception as e:
@@ -17021,6 +17285,14 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
                     debug(f"PHF piece {pi} failed: {e}")
                     with lock:
                         failed_pieces.append(pi)
+                        consecutive_fails[0] += 1
+                        if consecutive_fails[0] >= 20 and completed_count[0] == 0:
+                            abort_flag[0] = True
+                            while not piece_q.empty():
+                                try:
+                                    piece_q.get_nowait()
+                                except _queue.Empty:
+                                    break
                     with file_lock:
                         fh.seek(p_start)
                         fh.write(b'\x00' * p_total)
@@ -17040,8 +17312,16 @@ def _phf_download(url, dest_file, phf_data, expected_size=0, timeout=120):
 
     fh.close()
     print()
+    if abort_flag[0]:
+        print(f"    [!] Aborted — first {len(failed_pieces)} pieces all failed hash verification.")
+        print(f"    [!] The CDN URL is likely expired or returning error responses.")
+        print(f"    [!] Try re-discovering the download URL and retry.")
+        return -1
     if failed_pieces:
-        print(f"    [!] {len(failed_pieces)} piece(s) failed verification")
+        if len(failed_pieces) == total_todo:
+            print(f"    [!] All {len(failed_pieces)} piece(s) failed verification — CDN URL may be expired.")
+        else:
+            print(f"    [!] {len(failed_pieces)} piece(s) failed verification")
         return -1
     print(f"    Download complete — {total_pieces} pieces verified OK.")
     return downloaded_bytes[0]
@@ -21419,12 +21699,24 @@ def _downgrader_discover_versions(content_id, xbl3_token):
     latest_vid = data.get("VersionId", "")
     files = data.get("PackageFiles", [])
 
-    # Find the main base package (not .xsp) for the latest version
+    # Find the main base package (not .xsp) for the latest version.
+    # The API may return separate entries for the .phf (piece hashes) and the
+    # actual content file — they live on different CDN paths. We need both.
     base_pkg = None
+    phf_pkg = None
+    content_pkg = None
     for f in files:
-        if not f.get("FileName", "").endswith(".xsp"):
-            base_pkg = f
-            break
+        fn = f.get("FileName", "")
+        if fn.endswith(".xsp"):
+            continue
+        if fn.lower().endswith(".phf"):
+            phf_pkg = f
+        else:
+            if not content_pkg:
+                content_pkg = f
+
+    # Prefer content package; fall back to PHF package if that's all we have
+    base_pkg = content_pkg or phf_pkg
 
     if not base_pkg:
         print("[!] No base package found in response.")
@@ -21443,8 +21735,14 @@ def _downgrader_discover_versions(content_id, xbl3_token):
     latest_phf_url = None
     latest_filename = base_pkg.get("FileName", "")
 
-    # Detect PHF: API sometimes returns the .phf URL instead of the content URL
-    # The PHF contains piece hashes; actual content must be downloaded piece-by-piece
+    # If we found a separate PHF package, use its URL for PHF data
+    if phf_pkg:
+        phf_roots = phf_pkg.get("CdnRootPaths", [])
+        phf_rel = phf_pkg.get("RelativeUrl", "")
+        latest_phf_url = (phf_roots[0] + phf_rel) if phf_roots and phf_rel else None
+
+    # Detect PHF: if the only package IS the .phf (no separate content file),
+    # derive content URL by stripping .phf suffix (legacy fallback)
     if latest_url.split("?")[0].lower().endswith(".phf"):
         latest_phf_url = latest_url
         # Content URL is same path without .phf suffix
@@ -21452,7 +21750,9 @@ def _downgrader_discover_versions(content_id, xbl3_token):
         latest_url = latest_phf_url.split("?")[0][:-4] + q
         if latest_filename.lower().endswith(".phf"):
             latest_filename = latest_filename[:-4]
-        # Download and parse the PHF to get actual content size
+
+    # Download and parse the PHF to get actual content size and piece hashes
+    if latest_phf_url:
         try:
             phf_req = urllib.request.Request(latest_phf_url)
             phf_req.add_header("User-Agent", "Microsoft-Delivery-Optimization/10.0")
@@ -21626,12 +21926,18 @@ def _downgrader_discover_versions(content_id, xbl3_token):
             continue
 
         if vdata.get("PackageFound"):
-            # Find the base package file (not .xsp)
-            vpkg = None
+            # Find content package and PHF package separately (different CDN paths)
+            v_content_pkg = None
+            v_phf_pkg = None
             for vf in vdata.get("PackageFiles", []):
-                if not vf.get("FileName", "").endswith(".xsp"):
-                    vpkg = vf
-                    break
+                vfn = vf.get("FileName", "")
+                if vfn.endswith(".xsp"):
+                    continue
+                if vfn.lower().endswith(".phf"):
+                    v_phf_pkg = vf
+                elif not v_content_pkg:
+                    v_content_pkg = vf
+            vpkg = v_content_pkg or v_phf_pkg
             if vpkg:
                 cdn_roots = vpkg.get("CdnRootPaths", [])
                 rel = vpkg.get("RelativeUrl", "")
@@ -21639,14 +21945,20 @@ def _downgrader_discover_versions(content_id, xbl3_token):
                 sz = vpkg.get("FileSize", 0)
                 v_phf_url = None
                 v_filename = vpkg.get("FileName", "")
-                # Detect PHF URL for older versions too
+                # Get PHF URL from separate PHF package if available
+                if v_phf_pkg:
+                    phf_roots = v_phf_pkg.get("CdnRootPaths", [])
+                    phf_rel = v_phf_pkg.get("RelativeUrl", "")
+                    v_phf_url = (phf_roots[0] + phf_rel) if phf_roots and phf_rel else None
+                # Fallback: if the only package is the .phf, derive content URL
                 if dl_url.split("?")[0].lower().endswith(".phf"):
                     v_phf_url = dl_url
                     q = ("?" + v_phf_url.split("?", 1)[1]) if "?" in v_phf_url else ""
                     dl_url = v_phf_url.split("?")[0][:-4] + q
                     if v_filename.lower().endswith(".phf"):
                         v_filename = v_filename[:-4]
-                    # Try to get real size from PHF
+                # Try to get real size from PHF
+                if v_phf_url:
                     try:
                         phf_req = urllib.request.Request(v_phf_url)
                         phf_req.add_header("User-Agent", "Microsoft-Delivery-Optimization/10.0")

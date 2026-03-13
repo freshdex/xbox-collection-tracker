@@ -116,17 +116,45 @@ echo.
 :: -------------------------------------------------------------------
 :menu
 echo       [1] Launch XCT Tools
-echo       [2] Launch XCT Local Portal
-echo       [3] Launch XCT Live Portal
+echo       [2] Launch XCT Desktop
+echo       [3] Launch XCT Local Portal
+echo       [4] Launch xct.live
 echo       [0] Exit
 echo.
 set /p "CHOICE=  Pick: "
 
 if "!CHOICE!"=="1" goto :launch_xct
-if "!CHOICE!"=="2" goto :open_local
-if "!CHOICE!"=="3" goto :open_live
+if "!CHOICE!"=="2" goto :launch_desktop
+if "!CHOICE!"=="3" goto :open_local
+if "!CHOICE!"=="4" goto :open_live
 if "!CHOICE!"=="0" exit /b 0
 echo   [!] Invalid choice.
+echo.
+goto :menu
+
+:: -------------------------------------------------------------------
+:: Launch XCT Desktop (Tauri GUI)
+:: -------------------------------------------------------------------
+:launch_desktop
+echo.
+set "DESKTOP_DIR=%~dp0xct-desktop"
+set "RELEASE_EXE=!DESKTOP_DIR!\src-tauri\target\release\xct-desktop.exe"
+
+:: Use release build if available, otherwise run tauri dev
+if exist "!RELEASE_EXE!" (
+    echo   [*] Launching XCT Desktop...
+    start "" "!RELEASE_EXE!"
+) else (
+    where npm >nul 2>&1
+    if !errorlevel! neq 0 (
+        echo   [!] npm not found. Install Node.js to run XCT Desktop.
+        echo.
+        goto :menu
+    )
+    echo   [*] Launching XCT Desktop ^(dev mode^)...
+    echo   [*] First launch may take a while to compile...
+    start "XCT Desktop" cmd /c "cd /d "!DESKTOP_DIR!" && npx tauri dev"
+)
 echo.
 goto :menu
 
@@ -172,7 +200,7 @@ goto :menu
 :: -------------------------------------------------------------------
 :open_live
 echo.
-echo   [*] Opening xct.freshdex.app ...
-start "" "https://xct.freshdex.app"
+echo   [*] Opening xct.live ...
+start "" "https://xct.live"
 echo.
 goto :menu

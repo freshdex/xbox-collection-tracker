@@ -147,69 +147,6 @@ def init_db():
         conn.commit()
     except Exception:
         conn.rollback()
-    # X (Twitter) profile columns on developer/publisher profiles (migration)
-    for _tbl in ("developer_profiles", "publisher_profiles"):
-        try:
-            cur = conn.cursor()
-            cur.execute(f"""
-                ALTER TABLE {_tbl}
-                    ADD COLUMN IF NOT EXISTS x_id TEXT DEFAULT '',
-                    ADD COLUMN IF NOT EXISTS x_handle TEXT DEFAULT '',
-                    ADD COLUMN IF NOT EXISTS x_name TEXT DEFAULT '',
-                    ADD COLUMN IF NOT EXISTS x_bio TEXT DEFAULT '',
-                    ADD COLUMN IF NOT EXISTS x_followers INTEGER DEFAULT 0,
-                    ADD COLUMN IF NOT EXISTS x_following INTEGER DEFAULT 0,
-                    ADD COLUMN IF NOT EXISTS x_tweet_count INTEGER DEFAULT 0,
-                    ADD COLUMN IF NOT EXISTS x_listed_count INTEGER DEFAULT 0,
-                    ADD COLUMN IF NOT EXISTS x_profile_image TEXT DEFAULT '',
-                    ADD COLUMN IF NOT EXISTS x_banner_image TEXT DEFAULT '',
-                    ADD COLUMN IF NOT EXISTS x_location TEXT DEFAULT '',
-                    ADD COLUMN IF NOT EXISTS x_url TEXT DEFAULT '',
-                    ADD COLUMN IF NOT EXISTS x_verified BOOLEAN DEFAULT FALSE,
-                    ADD COLUMN IF NOT EXISTS x_created_at TEXT DEFAULT '',
-                    ADD COLUMN IF NOT EXISTS x_updated_at TIMESTAMPTZ,
-                    ADD COLUMN IF NOT EXISTS x_list_url TEXT DEFAULT '',
-                    ADD COLUMN IF NOT EXISTS x_list_num INTEGER DEFAULT 0
-            """)
-            conn.commit()
-        except Exception:
-            conn.rollback()
-    # Entity X accounts table (multiple X accounts per developer/publisher)
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS entity_x_accounts (
-                id SERIAL PRIMARY KEY,
-                entity_type TEXT NOT NULL,
-                entity_name TEXT NOT NULL,
-                account_label TEXT NOT NULL DEFAULT 'Main',
-                x_id TEXT DEFAULT '',
-                x_handle TEXT DEFAULT '',
-                x_name TEXT DEFAULT '',
-                x_bio TEXT DEFAULT '',
-                x_followers INTEGER DEFAULT 0,
-                x_following INTEGER DEFAULT 0,
-                x_tweet_count INTEGER DEFAULT 0,
-                x_listed_count INTEGER DEFAULT 0,
-                x_profile_image TEXT DEFAULT '',
-                x_banner_image TEXT DEFAULT '',
-                x_location TEXT DEFAULT '',
-                x_url TEXT DEFAULT '',
-                x_verified BOOLEAN DEFAULT FALSE,
-                x_created_at TEXT DEFAULT '',
-                x_updated_at TIMESTAMPTZ,
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE(entity_type, entity_name, x_handle)
-            )
-        """)
-        cur.execute("""
-            ALTER TABLE entity_x_accounts
-                ADD COLUMN IF NOT EXISTS is_employee BOOLEAN DEFAULT FALSE,
-                ADD COLUMN IF NOT EXISTS parent_x_handle TEXT DEFAULT ''
-        """)
-        conn.commit()
-    except Exception:
-        conn.rollback()
     # OAuth state table (needed for multi-worker gunicorn)
     try:
         cur = conn.cursor()
@@ -341,6 +278,17 @@ def init_db():
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_changelog_created
             ON marketplace_changelog(created_at DESC)
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bundle_contents (
+                bundle_product_id  VARCHAR(16) NOT NULL,
+                child_product_id   VARCHAR(16) NOT NULL,
+                PRIMARY KEY (bundle_product_id, child_product_id)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_bc_child
+            ON bundle_contents(child_product_id)
         """)
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_mp_xbox_title_id
@@ -867,7 +815,7 @@ def data_js():
         conn.close()
 _TAB_SLUGS = {
     "summary", "library", "store", "marketplace", "subscriptions", "gamepass", "playhistory", "scanlog",
-    "gamertags", "gfwl", "xvcdb", "imports", "purchases", "achievements", "developers", "publishers", "admin",
+    "gamertags", "gfwl", "xvcdb", "imports", "purchases", "achievements", "admin",
 }
 
 # GP PIDs set (loaded from shared_data, refreshed every 5 minutes)
@@ -1708,6 +1656,7 @@ def store_products():
         ach = request.args.get("ach", "")
         do_group = request.args.get("group", "")
         hide_owned_ed = request.args.get("hoe", "")
+        hide_owned_bun = request.args.get("hob", "")
         regions_raw = request.args.get("regions", "")
         nosub = request.args.get("nosub", "")
         nodemo = request.args.get("nodemo", "")
@@ -1978,6 +1927,23 @@ def store_products():
                     "AND NOT p.product_id = ANY(%(hoe_owned_pids)s))")
                 params["owned_tids"] = list(owned_tids)
                 params["hoe_owned_pids"] = list(hoe_pids)
+
+        # Hide owned bundles — exclude bundles that contain a product the user owns
+        if hide_owned_bun == "1" and owned_pids:
+            hob_pids = set(owned_pids)
+            if contributor:
+                cur.execute(
+                    "SELECT product_id FROM disc_ownership "
+                    "WHERE contributor_id = %s",
+                    (contributor["id"],))
+                hob_pids.update(row["product_id"] for row in cur.fetchall())
+            if hob_pids:
+                wheres.append(
+                    "NOT (p.is_bundle = TRUE AND EXISTS ("
+                    "SELECT 1 FROM bundle_contents bc "
+                    "WHERE bc.bundle_product_id = p.product_id "
+                    "AND bc.child_product_id = ANY(%(hob_owned_pids)s)))")
+                params["hob_owned_pids"] = list(hob_pids)
 
         # Release status
         if rel_raw:
@@ -2746,12 +2712,6 @@ _ENTITY_SORT_MAP = {
     "metacriticAsc": "avg_metacritic ASC NULLS LAST",
     "newest": "newest_release DESC NULLS LAST",
     "oldest": "oldest_release ASC NULLS LAST",
-    "xFollowers": "x_followers DESC NULLS LAST",
-    "xFollowersAsc": "x_followers ASC NULLS LAST",
-    "xTweets": "x_tweet_count DESC NULLS LAST",
-    "xTweetsAsc": "x_tweet_count ASC NULLS LAST",
-    "xFrequency": "CASE WHEN x_created_at != '' AND x_tweet_count > 0 THEN x_tweet_count::float / GREATEST(EXTRACT(EPOCH FROM (NOW() - x_created_at::timestamptz)) / 86400.0, 1) ELSE 0 END DESC NULLS LAST",
-    "xFrequencyAsc": "CASE WHEN x_created_at != '' AND x_tweet_count > 0 THEN x_tweet_count::float / GREATEST(EXTRACT(EPOCH FROM (NOW() - x_created_at::timestamptz)) / 86400.0, 1) ELSE 0 END ASC NULLS LAST",
 }
 
 
@@ -2796,13 +2756,9 @@ def _entity_listing(entity_type):
                        AND EXTRACT(YEAR FROM p.release_date) < 2100) AS newest_release,
                    COUNT(*) FILTER (WHERE p.xcloud_streamable) AS xcloud_count,
                    COUNT(*) FILTER (WHERE p.has_achievements) AS ach_count,
-                   ARRAY_AGG(DISTINCT unnest_plat) FILTER (WHERE unnest_plat IS NOT NULL) AS all_platforms,
-                   MAX(ep.x_followers) AS x_followers,
-                   MAX(ep.x_tweet_count) AS x_tweet_count,
-                   MIN(NULLIF(ep.x_created_at, '')) AS x_created_at
+                   ARRAY_AGG(DISTINCT unnest_plat) FILTER (WHERE unnest_plat IS NOT NULL) AS all_platforms
             FROM marketplace_products p
             LEFT JOIN LATERAL UNNEST(p.platforms) AS unnest_plat ON TRUE
-            LEFT JOIN {profile_table} ep ON ep.name = p.{col}
             WHERE {where_sql}
             GROUP BY p.{col}
             ORDER BY {sort_sql}
@@ -2832,42 +2788,6 @@ def _entity_listing(entity_type):
                 {"names": entity_names})
             for pr in cur.fetchall():
                 profiles[pr["name"]] = pr
-
-        # Fetch X accounts for these entities (multi-account support)
-        x_accounts_map = {}
-        if entity_names:
-            cur.execute("""
-                SELECT entity_name, account_label, x_handle, x_name, x_followers,
-                       x_tweet_count, x_created_at, x_profile_image, x_verified, x_bio,
-                       is_employee, parent_x_handle
-                FROM entity_x_accounts
-                WHERE entity_type = %s AND entity_name = ANY(%s)
-                ORDER BY is_employee ASC, x_followers DESC
-            """, (entity_type, entity_names))
-            for xa in cur.fetchall():
-                x_accounts_map.setdefault(xa["entity_name"], []).append({
-                    "label": xa["account_label"],
-                    "handle": xa["x_handle"],
-                    "name": xa["x_name"] or "",
-                    "followers": xa["x_followers"] or 0,
-                    "tweetCount": xa["x_tweet_count"] or 0,
-                    "createdAt": xa["x_created_at"] or "",
-                    "profileImage": xa["x_profile_image"] or "",
-                    "verified": bool(xa["x_verified"]),
-                    "bio": xa["x_bio"] or "",
-                    "isEmployee": bool(xa.get("is_employee")),
-                    "parentHandle": xa.get("parent_x_handle") or "",
-                })
-
-        # Fetch custom labels used so far
-        cur.execute("""
-            SELECT DISTINCT account_label FROM entity_x_accounts
-            WHERE account_label NOT IN ('Main','USA','Europe','UK','Japan','France',
-                'Germany','Italy','Spain','Latin America','Asia','Brazil',
-                'Mexico','Middle East','India','Korea','Australia')
-            ORDER BY account_label
-        """)
-        custom_labels = [r["account_label"] for r in cur.fetchall()]
 
         # Fetch a representative image (box art of highest-rated game)
         rep_images = {}
@@ -2911,15 +2831,6 @@ def _entity_listing(entity_type):
                 "twitter": prof.get("twitter", "") or "",
                 "youtube": prof.get("youtube", "") or "",
                 "discord": prof.get("discord", "") or "",
-                "xHandle": prof.get("x_handle", "") or "",
-                "xFollowers": prof.get("x_followers") or 0,
-                "xTweetCount": r["x_tweet_count"] or prof.get("x_tweet_count") or 0,
-                "xCreatedAt": r["x_created_at"] or prof.get("x_created_at", "") or "",
-                "xProfileImage": prof.get("x_profile_image", "") or "",
-                "xVerified": bool(prof.get("x_verified")),
-                "xBio": prof.get("x_bio", "") or "",
-                "xListNum": prof.get("x_list_num") or 0,
-                "xAccounts": x_accounts_map.get(name, []),
                 "repImage": rep_images.get(name, ""),
             })
 
@@ -2929,7 +2840,6 @@ def _entity_listing(entity_type):
             "page": page,
             "perPage": per_page,
             "totalPages": max(1, -(-total // per_page)),
-            "customLabels": custom_labels,
         }
         return _gzip_json_response(result)
     except Exception as e:
@@ -2984,19 +2894,6 @@ def _entity_detail(entity_type, name):
             for s in cur.fetchall():
                 subs_map.setdefault(s["product_id"], []).append(s["tier"])
 
-        # Fetch game-level X accounts
-        game_x_map = {}
-        if pids:
-            cur.execute("""
-                SELECT entity_name, account_label, x_handle, x_name, x_followers, x_tweet_count,
-                       x_created_at, x_profile_image, x_verified, is_employee, parent_x_handle
-                FROM entity_x_accounts
-                WHERE entity_type = 'game' AND entity_name = ANY(%(pids)s)
-                ORDER BY is_employee ASC, x_followers DESC
-            """, {"pids": pids})
-            for r2 in cur.fetchall():
-                game_x_map.setdefault(r2["entity_name"], []).append(dict(r2))
-
         products = []
         for r in rows:
             pid = r["product_id"]
@@ -3022,7 +2919,6 @@ def _entity_detail(entity_type, name):
                 "priceUSD": r["price_usd"] or 0,
                 "currentPriceUSD": r["current_price_usd"] or 0,
                 "subscriptions": subs_map.get(pid, []),
-                "xAccounts": game_x_map.get(pid, []),
             })
 
         result = {
@@ -3040,19 +2936,6 @@ def _entity_detail(entity_type, name):
                 "description": prof.get("description", "") or "",
                 "country": prof.get("country", "") or "",
                 "foundedYear": prof.get("founded_year"),
-                "xHandle": prof.get("x_handle", "") or "",
-                "xName": prof.get("x_name", "") or "",
-                "xBio": prof.get("x_bio", "") or "",
-                "xFollowers": prof.get("x_followers") or 0,
-                "xFollowing": prof.get("x_following") or 0,
-                "xTweetCount": prof.get("x_tweet_count") or 0,
-                "xListedCount": prof.get("x_listed_count") or 0,
-                "xProfileImage": prof.get("x_profile_image", "") or "",
-                "xBannerImage": prof.get("x_banner_image", "") or "",
-                "xLocation": prof.get("x_location", "") or "",
-                "xUrl": prof.get("x_url", "") or "",
-                "xVerified": bool(prof.get("x_verified")),
-                "xCreatedAt": prof.get("x_created_at", "") or "",
             },
             "products": products,
             "gameCount": sum(1 for p in products if p["productKind"] == "Game"),
@@ -6376,392 +6259,6 @@ def admin_achievements_refresh(conn=None, cur=None, contributor=None, api_key=No
     return jsonify(ok=True, message=f"Refreshing achievements for {len(users)} users in background", count=len(users))
 
 
-def _x_lookup_user(username):
-    """Look up a single X/Twitter user by username. Returns profile dict or None."""
-    if not X_BEARER_TOKEN:
-        return None
-    import urllib.parse
-    token = urllib.parse.unquote(X_BEARER_TOKEN)
-    resp = _requests_lib.get(
-        f"https://api.x.com/2/users/by/username/{username}",
-        headers={"Authorization": f"Bearer {token}"},
-        params={
-            "user.fields": "id,name,username,description,public_metrics,profile_image_url,"
-                           "verified,verified_type,created_at,location,url,entities,"
-                           "protected,profile_banner_url"
-        },
-        timeout=15,
-    )
-    if resp.status_code == 429:
-        log.warning("[x-api] Rate limited (429)")
-        return {"error": "rate_limited", "reset": resp.headers.get("x-rate-limit-reset", "")}
-    if resp.status_code != 200:
-        log.warning("[x-api] HTTP %s for @%s: %s", resp.status_code, username, resp.text[:200])
-        return None
-    data = resp.json().get("data")
-    if not data:
-        return None
-    pm = data.get("public_metrics", {})
-    # Resolve t.co URL to real URL
-    expanded_url = ""
-    if data.get("entities") and data["entities"].get("url"):
-        urls = data["entities"]["url"].get("urls", [])
-        if urls:
-            expanded_url = urls[0].get("expanded_url", "") or urls[0].get("display_url", "")
-    return {
-        "x_id": data.get("id", ""),
-        "x_handle": data.get("username", ""),
-        "x_name": data.get("name", ""),
-        "x_bio": data.get("description", ""),
-        "x_followers": pm.get("followers_count", 0),
-        "x_following": pm.get("following_count", 0),
-        "x_tweet_count": pm.get("tweet_count", 0),
-        "x_listed_count": pm.get("listed_count", 0),
-        "x_profile_image": (data.get("profile_image_url") or "").replace("_normal.", "_400x400."),
-        "x_banner_image": data.get("profile_banner_url", ""),
-        "x_location": data.get("location", ""),
-        "x_url": expanded_url or data.get("url", ""),
-        "x_verified": bool(data.get("verified")),
-        "x_created_at": data.get("created_at", ""),
-    }
-
-
-@app.route("/api/v1/admin/entity-x-profile", methods=["PUT"])
-@require_auth
-def admin_entity_x_profile(conn=None, cur=None, contributor=None, api_key=None):
-    """Save X handle for a developer/publisher, fetch profile from X API. Admin only."""
-    if contributor["username"].lower() != "freshdex":
-        return jsonify(error="Admin access required"), 403
-
-    data = request.get_json(force=True)
-    entity_type = data.get("entityType", "")  # "developer" or "publisher"
-    entity_name = data.get("name", "").strip()
-    x_url = data.get("xUrl", "").strip()
-
-    if entity_type not in ("developer", "publisher"):
-        return jsonify(error="Invalid entityType"), 400
-    if not entity_name:
-        return jsonify(error="name required"), 400
-    if not x_url:
-        return jsonify(error="xUrl required"), 400
-
-    # Extract handle from URL: https://x.com/handle or https://twitter.com/handle or just @handle
-    import re
-    m = re.search(r'(?:x\.com|twitter\.com)/([A-Za-z0-9_]+)', x_url)
-    if m:
-        handle = m.group(1)
-    elif x_url.startswith("@"):
-        handle = x_url[1:]
-    else:
-        handle = x_url.strip().split("/")[-1].lstrip("@")
-
-    if not handle or len(handle) > 50:
-        return jsonify(error=f"Could not parse handle from: {x_url}"), 400
-
-    profile_table = "developer_profiles" if entity_type == "developer" else "publisher_profiles"
-
-    # Look up from X API
-    x_data = _x_lookup_user(handle)
-    if not x_data:
-        return jsonify(error=f"X user @{handle} not found"), 404
-    if x_data.get("error") == "rate_limited":
-        return jsonify(error="X API rate limited. Try again later.",
-                       reset=x_data.get("reset")), 429
-
-    try:
-        cur.execute(f"""
-            UPDATE {profile_table} SET
-                twitter = %(handle)s,
-                x_id = %(x_id)s, x_handle = %(x_handle)s, x_name = %(x_name)s,
-                x_bio = %(x_bio)s, x_followers = %(x_followers)s,
-                x_following = %(x_following)s, x_tweet_count = %(x_tweet_count)s,
-                x_listed_count = %(x_listed_count)s,
-                x_profile_image = %(x_profile_image)s,
-                x_banner_image = %(x_banner_image)s,
-                x_location = %(x_location)s, x_url = %(x_url)s,
-                x_verified = %(x_verified)s, x_created_at = %(x_created_at)s,
-                x_updated_at = NOW(),
-                updated_at = NOW()
-            WHERE name = %(name)s
-        """, {**x_data, "handle": handle, "name": entity_name})
-        if cur.rowcount == 0:
-            # Profile row doesn't exist yet — insert it
-            cur.execute(f"""
-                INSERT INTO {profile_table} (name, twitter, x_id, x_handle, x_name, x_bio,
-                    x_followers, x_following, x_tweet_count, x_listed_count,
-                    x_profile_image, x_banner_image, x_location, x_url,
-                    x_verified, x_created_at, x_updated_at, updated_at)
-                VALUES (%(name)s, %(handle)s, %(x_id)s, %(x_handle)s, %(x_name)s, %(x_bio)s,
-                    %(x_followers)s, %(x_following)s, %(x_tweet_count)s, %(x_listed_count)s,
-                    %(x_profile_image)s, %(x_banner_image)s, %(x_location)s, %(x_url)s,
-                    %(x_verified)s, %(x_created_at)s, NOW(), NOW())
-            """, {**x_data, "handle": handle, "name": entity_name})
-        conn.commit()
-        log.info("[x-profile] Saved @%s for %s '%s' (%d followers)",
-                 handle, entity_type, entity_name, x_data.get("x_followers", 0))
-        return jsonify(ok=True, profile=x_data)
-    except Exception as e:
-        conn.rollback()
-        log.exception("[x-profile] DB error")
-        return jsonify(error=str(e)), 500
-
-
-@app.route("/api/v1/admin/entity-x-account", methods=["PUT"])
-@require_auth
-def admin_entity_x_account(conn=None, cur=None, contributor=None, api_key=None):
-    """Add an X account for a developer/publisher with label. Admin only."""
-    if contributor["username"].lower() != "freshdex":
-        return jsonify(error="Admin access required"), 403
-
-    data = request.get_json(force=True)
-    entity_type = data.get("entityType", "")
-    entity_name = data.get("name", "").strip()
-    x_url = data.get("xUrl", "").strip()
-    label = data.get("label", "Main").strip() or "Main"
-
-    if entity_type not in ("developer", "publisher", "game"):
-        return jsonify(error="Invalid entityType"), 400
-    if not entity_name:
-        return jsonify(error="name required"), 400
-    if not x_url:
-        return jsonify(error="xUrl required"), 400
-
-    import re
-    m = re.search(r'(?:x\.com|twitter\.com)/([A-Za-z0-9_]+)', x_url)
-    if m:
-        handle = m.group(1)
-    elif x_url.startswith("@"):
-        handle = x_url[1:]
-    else:
-        handle = x_url.strip().split("/")[-1].lstrip("@")
-
-    if not handle or len(handle) > 50:
-        return jsonify(error=f"Could not parse handle from: {x_url}"), 400
-
-    x_data = _x_lookup_user(handle)
-    if not x_data:
-        return jsonify(error=f"X user @{handle} not found"), 404
-    if x_data.get("error") == "rate_limited":
-        return jsonify(error="X API rate limited. Try again later.",
-                       reset=x_data.get("reset")), 429
-
-    try:
-        # Upsert into entity_x_accounts
-        cur.execute("""
-            INSERT INTO entity_x_accounts
-                (entity_type, entity_name, account_label,
-                 x_id, x_handle, x_name, x_bio, x_followers, x_following,
-                 x_tweet_count, x_listed_count, x_profile_image, x_banner_image,
-                 x_location, x_url, x_verified, x_created_at, x_updated_at)
-            VALUES (%(etype)s, %(ename)s, %(label)s,
-                    %(x_id)s, %(x_handle)s, %(x_name)s, %(x_bio)s, %(x_followers)s,
-                    %(x_following)s, %(x_tweet_count)s, %(x_listed_count)s,
-                    %(x_profile_image)s, %(x_banner_image)s, %(x_location)s,
-                    %(x_url)s, %(x_verified)s, %(x_created_at)s, NOW())
-            ON CONFLICT (entity_type, entity_name, x_handle) DO UPDATE SET
-                account_label = EXCLUDED.account_label,
-                x_id = EXCLUDED.x_id, x_name = EXCLUDED.x_name,
-                x_bio = EXCLUDED.x_bio, x_followers = EXCLUDED.x_followers,
-                x_following = EXCLUDED.x_following,
-                x_tweet_count = EXCLUDED.x_tweet_count,
-                x_listed_count = EXCLUDED.x_listed_count,
-                x_profile_image = EXCLUDED.x_profile_image,
-                x_banner_image = EXCLUDED.x_banner_image,
-                x_location = EXCLUDED.x_location, x_url = EXCLUDED.x_url,
-                x_verified = EXCLUDED.x_verified,
-                x_created_at = EXCLUDED.x_created_at,
-                x_updated_at = NOW()
-        """, {**x_data, "etype": entity_type, "ename": entity_name, "label": label})
-
-        # Update profile table x_followers and x_tweet_count with totals across all accounts
-        total_followers = 0
-        total_tweets = 0
-        if entity_type in ("developer", "publisher"):
-            profile_table = "developer_profiles" if entity_type == "developer" else "publisher_profiles"
-            cur.execute("""
-                SELECT COALESCE(SUM(x_followers), 0) AS total_followers,
-                       COALESCE(SUM(x_tweet_count), 0) AS total_tweets
-                FROM entity_x_accounts
-                WHERE entity_type = %s AND entity_name = %s
-            """, (entity_type, entity_name))
-            totals = cur.fetchone()
-            total_followers = totals["total_followers"]
-            total_tweets = totals["total_tweets"]
-            cur.execute(f"""
-                UPDATE {profile_table} SET x_followers = %(followers)s, x_tweet_count = %(tweets)s, updated_at = NOW()
-                WHERE name = %(name)s
-            """, {"followers": total_followers, "tweets": total_tweets, "name": entity_name})
-            if cur.rowcount == 0:
-                cur.execute(f"""
-                    INSERT INTO {profile_table} (name, x_followers, x_tweet_count, updated_at)
-                    VALUES (%(name)s, %(followers)s, %(tweets)s, NOW())
-                """, {"followers": total_followers, "tweets": total_tweets, "name": entity_name})
-
-        # Fetch all accounts for this entity to return
-        cur.execute("""
-            SELECT account_label, x_handle, x_name, x_followers, x_tweet_count,
-                   x_created_at, x_profile_image, x_verified, x_bio,
-                   is_employee, parent_x_handle
-            FROM entity_x_accounts
-            WHERE entity_type = %s AND entity_name = %s
-            ORDER BY is_employee ASC, x_followers DESC
-        """, (entity_type, entity_name))
-        accounts = [dict(r) for r in cur.fetchall()]
-
-        conn.commit()
-        log.info("[x-account] Saved @%s (%s) for %s '%s' (%d followers)",
-                 handle, label, entity_type, entity_name, x_data.get("x_followers", 0))
-        return jsonify(ok=True, account=x_data, label=label,
-                       accounts=accounts, totalFollowers=total_followers,
-                       totalTweets=total_tweets)
-    except Exception as e:
-        conn.rollback()
-        log.exception("[x-account] DB error")
-        return jsonify(error=str(e)), 500
-
-
-@app.route("/api/v1/admin/entity-x-employee", methods=["PUT"])
-@require_auth
-def admin_entity_x_employee(conn=None, cur=None, contributor=None, api_key=None):
-    """Save an employee X account under a parent company account. Admin only."""
-    if contributor["username"].lower() != "freshdex":
-        return jsonify(error="Admin access required"), 403
-
-    data = request.get_json(force=True)
-    entity_type = data.get("entityType", "")
-    entity_name = data.get("name", "").strip()
-    parent_handle = data.get("parentXHandle", "").strip()
-    x_url = data.get("xUrl", "").strip()
-
-    if entity_type not in ("developer", "publisher", "game"):
-        return jsonify(error="Invalid entity type"), 400
-    if not entity_name:
-        return jsonify(error="Missing entity name"), 400
-    if not parent_handle:
-        return jsonify(error="Missing parent handle"), 400
-    if not x_url:
-        return jsonify(error="Missing X URL"), 400
-
-    # Extract handle from URL or raw handle
-    handle = x_url.split("/")[-1].split("?")[0].lstrip("@").strip()
-    if not handle:
-        return jsonify(error="Invalid X URL/handle"), 400
-
-    x_data = _x_lookup_user(handle)
-    if not x_data:
-        return jsonify(error=f"X user @{handle} not found"), 404
-    if x_data.get("error") == "rate_limited":
-        return jsonify(error="X API rate limited. Try again later.",
-                       reset=x_data.get("reset")), 429
-
-    try:
-        # Upsert employee into entity_x_accounts
-        cur.execute("""
-            INSERT INTO entity_x_accounts
-                (entity_type, entity_name, account_label, is_employee, parent_x_handle,
-                 x_id, x_handle, x_name, x_bio, x_followers, x_following,
-                 x_tweet_count, x_listed_count, x_profile_image, x_banner_image,
-                 x_location, x_url, x_verified, x_created_at, x_updated_at)
-            VALUES (%(etype)s, %(ename)s, 'Employee', TRUE, %(parent)s,
-                    %(x_id)s, %(x_handle)s, %(x_name)s, %(x_bio)s, %(x_followers)s,
-                    %(x_following)s, %(x_tweet_count)s, %(x_listed_count)s,
-                    %(x_profile_image)s, %(x_banner_image)s, %(x_location)s,
-                    %(x_url)s, %(x_verified)s, %(x_created_at)s, NOW())
-            ON CONFLICT (entity_type, entity_name, x_handle) DO UPDATE SET
-                account_label = 'Employee',
-                is_employee = TRUE, parent_x_handle = EXCLUDED.parent_x_handle,
-                x_id = EXCLUDED.x_id, x_name = EXCLUDED.x_name,
-                x_bio = EXCLUDED.x_bio, x_followers = EXCLUDED.x_followers,
-                x_following = EXCLUDED.x_following,
-                x_tweet_count = EXCLUDED.x_tweet_count,
-                x_listed_count = EXCLUDED.x_listed_count,
-                x_profile_image = EXCLUDED.x_profile_image,
-                x_banner_image = EXCLUDED.x_banner_image,
-                x_location = EXCLUDED.x_location, x_url = EXCLUDED.x_url,
-                x_verified = EXCLUDED.x_verified,
-                x_created_at = EXCLUDED.x_created_at,
-                x_updated_at = NOW()
-        """, {**x_data, "etype": entity_type, "ename": entity_name, "parent": parent_handle})
-
-        # Update profile table totals (includes employees) — skip for game type
-        total_followers = 0
-        total_tweets = 0
-        if entity_type in ("developer", "publisher"):
-            profile_table = "developer_profiles" if entity_type == "developer" else "publisher_profiles"
-            cur.execute("""
-                SELECT COALESCE(SUM(x_followers), 0) AS total_followers,
-                       COALESCE(SUM(x_tweet_count), 0) AS total_tweets
-                FROM entity_x_accounts
-                WHERE entity_type = %s AND entity_name = %s
-            """, (entity_type, entity_name))
-            totals = cur.fetchone()
-            total_followers = totals["total_followers"]
-            total_tweets = totals["total_tweets"]
-            cur.execute(f"""
-                UPDATE {profile_table} SET x_followers = %(followers)s, x_tweet_count = %(tweets)s, updated_at = NOW()
-                WHERE name = %(name)s
-            """, {"followers": total_followers, "tweets": total_tweets, "name": entity_name})
-
-        # Fetch all accounts for this entity to return
-        cur.execute("""
-            SELECT account_label, x_handle, x_name, x_followers, x_tweet_count,
-                   x_created_at, x_profile_image, x_verified, x_bio,
-                   is_employee, parent_x_handle
-            FROM entity_x_accounts
-            WHERE entity_type = %s AND entity_name = %s
-            ORDER BY is_employee ASC, x_followers DESC
-        """, (entity_type, entity_name))
-        accounts = [dict(r) for r in cur.fetchall()]
-
-        conn.commit()
-        log.info("[x-employee] Saved @%s under @%s for %s '%s' (%d followers)",
-                 handle, parent_handle, entity_type, entity_name, x_data.get("x_followers", 0))
-        return jsonify(ok=True, account=x_data,
-                       accounts=accounts, totalFollowers=total_followers,
-                       totalTweets=total_tweets)
-    except Exception as e:
-        conn.rollback()
-        log.exception("[x-employee] DB error")
-        return jsonify(error=str(e)), 500
-
-
-@app.route("/api/v1/admin/entity-x-list", methods=["PUT"])
-@require_auth
-def admin_entity_x_list(conn=None, cur=None, contributor=None, api_key=None):
-    """Save X list number for a developer/publisher. Admin only."""
-    if contributor["username"].lower() != "freshdex":
-        return jsonify(error="Admin access required"), 403
-    data = request.get_json(force=True)
-    entity_type = data.get("entityType", "")
-    entity_name = data.get("name", "").strip()
-    list_num = data.get("listNum", 0)
-    try:
-        list_num = int(list_num)
-    except (TypeError, ValueError):
-        list_num = 0
-    if entity_type not in ("developer", "publisher"):
-        return jsonify(error="Invalid entityType"), 400
-    if not entity_name:
-        return jsonify(error="Missing name"), 400
-    profile_table = "developer_profiles" if entity_type == "developer" else "publisher_profiles"
-    try:
-        cur.execute(f"""
-            UPDATE {profile_table} SET x_list_num = %(num)s, updated_at = NOW()
-            WHERE name = %(name)s
-        """, {"num": list_num, "name": entity_name})
-        if cur.rowcount == 0:
-            cur.execute(f"""
-                INSERT INTO {profile_table} (name, x_list_num, updated_at)
-                VALUES (%(name)s, %(num)s, NOW())
-            """, {"num": list_num, "name": entity_name})
-        conn.commit()
-        return jsonify(ok=True, listNum=list_num)
-    except Exception as e:
-        conn.rollback()
-        log.exception("[x-list] DB error")
-        return jsonify(error=str(e)), 500
-
-
 @app.route("/api/v1/admin/tag-xbox360", methods=["POST"])
 @require_auth
 def admin_tag_xbox360(conn=None, cur=None, contributor=None, api_key=None):
@@ -6798,7 +6295,6 @@ def admin_tag_xbox360(conn=None, cur=None, contributor=None, api_key=None):
 _rawg_active = False
 _rawg_progress = {"status": "idle", "matched": 0, "total": 0, "page": 0}
 RAWG_API_KEY = os.environ.get("RAWG_API_KEY", "")
-X_BEARER_TOKEN = os.environ.get("X_BEARER_TOKEN", "")
 
 
 def _rawg_normalize(name):
@@ -6986,9 +6482,6 @@ def add_cors_headers(response):
 @app.route("/api/v1/admin/cdn-monitor/stop", methods=["OPTIONS"])
 @app.route("/api/v1/admin/achievements-refresh", methods=["OPTIONS"])
 @app.route("/api/v1/admin/tag-xbox360", methods=["OPTIONS"])
-@app.route("/api/v1/admin/entity-x-profile", methods=["OPTIONS"])
-@app.route("/api/v1/admin/entity-x-list", methods=["OPTIONS"])
-@app.route("/api/v1/admin/entity-x-account", methods=["OPTIONS"])
 def cors_preflight():
     return Response(status=204)
 
