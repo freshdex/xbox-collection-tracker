@@ -139,23 +139,134 @@ goto :menu
 echo.
 set "DESKTOP_DIR=%~dp0xct-desktop"
 set "RELEASE_EXE=!DESKTOP_DIR!\src-tauri\target\release\xct-desktop.exe"
+set "DEBUG_EXE=!DESKTOP_DIR!\src-tauri\target\debug\xct-desktop.exe"
 
-:: Use release build if available, otherwise run tauri dev
-if exist "!RELEASE_EXE!" (
-    echo   [*] Launching XCT Desktop...
-    start "" "!RELEASE_EXE!"
-) else (
-    where npm >nul 2>&1
+:: Check xct-desktop directory exists
+if not exist "!DESKTOP_DIR!" (
+    echo   [!] ERROR: xct-desktop directory not found at:
+    echo       !DESKTOP_DIR!
+    echo.
+    goto :menu
+)
+
+:: 1. Try release build
+if not exist "!RELEASE_EXE!" goto :no_release
+echo   [*] Found release build.
+echo   [*] Launching XCT Desktop...
+start "" "!RELEASE_EXE!"
+echo   [+] Launched.
+echo.
+goto :menu
+:no_release
+
+:: 2. No release build — compile and run via tauri dev
+echo   [*] No pre-built executable found. Need to compile from source.
+echo.
+
+:: Check Node.js/npm
+where npm >nul 2>&1
+if !errorlevel! neq 0 (
+    echo   [!] ERROR: npm not found.
+    echo       Install Node.js from https://nodejs.org/ to build XCT Desktop.
+    echo.
+    goto :menu
+)
+for /f "tokens=*" %%v in ('call npm --version 2^>^&1') do echo   [+] npm %%v
+
+:: Check node_modules exist
+if not exist "!DESKTOP_DIR!\node_modules" (
+    echo   [*] Installing npm dependencies...
+    pushd "!DESKTOP_DIR!"
+    npm install
+    popd
     if !errorlevel! neq 0 (
-        echo   [!] npm not found. Install Node.js to run XCT Desktop.
+        echo   [!] ERROR: npm install failed.
         echo.
         goto :menu
     )
-    echo   [*] Launching XCT Desktop ^(dev mode^)...
-    echo   [*] First launch may take a while to compile...
-    start "XCT Desktop" cmd /c "cd /d "!DESKTOP_DIR!" && npx tauri dev"
 )
+
+:: Check Rust/cargo (also check default rustup install path since PATH may not be refreshed)
+set "CARGO_BIN=%USERPROFILE%\.cargo\bin"
+if exist "!CARGO_BIN!\cargo.exe" (
+    set "PATH=!CARGO_BIN!;!PATH!"
+)
+where cargo >nul 2>&1
+if !errorlevel! neq 0 (
+    echo.
+    echo   [!] ERROR: Rust ^(cargo^) not found.
+    echo       Tauri requires Rust to compile the desktop app.
+    echo.
+    echo       Install Rust:
+    echo         [1] Install via winget   ^(winget install Rustlang.Rustup^)
+    echo         [2] Open rustup.rs       ^(manual install^)
+    echo         [3] Back to menu
+    echo.
+    set /p "RUSTCHOICE=  Pick [1/2/3]: "
+    if "!RUSTCHOICE!"=="1" (
+        echo.
+        echo   [*] Installing Rust via winget...
+        winget install Rustlang.Rustup --accept-package-agreements --accept-source-agreements
+        if !errorlevel! neq 0 (
+            echo   [!] winget install failed. Try option 2.
+            echo.
+            goto :menu
+        )
+        echo.
+        echo   [+] Rust installed. Please close and reopen this launcher
+        echo       so the PATH update takes effect.
+        pause
+        exit /b 0
+    )
+    if "!RUSTCHOICE!"=="2" (
+        start "" "https://rustup.rs"
+        echo.
+        echo   Install Rust, then reopen this launcher.
+        pause
+        exit /b 0
+    )
+    goto :menu
+)
+for /f "tokens=*" %%v in ('call cargo --version 2^>^&1') do echo   [+] %%v
+
+:: Check Tauri CLI
+echo   [*] Checking Tauri CLI...
+pushd "!DESKTOP_DIR!"
+call npx tauri --version >nul 2>&1
+if !errorlevel! neq 0 (
+    echo   [!] ERROR: Tauri CLI not found or failed.
+    echo       Try running: cd xct-desktop ^&^& npm install
+    popd
+    echo.
+    goto :menu
+)
+for /f "tokens=*" %%v in ('call npx tauri --version 2^>^&1') do echo   [+] tauri-cli %%v
+popd
+
+:: All checks passed — build release (embeds frontend, no dev server needed)
 echo.
+echo   [*] Building XCT Desktop release...
+echo   [*] First build will take several minutes to compile all dependencies.
+echo   [*] Subsequent builds are much faster.
+echo.
+pushd "!DESKTOP_DIR!"
+call npx tauri build 2>&1
+set "TAURI_EXIT=!errorlevel!"
+popd
+echo.
+if !TAURI_EXIT! equ 0 (
+    echo   [+] Build successful!
+    if exist "!RELEASE_EXE!" (
+        echo   [*] Launching XCT Desktop...
+        start "" "!RELEASE_EXE!"
+        echo   [+] Launched.
+    )
+)
+if !TAURI_EXIT! neq 0 (
+    echo   [!] Build failed with error code !TAURI_EXIT!
+    echo   [*] Check the output above for details.
+    echo.
+)
 goto :menu
 
 :: -------------------------------------------------------------------

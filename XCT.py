@@ -5798,7 +5798,6 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         # -- Saved Filters --
         "let _mktSavedFilters=[];let _mktActiveSaved='';\n"
         "function _mktInitSaved(){"
-        "try{_mktSavedFilters=JSON.parse(localStorage.getItem('xct_mkt_saved')||'[]')}catch(e){_mktSavedFilters=[]}"
         "const sel=document.getElementById('mkt-saved');if(!sel)return;"
         "let h='<option value=\"\">Saved Filters</option>';"
         "_mktSavedFilters.forEach(f=>{h+='<option value=\"'+f.name.replace(/\"/g,'&quot;')+'\">'+f.name+'</option>'});"
@@ -5807,6 +5806,25 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "h+='<option value=\"__update__\"'+ (_mktActiveSaved?'':' disabled')+'>Update Current Filter</option>';"
         "h+='<option value=\"__delete__\"'+ (_mktActiveSaved?'':' disabled')+'>Delete Current Filter</option>';"
         "sel.innerHTML=h;sel.value=_mktActiveSaved}\n"
+        "function _mktLoadFiltersFromServer(){"
+        "const k=localStorage.getItem('xct_api_key');if(!k){"
+        "try{_mktSavedFilters=JSON.parse(localStorage.getItem('xct_mkt_saved')||'[]')}catch(e){_mktSavedFilters=[]}"
+        "_mktInitSaved();return}"
+        "fetch((typeof XCT_API_BASE!=='undefined'?XCT_API_BASE:'https://xct.live')+'/api/v1/profile',{headers:{'X-API-Key':k}})"
+        ".then(r=>r.json()).then(d=>{"
+        "if(d.settings&&Array.isArray(d.settings.storeFilters)){_mktSavedFilters=d.settings.storeFilters}"
+        "else{try{_mktSavedFilters=JSON.parse(localStorage.getItem('xct_mkt_saved')||'[]')}catch(e){_mktSavedFilters=[]}}"
+        "_mktInitSaved()}).catch(()=>{"
+        "try{_mktSavedFilters=JSON.parse(localStorage.getItem('xct_mkt_saved')||'[]')}catch(e){_mktSavedFilters=[]}"
+        "_mktInitSaved()})}\n"
+        "function _mktSyncFiltersToServer(){"
+        "const k=localStorage.getItem('xct_api_key');if(!k){"
+        "localStorage.setItem('xct_mkt_saved',JSON.stringify(_mktSavedFilters));return}"
+        "fetch((typeof XCT_API_BASE!=='undefined'?XCT_API_BASE:'https://xct.live')+'/api/v1/profile',{"
+        "method:'PUT',headers:{'X-API-Key':k,'Content-Type':'application/json'},"
+        "body:JSON.stringify({settings:{storeFilters:_mktSavedFilters}})})"
+        ".then(r=>{if(!r.ok)throw r})"
+        ".catch(()=>{localStorage.setItem('xct_mkt_saved',JSON.stringify(_mktSavedFilters))})}\n"
 
         "function _mktLoadSaved(val){"
         "const sel=document.getElementById('mkt-saved');"
@@ -5819,13 +5837,13 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
         "var uf=_mktSavedFilters.find(f=>f.name===_mktActiveSaved);"
         "if(!uf){sel.value=_mktActiveSaved;return}"
         "uf.params=_mktSerializeState();"
-        "localStorage.setItem('xct_mkt_saved',JSON.stringify(_mktSavedFilters));"
+        "_mktSyncFiltersToServer();"
         "sel.value=_mktActiveSaved;return}"
         "if(val==='__save__'){"
         "const name=prompt('Filter name:',_mktSuggestName());"
         "if(!name){sel.value=_mktActiveSaved;return}"
         "_mktSavedFilters.push({name:name,params:_mktSerializeState()});"
-        "localStorage.setItem('xct_mkt_saved',JSON.stringify(_mktSavedFilters));"
+        "_mktSyncFiltersToServer();"
         "_mktActiveSaved=name;_mktInitSaved();return}"
         # Load saved filter
         "if(!val){_mktActiveSaved='';_mktInitSaved();return}"
@@ -5915,7 +5933,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
 
         "function _mktDeleteSaved(name){"
         "_mktSavedFilters=_mktSavedFilters.filter(f=>f.name!==name);"
-        "localStorage.setItem('xct_mkt_saved',JSON.stringify(_mktSavedFilters));"
+        "_mktSyncFiltersToServer();"
         "_mktInitSaved()}\n"
 
         "document.addEventListener('click',function(e){"
@@ -8590,7 +8608,7 @@ def build_html_template(gamertag="", header_html="", default_tab="", extra_js=""
 
     html += (
         '_loadImports().catch(()=>{}).then(()=>{\n'
-        'try{initDropdowns();_libInitSaved();_mktInitSaved();\n'
+        'try{initDropdowns();_libInitSaved();_mktLoadFiltersFromServer();\n'
         "var _savedCur=localStorage.getItem('xct_currency');if(_savedCur){var _curSel=document.getElementById('lib-cur');if(_curSel){_curSel.value=_savedCur;_cc=_savedCur}}\n"
         "var _revSlug={summary:'summary',library:'library',store:'marketplace',marketplace:'marketplace',subscriptions:'subscriptions',gamepass:'gamepass',"
         "playhistory:'playhistory',scanlog:'history',gamertags:'gamertags',"
@@ -23269,6 +23287,7 @@ def process_game_downgrader():
         print(f"\n  Downloading v{chosen['version']} ({chosen['size'] / 1e9:.2f} GB)...")
         print(f"  Folder:   {game_folder}")
         print(f"  Filename: {final_name}")
+        print(f"  CDN Link: {chosen['url']}")
 
         # Try PHF-verified download: check for existing .phf or fetch from FE3
         phf_data = _phf_load(os.path.join(game_folder, final_name + ".phf"))
@@ -24450,6 +24469,7 @@ def process_purge_recovery():
         print(f"\n  Downloading v{chosen['version']} ({chosen['size'] / 1e9:.2f} GB)...")
         print(f"  Folder:   {game_folder}")
         print(f"  Filename: {final_name}")
+        print(f"  CDN Link: {chosen['url']}")
 
         # Try PHF-verified download
         phf_data = _phf_load(os.path.join(game_folder, final_name + ".phf"))

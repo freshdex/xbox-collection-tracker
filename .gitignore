@@ -27,6 +27,13 @@ debug.log
 # Environment
 .env
 
+# Server/backend (xct.live — not part of this repo)
+Dockerfile
+xct_server_remote.py
+xct_server_requirements.txt
+auth_hosted_remote.js
+marketplace_scanner.py
+
 # Python
 __pycache__/
 *.pyc

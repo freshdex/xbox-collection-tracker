@@ -263,114 +263,48 @@ Press `[K]` (Build/Rebuild Index) to regenerate the HTML page. Open `accounts/XC
 - **Tab bar cleanup** — "Game Pass Catalog" tab shortened to "Game Pass". Currency dropdown and version label moved closer to the tabs.
 - **Auto-update** — XCT checks GitHub for newer versions on startup and prompts you to update if one is available.
 
-## Setup (first time)
+## Setup
 
-### 1. Install Python
-
-You need Python installed on your computer. If you don't have it:
-
-- **Windows:** Go to https://www.python.org/downloads/ and click the big yellow download button. During install, **tick the box that says "Add Python to PATH"** — this is important.
-- **Mac:** Open Terminal and run `brew install python3`, or download from the link above.
-
-To check if Python is installed, open a terminal (Command Prompt on Windows, Terminal on Mac) and type:
-```
-python --version
-```
-You should see something like `Python 3.11.5`. Any version 3.7 or higher works.
-
-### 2. Download XCT
+### 1. Download XCT
 
 Download this repository and extract it to a folder, or clone it with git:
 ```
 git clone https://github.com/freshdex/xbox-collection-tracker.git
 ```
 
-### 3. Install dependencies
+### 2. Run XCTLauncher.bat
 
-Open a terminal, navigate to the XCT folder, and run:
-```
-pip install -r requirements.txt
-```
-
-This installs `ecdsa`, which is needed for full Xbox authentication. Without it, XCT still works but can only see a limited set of your games.
-
-### 4. Run it
+Double-click **`XCTLauncher.bat`** to start. The launcher automatically:
+- Finds or installs Python
+- Installs required dependencies (`ecdsa`, `pip_system_certs`)
+- Presents the main menu
 
 ```
-python XCT.py
+[1] Launch XCT Tools          — Interactive menu for all features
+[2] Launch XCT Desktop        — Tauri desktop app (builds on first run)
+[3] Launch XCT Local Portal   — Open your generated HTML in a browser
+[4] Launch xct.live            — Open the online portal
+[0] Exit
 ```
 
-On first run, it will ask you to add an Xbox account. Follow the on-screen instructions — you'll get a code to enter at a Microsoft login page in your browser. After signing in, XCT saves your login so you don't need to do this again.
+### 3. Add an Xbox account
 
-### 5. Open the output
+Pick **[1] Launch XCT Tools**, then press **[a]** to scan or **[b]** to manage gamertags. On first run, you'll add an Xbox account — follow the on-screen device code flow to sign in with your Microsoft account.
 
-Once processing finishes, XCT opens an HTML file in your browser automatically. You can also find it at `accounts/XCT.html` — just double-click it any time to view your library.
+### 4. View your collection
 
----
-
-## How to use
-
-Run `python XCT.py` to open the interactive menu. Pick an option by typing its letter or number and pressing Enter.
-
-### Menu options
-
-| Option | What it does |
-|--------|-------------|
-| **A** | Show gamertag list / process specific account |
-| **B** | Process all accounts |
-| **C** | Add a new Xbox account |
-| **D** | Refresh a token |
-| **E** | Refresh all tokens |
-| **F** | Delete a gamertag |
-| **G** | Clear cache + rescan all |
-| **K** | Build/Rebuild HTML Index |
-| **0** | Quit |
-
-### Scan endpoints
-
-| Option | What it does |
-|--------|-------------|
-| **H** | Collections API only |
-| **I** | TitleHub only |
-| **J** | Content Access only (Xbox 360 backward-compatible titles) |
-
-### XVC CDN Scrape and Sync
-
-| Option | What it does |
-|--------|-------------|
-| **L** | Scrape XVCs from Xbox One / Series X|S USB hard drive |
-| **T** | Scrape XVCs from locally installed Windows PC games |
-| **S** | Sync CDN.json with Freshdex CDN Database |
-
-### CDN Installers
-
-| Option | What it does |
-|--------|-------------|
-| **M** | Xbox One / Series X|S CDN Installer |
-| **N** | MS Store (Win8/8.1/10) CDN Installer |
-
-### GFWL
-
-| Option | What it does |
-|--------|-------------|
-| **O** | GFWL CDN Installer |
-| **P** | Recover GFWL Product Keys |
-
-### Windows/Store
-
-| Option | What it does |
-|--------|-------------|
-| **Q** | Windows Gaming Repair Tool |
-| **R** | Windows Store Reset Tool |
+After scanning, XCT generates an HTML page at `accounts/XCT.html`. Open it directly or use **[3] Launch XCT Local Portal** from the launcher.
 
 ### Command line shortcuts
 
 ```
+python XCT.py                    # Interactive menu
 python XCT.py add                # Add new account
-python XCT.py extract            # Extract token from a HAR file
 python XCT.py <gamertag>         # Process a specific account
 python XCT.py --all              # Process all accounts
 python XCT.py build              # Rebuild HTML without fetching data
+python XCT.py extract            # Extract token from a HAR file
+python XCT.py preview            # Generate blank HTML (UI testing)
 ```
 
 ---
@@ -456,28 +390,20 @@ Tokens expire after approximately 16 hours. XCT proactively checks token age bef
 ## File structure
 
 ```
-XCT.py                    # Main script
+XCTLauncher.bat           # Main launcher (start here)
+XCT.py                    # Core script — auth, API, HTML generation, tools
 xbox_auth.py              # Standalone auth helper
 tags.json                 # Community game tags (delisted, indie, etc.)
 gfwl_links.json           # GFWL package database (244 titles, 1,775 packages)
 requirements.txt          # Python dependencies
-accounts.json             # Account registry (auto-generated)
-exchange_rates.json       # Cached exchange rates (auto-generated)
-CDN.json                  # Scraped CDN package data (auto-generated)
-cdn_sync_config.json      # CDN sync username + API key (auto-generated)
-cdn_sync_meta.json        # Per-entry source tracking (auto-generated)
-cdn_sync_log.json         # Sync operation history (auto-generated)
-cdn_leaderboard_cache.json # Leaderboard cache (auto-generated)
-usb_db.json               # Xbox USB drive scan data (auto-generated)
+xct-desktop/              # Tauri desktop app (Svelte + Rust sidecar)
 accounts/
-  XCT.html                # Combined HTML page (all accounts)
-  data.js                 # Combined library data
+  XCT.html + data.js      # Combined HTML page (all accounts)
   {gamertag}/
-    XCT.html              # Per-account HTML page
-    data.js               # Per-account library data
-    *.json                # Cached API responses (1-hour TTL)
+    XCT.html + data.js    # Per-account HTML page
     auth_token.txt        # Auth tokens
     xbox_auth_state.json  # Saved login credentials
+    *.json                # Cached API responses (1-hour TTL)
 ```
 
 ## Community Tags

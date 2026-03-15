@@ -56,7 +56,7 @@ Fetches Xbox store catalog via DynamicChannels (`fetch_dynamic_channel`) from `b
 ### Combined Index (`build_index`)
 Merges all per-account libraries into a single combined `accounts/XCT.html` + `accounts/data.js`. Each account also gets its own `accounts/{gamertag}/XCT.html` + `data.js`.
 
-### Xbox Hard Drive Tool (menu `[v]`)
+### Xbox Hard Drive Tool (via USB tool menu)
 Raw disk access via `\\.\PhysicalDriveN` on Windows. Reads/writes MBR, GPT, NTFS structures directly. Key operations:
 - **Analyze** — Reads MBR signature, GPT headers, partition entries, NTFS boot sector
 - **PC/Xbox mode conversion** — Rewrites MBR signature (`0x55AA` ↔ `0x99CC`) and GPT partition type GUID with full CRC recalculation (primary + backup GPT)
@@ -70,25 +70,40 @@ Key NTFS functions: `_ntfs_read_boot_sector`, `_ntfs_apply_fixup`, `_ntfs_parse_
 ### USB Drive Scanner (`scan_usb_drive` / `build_usb_db`)
 Scans Xbox external drive's `.xvs` files for installed game packages. Captures CDN URLs, build versions, content IDs, package sizes, prior-version data. Saves to `usb_db.json`.
 
-### CDN Version Discovery (`process_cdn_version_discovery`, menu `[w]` submenu)
+### CDN Version Discovery (`process_cdn_version_discovery`)
 Probes Xbox CDN (`assets.xboxlive.com`) for game package versions. Includes snapshot comparison, WU Catalog integration, and direct CDN download.
 
-### MS Store CDN Installer (`process_store_packages`, menu `[y]`)
+### Game Downgrader (`process_game_downgrader`, menu `[j]`)
+Downloads older versions of Xbox and Windows games from CDN. Uses `CDN.json` version history to find prior builds.
+
+### Batch Game Downgrader (`process_batch_downgrader`, menu `[m]`)
+Downloads all known versions of multiple games from CDN in batch.
+
+### Purge Recovery (`process_purge_recovery`, menu `[k]`)
+Brute-force recovery of purged game versions — probes CDN for packages that have been removed from normal discovery.
+
+### MS Store CDN Installer (`process_store_packages`, menu `[l]`)
 Fetches direct CDN links from `fe3cr.delivery.mp.microsoft.com` (Windows Update SOAP API). Accepts ProductId, CategoryId, PackageFamilyName, or store URL. Supports RP/Retail/WIF/WIS rings. Downloads and optionally installs `.appx`/`.msixbundle` packages.
 
-### CDN Sync (`process_cdn_sync`, menu `[S]`)
+### CDN Sync (`process_cdn_sync`, menu `[h]`)
 Community CDN package database. Uploads local `CDN.json` entries to the Freshdex shared database, downloads entries from other contributors, merges into local `CDN.json`. Points system rewards new unique game+version contributions. Config in `cdn_sync_config.json`, per-entry source tracking in `cdn_sync_meta.json`, operation history in `cdn_sync_log.json`.
 
-### PC CDN Scraper (`process_pc_cdn_scrape` / `scan_pc_games`, menu `[T]`)
+### PC CDN Scraper (`process_pc_cdn_scrape` / `scan_pc_games`, menu `[g]`)
 Scrapes CDN links from locally installed Windows PC games. Auto-detects drives with `\XboxGames\` directories, reads `.xvs` package metadata. Also reads `MicrosoftGame.Config` and `appxmanifest.xml` for Title ID, publisher, executable name. Merges into `CDN.json`.
 
-### GFWL Downloader (`process_gfwl_download`, menu `[O]`)
+### GFWL Downloader (`process_gfwl_download`, menu `[n]`)
 Downloads Games for Windows - LIVE packages from `download-ssl.xbox.com`. Uses `gfwl_links.json` (244 titles, 1,775 packages). Extracts with 7-Zip and launches installer.
 
-### GFWL Key Recovery (`recover_gfwl_keys`, menu `[P]`)
+### GFWL Key Recovery (`recover_gfwl_keys`, menu `[o]`)
 Recovers GFWL product keys from `Token.bin` files using Windows DPAPI decryption. Includes 312 GFWL title name mappings.
 
-### Windows Gaming Repair (`menu [Q]`) / Store Reset (`menu [R]`)
+### Xbox Remote Tools (`process_remote_tools`, menu `[s]`)
+Remote install/uninstall/list via Xbox Cloud Console Streaming (XCCS) API. Requires authenticated account.
+
+### Order History (`process_order_history`)
+Fetches and exports Xbox/Microsoft order history for authenticated accounts.
+
+### Windows Gaming Repair (menu `[p]`) / Store Reset (menu `[q]`)
 PowerShell-based repair tools: re-register Xbox app packages, reset Gaming Services, restart Xbox services. Store reset launches `wsreset.exe`.
 
 ### Regional Pricing
@@ -99,10 +114,10 @@ Price comparison across 10 regions (AR, BR, TR, IS, NG, TW, NZ, CO, HK, US). Exc
 - **Global path state**: `set_account_paths(gamertag)` sets module-level path globals (`AUTH_TOKEN_FILE`, `ENTITLEMENTS_FILE`, etc.) to the current account's directory. Must be called before any per-account operations.
 - **HTTP helpers**: `api_request()` handles retries with exponential backoff on 429/5xx. `msa_request()` handles MSA auth calls. `_signed_request()` adds EC P-256 ProofOfPossession signatures.
 - **Caching**: All API responses cached as JSON with 1-hour TTL (`CACHE_MAX_AGE = 3600`). `is_cache_fresh()` checks file age.
-- **HTML output**: `build_html_template()` (line ~3214) returns a large Python string containing all HTML, CSS, and JS — no separate template files. Data is loaded from a separate `data.js` file via `<script src>`. Edit the frontend entirely within this function.
-- **Data output**: `write_data_js()` (line ~5447) writes library data as JS constants to `data.js`. Includes `LIB`, `GP`, `PH`, `MKT`, `HISTORY`, `DEFAULT_FLAGS`, `ACCOUNTS`, `RATES`, `GC_FACTOR`, plus CDN sync data (`CDN_DB`, `CDN_LEADERBOARD`, `CDN_SYNC_LOG`, `CDN_SYNC_META`).
+- **HTML output**: `build_html_template()` (line ~3849) returns a large Python string containing all HTML, CSS, and JS — no separate template files. Data is loaded from a separate `data.js` file via `<script src>`. Edit the frontend entirely within this function.
+- **Data output**: `write_data_js()` (line ~9992) writes library data as JS constants to `data.js`. Includes `LIB`, `GP`, `PH`, `MKT`, `HISTORY`, `DEFAULT_FLAGS`, `ACCOUNTS`, `RATES`, `GC_FACTOR`, plus CDN sync data (`CDN_DB`, `CDN_LEADERBOARD`, `CDN_SYNC_LOG`, `CDN_SYNC_META`).
 - **Community tags**: `tags.json` maps product IDs to flags (delisted/indie/demo). Loaded at startup into `DEFAULT_FLAGS` dict, embedded in `data.js` output.
-- **Interactive menu**: `interactive_menu()` (line ~15396) is the main loop. Uses single-letter keys `[a]`–`[z]` plus `[0]` to quit.
+- **Interactive menu**: `interactive_menu()` (line ~26740) is the main loop. Uses single-letter keys `[a]`–`[s]` plus `[0]` to quit.
 - **Raw disk I/O**: `_hd_open_read`/`_hd_open_write` use `CreateFileW` via `ctypes` for direct sector access. Requires admin.
 - **GUID encoding**: Xbox GPT uses mixed-endian GUID format. `_hd_encode_guid()`/`_hd_format_guid()` handle conversion.
 - **Windows Update SOAP**: `_fe3_get_cookie`, `_fe3_sync_updates`, `_fe3_get_url` implement the WU SOAP protocol for package resolution.
@@ -118,12 +133,15 @@ Price comparison across 10 regions (AR, BR, TR, IS, NG, TW, NZ, CO, HK, US). Exc
 - **Xbox CDN** (`assets{N}.xboxlive.com`) — Game package downloads
 - **GFWL CDN** (`download-ssl.xbox.com`) — GFWL package downloads
 - **Freshdex CDN Sync** (`cdn.freshdex.app/api/v1`) — Community CDN package database
+- **XCCS** (`xccs.xboxlive.com`) — Xbox Cloud Console Streaming, remote install/uninstall
 
 ## File Layout
 
 ```
-XCT.py                     # Everything: auth, API calls, HTML generation, disk tools
+XCT.py                     # Everything: auth, API calls, HTML generation, disk tools (~27K lines)
 xbox_auth.py               # Standalone auth helper (legacy, not used by main flow)
+marketplace_scanner.py     # Standalone hourly marketplace scanner for xct.freshdex.app
+xct-desktop/               # Tauri desktop app (Svelte + Rust sidecar)
 tags.json                  # Community game tags (delisted, indie, demo flags)
 gfwl_links.json            # GFWL package database (244 titles, 1,775 packages)
 requirements.txt           # Python deps (ecdsa, pip_system_certs)
